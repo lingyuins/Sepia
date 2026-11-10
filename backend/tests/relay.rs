@@ -86,6 +86,7 @@ async fn request(address: SocketAddr, protocol: &str, model: &str, key: &str) ->
     };
     let response = reqwest::Client::new()
         .post(format!("http://{address}{path}"))
+        .header("anthropic-version", "2023-06-01")
         .header(auth.0, auth.1)
         .json(&body(protocol, model, false))
         .send()
@@ -141,6 +142,7 @@ async fn all_native_protocols_relay_to_all_provider_protocols() {
                 provider_id: provider.id,
                 model: "example".into(),
                 is_default: false,
+                list_members: true,
                 candidates: vec![],
             })
             .await
@@ -164,12 +166,8 @@ async fn all_native_protocols_relay_to_all_provider_protocols() {
     tokio::spawn(
         axum::serve(
             listener,
-            app(AppState {
-                store: store.clone(),
-                keys,
-                http: reqwest::Client::new(),
-                bootstrap_token: "test".into(),
-            }),
+            app(AppState::for_testing(store.clone()).await)
+                .into_make_service_with_connect_info::<SocketAddr>(),
         )
         .into_future(),
     );

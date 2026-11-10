@@ -1,12 +1,18 @@
 pub mod admin;
 pub mod attempts;
+pub mod bootstrap;
+pub mod controls;
 pub mod crypto;
 pub mod discovery;
+pub mod lifecycle;
 pub mod observability;
+pub mod policy;
 pub mod protocol;
 pub mod quota;
 pub mod relay;
 pub mod server;
+pub mod settings;
+pub mod snapshot;
 pub mod store;
 
 pub use crypto::{KeyStore, default_data_directory};

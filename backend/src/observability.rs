@@ -33,6 +33,7 @@ pub struct AttemptRecord {
 pub struct NewAttempt<'a> {
     pub request_id: &'a str,
     pub provider_id: Option<i64>,
+    pub provider_key_id: Option<i64>,
     pub model: &'a str,
     pub status: &'a str,
     pub error: Option<&'a str>,
@@ -55,6 +56,7 @@ impl Store {
         let NewAttempt {
             request_id,
             provider_id,
+            provider_key_id,
             model,
             status,
             error,
@@ -62,7 +64,7 @@ impl Store {
             output_tokens,
             latency_ms,
         } = attempt;
-        sqlx::query("INSERT INTO attempts (request_id, provider_id, model, status, error, input_tokens, output_tokens, latency_ms, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").bind(request_id).bind(provider_id).bind(model).bind(status).bind(error).bind(input_tokens as i64).bind(output_tokens as i64).bind(latency_ms).bind(Utc::now().to_rfc3339()).execute(&self.pool).await.map_err(|e| e.to_string())?;
+        sqlx::query("INSERT INTO attempts (request_id, provider_id, provider_key_id, model, status, error, input_tokens, output_tokens, latency_ms, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").bind(request_id).bind(provider_id).bind(provider_key_id).bind(model).bind(status).bind(error).bind(input_tokens as i64).bind(output_tokens as i64).bind(latency_ms).bind(Utc::now().to_rfc3339()).execute(&self.pool).await.map_err(|e| e.to_string())?;
         Ok(())
     }
     pub async fn finish_request(
@@ -74,6 +76,17 @@ impl Store {
         latency_ms: i64,
     ) -> Result<(), String> {
         sqlx::query("UPDATE requests SET status = ?, input_tokens = ?, output_tokens = ?, latency_ms = ? WHERE id = ?").bind(status).bind(input_tokens as i64).bind(output_tokens as i64).bind(latency_ms).bind(request_id).execute(&self.pool).await.map_err(|e| e.to_string())?;
+        Ok(())
+    }
+    pub async fn finish_request_with_cost(
+        &self,
+        request_id: &str,
+        status: &str,
+        input_tokens: u64,
+        output_tokens: u64,
+        cost_micros: i64,
+    ) -> Result<(), String> {
+        sqlx::query("UPDATE requests SET status = ?, input_tokens = ?, output_tokens = ?, cost_micros = ? WHERE id = ?").bind(status).bind(input_tokens as i64).bind(output_tokens as i64).bind(cost_micros).bind(request_id).execute(&self.pool).await.map_err(|e| e.to_string())?;
         Ok(())
     }
     pub async fn requests(&self) -> Result<Vec<RequestRecord>, String> {

@@ -12,6 +12,13 @@ use axum::{
 use futures_util::StreamExt;
 use std::{convert::Infallible, time::Instant};
 
+pub fn protected_http_client() -> Result<reqwest::Client, String> {
+    reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .connect_timeout(std::time::Duration::from_secs(10))
+        .build()
+        .map_err(|e| e.to_string())
+}
 pub fn outbound_protocol(provider: &Provider) -> Protocol {
     match provider.protocol {
         crate::ProviderProtocol::OpenAI => Protocol::OpenAI,
@@ -70,8 +77,9 @@ pub struct StreamContext {
     pub store: Store,
     pub request_id: String,
     pub provider_id: i64,
+    pub provider_key_id: i64,
     pub model: String,
-    pub reservation: String,
+    pub guard: crate::lifecycle::RequestGuard,
     pub started: Instant,
 }
 pub fn stream_response(
@@ -82,34 +90,52 @@ pub fn stream_response(
     context: StreamContext,
 ) -> Response<Body> {
     let stream = async_stream::stream! {
-        let mut buffer = String::new();
+        let mut buffer = Vec::new();
         yield Ok::<_, Infallible>(encode_sse(inbound, &[start]));
         let mut bytes = response.bytes_stream();
         let mut stopped = false;
+        let mut terminal = None;
         let mut usage = (0, 0);
-        let mut decode_failed = false;
-        while let Some(chunk) = bytes.next().await {
-            let Ok(chunk) = chunk else { break; };
-            buffer.push_str(&String::from_utf8_lossy(&chunk));
-            let normalized = buffer.replace("\r\n", "\n");
-            let Some(index) = normalized.rfind("\n\n") else { continue; };
-            let complete = normalized[..index + 2].to_string();
-            buffer = normalized[index + 2..].to_string();
-            match decode_sse(outbound, &complete) {
-                Ok(decoded) => {
-                    let events: Vec<_> = decoded.into_iter().filter(|event| !matches!(event, StreamEvent::Start { .. })).collect();
-                    stopped |= events.iter().any(|event| matches!(event, StreamEvent::Stop(_)));
-                    for event in &events { if let StreamEvent::Usage { input_tokens, output_tokens } = event { usage = (*input_tokens, *output_tokens); } }
-                    yield Ok(encode_sse(inbound, &events));
-                },
-                Err(_) => { decode_failed = true; break; },
+        let mut failed = false;
+        loop {
+            let chunk = match tokio::time::timeout(std::time::Duration::from_secs(60), bytes.next()).await {
+                Ok(Some(chunk)) => chunk,
+                Ok(None) => break,
+                Err(_) => { failed = true; break; },
+            };
+            let Ok(chunk) = chunk else { failed = true; break; };
+            buffer.extend_from_slice(&chunk);
+            let mut start = 0;
+            for index in 0..buffer.len().saturating_sub(1) {
+                if buffer[index] != b'\n' || buffer[index + 1] != b'\n' { continue; }
+                let frame = String::from_utf8_lossy(&buffer[start..index]).replace("\r\n", "\n");
+                start = index + 2;
+                match decode_sse(outbound, &frame) {
+                    Ok(decoded) => {
+                        let events: Vec<_> = decoded.into_iter().filter(|event| !matches!(event, StreamEvent::Start { .. })).collect();
+                        let (stops, events): (Vec<_>, Vec<_>) = events.into_iter().partition(|event| matches!(event, StreamEvent::Stop(_)));
+                        if let Some(stop) = stops.into_iter().next() { terminal = Some(stop); }
+                        stopped |= terminal.is_some();
+                        for event in &events { if let StreamEvent::Usage { input_tokens, output_tokens } = event { usage = (*input_tokens, *output_tokens); } }
+                        yield Ok(encode_sse(inbound, &events));
+                    },
+                    Err(_) => { failed = true; break; },
+                }
             }
+            buffer.drain(..start);
+            if failed { break; }
         }
-        if !stopped { yield Ok(encode_sse(inbound, &[StreamEvent::Stop(crate::protocol::FinishReason::Other)])); }
-        let status = if stopped && !decode_failed { "success" } else { "cancelled" };
-        let _ = context.store.record_attempt(crate::observability::NewAttempt { request_id: &context.request_id, provider_id: Some(context.provider_id), model: &context.model, status, error: None, input_tokens: usage.0, output_tokens: usage.1, latency_ms: context.started.elapsed().as_millis() as i64 }).await;
-        let _ = context.store.finish_request(&context.request_id, status, usage.0, usage.1, context.started.elapsed().as_millis() as i64).await;
-        let _ = context.store.settle_quota(&context.reservation, (usage.0 + usage.1) as i64).await;
+        if failed {
+            if inbound == Protocol::Anthropic { yield Ok("event: error\ndata: {\"type\":\"error\",\"error\":{\"type\":\"api_error\",\"message\":\"Upstream stream failed\"}}\n\n".into()); }
+        } else if let Some(stop) = terminal {
+            yield Ok(encode_sse(inbound, &[stop]));
+        } else if !stopped {
+            yield Ok(encode_sse(inbound, &[StreamEvent::Stop(crate::protocol::FinishReason::Other)]));
+        }
+        let status = if stopped && !failed { "success" } else { "failed" };
+        let _ = context.store.record_attempt(crate::observability::NewAttempt { request_id: &context.request_id, provider_id: Some(context.provider_id), provider_key_id: Some(context.provider_key_id), model: &context.model, status, error: None, input_tokens: usage.0, output_tokens: usage.1, latency_ms: context.started.elapsed().as_millis() as i64 }).await;
+        let cost = context.store.model_cost(&context.model, usage.0, usage.1).await.unwrap_or(0);
+        let _ = context.guard.complete(status, usage.0, usage.1, cost).await;
     };
     Response::builder()
         .header(header::CONTENT_TYPE, "text/event-stream")

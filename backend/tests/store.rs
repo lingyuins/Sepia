@@ -54,6 +54,7 @@ async fn bootstrap_authenticates_sessions_and_persists_configuration() {
             provider_id: provider.id,
             model: "example-1".into(),
             is_default: true,
+            list_members: true,
             candidates: vec![],
         })
         .await

@@ -10,6 +10,9 @@ use axum::{
 use serde::Deserialize;
 use serde_json::json;
 
+fn default_true() -> bool {
+    true
+}
 #[derive(Deserialize)]
 pub struct Credentials {
     username: String,
@@ -36,6 +39,15 @@ pub struct RouteInput {
     candidates: Vec<(i64, String)>,
     #[serde(default)]
     is_default: bool,
+    #[serde(default = "default_true")]
+    list_members: bool,
+}
+#[derive(Deserialize)]
+pub struct PriceInput {
+    provider_id: i64,
+    model: String,
+    input_price_micros: i64,
+    output_price_micros: i64,
 }
 #[derive(Deserialize)]
 pub struct KeyInput {
@@ -73,7 +85,13 @@ async fn bootstrap(State(state): State<AppState>, Json(input): Json<Bootstrap>) 
         )
         .await
     {
-        Ok(()) => Json(json!({"initialized":true})).into_response(),
+        Ok(()) => match crate::bootstrap::remove_token(&state.data_directory).await {
+            Ok(()) => Json(json!({"initialized":true})).into_response(),
+            Err(_) => error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "failed to revoke bootstrap token",
+            ),
+        },
         Err(message) => error(StatusCode::BAD_REQUEST, message),
     }
 }
@@ -82,7 +100,10 @@ async fn login(State(state): State<AppState>, Json(input): Json<Credentials>) ->
         Ok(token) => Response::builder()
             .header(
                 header::SET_COOKIE,
-                format!("sepia_session={token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=43200"),
+                format!(
+                    "sepia_session={token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=43200{}",
+                    if state.secure_cookie { "; Secure" } else { "" }
+                ),
             )
             .body(
                 Json(json!({"authenticated":true}))
@@ -100,7 +121,10 @@ async fn logout(State(state): State<AppState>, headers: HeaderMap) -> Response {
     Response::builder()
         .header(
             header::SET_COOKIE,
-            "sepia_session=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0",
+            format!(
+                "sepia_session=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0{}",
+                if state.secure_cookie { "; Secure" } else { "" }
+            ),
         )
         .body(axum::body::Body::empty())
         .unwrap()
@@ -119,6 +143,26 @@ async fn auth(
     request: axum::extract::Request,
     next: Next,
 ) -> Response {
+    if request.method() != axum::http::Method::GET
+        && let Some(origin) = request
+            .headers()
+            .get("origin")
+            .and_then(|value| value.to_str().ok())
+    {
+        let host = request
+            .headers()
+            .get("host")
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or("");
+        let allowed = ["http://localhost:5173", "http://127.0.0.1:5173"].contains(&origin)
+            || origin
+                .strip_prefix("http://")
+                .or_else(|| origin.strip_prefix("https://"))
+                == Some(host);
+        if !allowed {
+            return error(StatusCode::FORBIDDEN, "management origin rejected");
+        }
+    }
     let Some(token) = session_cookie(request.headers()) else {
         return error(StatusCode::UNAUTHORIZED, "missing session");
     };
@@ -149,13 +193,16 @@ async fn create_provider(
         .await
     {
         Ok(provider) => {
+            if let Err(message) = state.snapshots.refresh(&state.store).await {
+                return error(StatusCode::INTERNAL_SERVER_ERROR, message);
+            }
             Json(json!({"id":provider.id,"key_count":provider.key_count})).into_response()
         }
         Err(message) => error(StatusCode::BAD_REQUEST, message),
     }
 }
 async fn routes(State(state): State<AppState>) -> Response {
-    match state.store.routes().await { Ok(routes) => Json(json!(routes.into_iter().map(|route| json!({"id":route.id,"slug":route.slug,"patterns":route.patterns,"is_default":route.is_default,"candidates":route.candidates})).collect::<Vec<_>>())).into_response(), Err(message) => error(StatusCode::INTERNAL_SERVER_ERROR, message) }
+    match state.store.routes().await { Ok(routes) => Json(json!(routes.into_iter().map(|route| json!({"id":route.id,"slug":route.slug,"patterns":route.patterns,"is_default":route.is_default,"list_members":route.list_members,"candidates":route.candidates})).collect::<Vec<_>>())).into_response(), Err(message) => error(StatusCode::INTERNAL_SERVER_ERROR, message) }
 }
 async fn create_route(State(state): State<AppState>, Json(input): Json<RouteInput>) -> Response {
     let Some((provider_id, model)) = input.candidates.first().cloned() else {
@@ -169,11 +216,17 @@ async fn create_route(State(state): State<AppState>, Json(input): Json<RouteInpu
             provider_id,
             model,
             is_default: input.is_default,
+            list_members: input.list_members,
             candidates: input.candidates,
         })
         .await
     {
-        Ok(route) => Json(json!({"id":route.id})).into_response(),
+        Ok(route) => {
+            if let Err(message) = state.snapshots.refresh(&state.store).await {
+                return error(StatusCode::INTERNAL_SERVER_ERROR, message);
+            }
+            Json(json!({"id":route.id})).into_response()
+        }
         Err(message) => error(StatusCode::BAD_REQUEST, message),
     }
 }
@@ -233,13 +286,182 @@ async fn test_provider(State(state): State<AppState>, Path(id): Path<i64>) -> Re
         Err(message) => error(StatusCode::BAD_GATEWAY, message),
     }
 }
+async fn add_key(
+    State(state): State<AppState>,
+    Path(id): Path<i64>,
+    Json(input): Json<serde_json::Value>,
+) -> Response {
+    let Some(secret) = input.get("secret").and_then(serde_json::Value::as_str) else {
+        return error(StatusCode::BAD_REQUEST, "secret required");
+    };
+    match state.store.add_provider_key(id, secret, &state.keys).await {
+        Ok(id) => Json(json!({"id":id})).into_response(),
+        Err(message) => error(StatusCode::BAD_REQUEST, message),
+    }
+}
+async fn set_price(State(state): State<AppState>, Json(input): Json<PriceInput>) -> Response {
+    match state
+        .store
+        .set_model_price(
+            input.provider_id,
+            &input.model,
+            input.input_price_micros,
+            input.output_price_micros,
+        )
+        .await
+    {
+        Ok(()) => StatusCode::OK.into_response(),
+        Err(message) => error(StatusCode::BAD_REQUEST, message),
+    }
+}
+async fn public_origin(request: axum::extract::Request, next: Next) -> Response {
+    if let Some(origin) = request
+        .headers()
+        .get("origin")
+        .and_then(|value| value.to_str().ok())
+    {
+        let host = request
+            .headers()
+            .get("host")
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or("");
+        let allowed = ["http://localhost:5173", "http://127.0.0.1:5173"].contains(&origin)
+            || origin
+                .strip_prefix("http://")
+                .or_else(|| origin.strip_prefix("https://"))
+                == Some(host);
+        if !allowed {
+            return error(StatusCode::FORBIDDEN, "management origin rejected");
+        }
+    }
+    next.run(request).await
+}
+async fn set_policy(
+    State(state): State<AppState>,
+    Path(id): Path<i64>,
+    Json(policy): Json<crate::policy::ClientPolicy>,
+) -> Response {
+    match state.store.set_client_policy(id, &policy).await {
+        Ok(()) => StatusCode::OK.into_response(),
+        Err(message) => error(StatusCode::BAD_REQUEST, message),
+    }
+}
+async fn update_settings(
+    State(state): State<AppState>,
+    Json(input): Json<std::collections::HashMap<String, serde_json::Value>>,
+) -> Response {
+    for (key, value) in input {
+        if let Err(message) = state.store.set_setting(&key, &value).await {
+            return error(StatusCode::BAD_REQUEST, message);
+        }
+    }
+    StatusCode::OK.into_response()
+}
+async fn settings(State(state): State<AppState>) -> Response {
+    match state.store.settings().await {
+        Ok(settings) => Json(json!(settings)).into_response(),
+        Err(message) => error(StatusCode::INTERNAL_SERVER_ERROR, message),
+    }
+}
+async fn analytics(State(state): State<AppState>) -> Response {
+    match state.store.analytics().await {
+        Ok(analytics) => Json(analytics).into_response(),
+        Err(message) => error(StatusCode::INTERNAL_SERVER_ERROR, message),
+    }
+}
+async fn set_group(
+    State(state): State<AppState>,
+    Json(input): Json<serde_json::Value>,
+) -> Response {
+    let Some(id) = input.get("id").and_then(serde_json::Value::as_str) else {
+        return error(StatusCode::BAD_REQUEST, "group id required");
+    };
+    let Some(name) = input.get("name").and_then(serde_json::Value::as_str) else {
+        return error(StatusCode::BAD_REQUEST, "group name required");
+    };
+    let description = input
+        .get("description")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("");
+    match state.store.set_group(id, name, description).await {
+        Ok(()) => StatusCode::OK.into_response(),
+        Err(message) => error(StatusCode::BAD_REQUEST, message),
+    }
+}
+async fn provider_enabled(
+    State(state): State<AppState>,
+    Path(id): Path<i64>,
+    Json(input): Json<serde_json::Value>,
+) -> Response {
+    let enabled = input
+        .get("enabled")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false);
+    match state.store.set_provider_enabled(id, enabled).await {
+        Ok(()) => {
+            let _ = state.snapshots.refresh(&state.store).await;
+            StatusCode::OK.into_response()
+        }
+        Err(message) => error(StatusCode::BAD_REQUEST, message),
+    }
+}
+async fn route_enabled(
+    State(state): State<AppState>,
+    Path(id): Path<i64>,
+    Json(input): Json<serde_json::Value>,
+) -> Response {
+    let enabled = input
+        .get("enabled")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false);
+    match state.store.set_route_enabled(id, enabled).await {
+        Ok(()) => {
+            let _ = state.snapshots.refresh(&state.store).await;
+            StatusCode::OK.into_response()
+        }
+        Err(message) => error(StatusCode::BAD_REQUEST, message),
+    }
+}
+async fn delete_route(State(state): State<AppState>, Path(id): Path<i64>) -> Response {
+    match state.store.delete_route(id).await {
+        Ok(()) => {
+            let _ = state.snapshots.refresh(&state.store).await;
+            StatusCode::OK.into_response()
+        }
+        Err(message) => error(StatusCode::BAD_REQUEST, message),
+    }
+}
+async fn client_key_enabled(
+    State(state): State<AppState>,
+    Path(id): Path<i64>,
+    Json(input): Json<serde_json::Value>,
+) -> Response {
+    let enabled = input
+        .get("enabled")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false);
+    match state.store.set_client_key_enabled(id, enabled).await {
+        Ok(()) => StatusCode::OK.into_response(),
+        Err(message) => error(StatusCode::BAD_REQUEST, message),
+    }
+}
 pub fn router(state: AppState) -> Router<AppState> {
     let protected = Router::new()
         .route("/providers", get(providers).post(create_provider))
         .route("/providers/{id}/test", post(test_provider))
+        .route("/providers/{id}/keys", post(add_key))
+        .route("/providers/{id}/enabled", post(provider_enabled))
+        .route("/routes/{id}/enabled", post(route_enabled))
+        .route("/routes/{id}", axum::routing::delete(delete_route))
+        .route("/models/pricing", post(set_price))
         .route("/routes", get(routes).post(create_route))
         .route("/keys", get(keys).post(create_key))
         .route("/keys/{id}/revoke", post(revoke_key))
+        .route("/keys/{id}/policy", post(set_policy))
+        .route("/keys/{id}/enabled", post(client_key_enabled))
+        .route("/groups", post(set_group))
+        .route("/settings", get(settings).post(update_settings))
+        .route("/analytics", get(analytics))
         .route("/requests", get(requests))
         .route("/requests/{id}/attempts", get(attempts))
         .route_layer(middleware::from_fn_with_state(state.clone(), auth));
@@ -248,5 +470,6 @@ pub fn router(state: AppState) -> Router<AppState> {
         .route("/auth/login", post(login))
         .route("/auth/logout", post(logout))
         .route("/auth/session", get(session))
+        .layer(middleware::from_fn(public_origin))
         .merge(protected)
 }

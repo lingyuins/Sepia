@@ -10,7 +10,13 @@ use tokio::net::TcpListener;
 async fn serve(router: Router) -> SocketAddr {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
-    tokio::spawn(axum::serve(listener, router).into_future());
+    tokio::spawn(
+        axum::serve(
+            listener,
+            router.into_make_service_with_connect_info::<SocketAddr>(),
+        )
+        .into_future(),
+    );
     address
 }
 async fn provider(
@@ -59,6 +65,7 @@ async fn failed_first_candidate_fails_over_and_records_attempts() {
             provider_id: first,
             model: "upstream-model".into(),
             is_default: true,
+            list_members: true,
             candidates: vec![
                 (first, "upstream-model".into()),
                 (second, "upstream-model".into()),
@@ -79,13 +86,7 @@ async fn failed_first_candidate_fails_over_and_records_attempts() {
         .await
         .unwrap()
         .plaintext;
-    let address = serve(app(AppState {
-        store: store.clone(),
-        keys: KeyStore::testing(),
-        http: reqwest::Client::new(),
-        bootstrap_token: "test".into(),
-    }))
-    .await;
+    let address = serve(app(AppState::for_testing(store.clone()).await)).await;
     let response = reqwest::Client::new()
         .post(format!("http://{address}/v1/chat/completions"))
         .bearer_auth(&key)
@@ -108,7 +109,7 @@ async fn failed_first_candidate_fails_over_and_records_attempts() {
 #[tokio::test]
 async fn anthropic_stream_is_converted_to_openai_sse() {
     let upstream = serve(Router::new().fallback(post(|| async {
-        axum::response::Response::builder().header("content-type", "text/event-stream").body(axum::body::Body::from(concat!("event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_1\",\"model\":\"upstream-model\"}}\n\n", "event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"delta\":{\"text\":\"streamed\"}}\n\n", "event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"input_tokens\":2,\"output_tokens\":1}}\n\n"))).unwrap()
+        axum::response::Response::builder().header("content-type", "text/event-stream").body(axum::body::Body::from(concat!("event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_1\",\"model\":\"upstream-model\"}}\n\n", "event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"delta\":{\"text\":\"streamed\"}}\n\n", "event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"input_tokens\":2,\"output_tokens\":1}}\n\n", "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n"))).unwrap()
     }))).await;
     let directory = tempfile::tempdir().unwrap();
     let store = Store::connect(&directory.path().join("stream.db"))
@@ -122,6 +123,7 @@ async fn anthropic_stream_is_converted_to_openai_sse() {
             provider_id: provider,
             model: "upstream-model".into(),
             is_default: true,
+            list_members: true,
             candidates: vec![],
         })
         .await
@@ -139,13 +141,7 @@ async fn anthropic_stream_is_converted_to_openai_sse() {
         .await
         .unwrap()
         .plaintext;
-    let address = serve(app(AppState {
-        store,
-        keys: KeyStore::testing(),
-        http: reqwest::Client::new(),
-        bootstrap_token: "test".into(),
-    }))
-    .await;
+    let address = serve(app(AppState::for_testing(store.clone()).await)).await;
     let response = reqwest::Client::new()
         .post(format!("http://{address}/v1/chat/completions"))
         .bearer_auth(&key)

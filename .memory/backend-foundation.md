@@ -11,4 +11,6 @@ metadata:
 
 **How to apply:** 后续管理前端联调直接复用 `/api/v1` 与 `/v1` 契约，不新建第二套路由或协议逻辑。不得声称 React 已接真实后端，也不得声称插件已经可执行。首项仅 ordered failover，多媒体、工具调用、会话亲和、熔断等未实现字段必须显式拒绝。插件后续采用 Wasmtime、版本化清单、能力授权和 UI 沙箱。
 
+2026-11-11 独立安全审查后补齐：禁止上游重定向防 Key 泄漏、真实金额定价与日额度、请求断连 guard、400/404/429 状态与配额释放、原生 SSE 生命周期和 UTF-8 分帧、不可变配置快照、多 Key 轮换/冷却、Retry-After/尝试上限、IP/CIDR/分组/模型额度、管理 Origin/Secure Cookie 与生产 SPA 托管。`backend/README.md` 记录运行方式。31 项 Rust 测试、Clippy、前端构建与 16 项前端测试通过；实际启动服务验证初始化/登录/Key 创建撤销/模型接口/SPA，未使用真实第三方供应商账户。
+
 Windows Rust MSVC 构建需要 Visual Studio C++ Build Tools；Vite 必须忽略 `backend/target`，否则 watcher 可能因编译中的 EXE 返回 EBUSY。

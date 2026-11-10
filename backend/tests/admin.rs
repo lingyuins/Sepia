@@ -16,10 +16,24 @@ async fn management_requires_session_and_client_secret_is_returned_once() {
         keys: KeyStore::testing(),
         http: reqwest::Client::new(),
         bootstrap_token: "bootstrap".into(),
+        data_directory: directory.path().to_path_buf(),
+        snapshots: std::sync::Arc::new(
+            sepia_gateway::snapshot::Snapshots::load(&store)
+                .await
+                .unwrap(),
+        ),
+        key_health: Default::default(),
+        secure_cookie: false,
     };
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
-    tokio::spawn(axum::serve(listener, app(state)).into_future());
+    tokio::spawn(
+        axum::serve(
+            listener,
+            app(state).into_make_service_with_connect_info::<std::net::SocketAddr>(),
+        )
+        .into_future(),
+    );
     let client = reqwest::Client::new();
     let url = |path: &str| format!("http://{address}{path}");
     let denied = client

@@ -7,7 +7,27 @@ use tokio::net::TcpListener;
 async fn discovery_uses_protocol_credentials_and_returns_ids() {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
-    tokio::spawn(axum::serve(listener, Router::new().fallback(get(|| async { Json(json!({"data":[{"id":"example-model"}]})) }))).into_future());
-    let provider = sepia_gateway::Provider { id: 1, name: "test".into(), protocol: ProviderProtocol::OpenAI, endpoint: format!("http://{address}/v1"), models: vec![], key_count: 1 };
-    assert_eq!(discover_models(&reqwest::Client::new(), &provider, "secret").await.unwrap(), vec!["example-model"]);
+    tokio::spawn(
+        axum::serve(
+            listener,
+            Router::new().fallback(get(|| async {
+                Json(json!({"data":[{"id":"example-model"}]}))
+            })),
+        )
+        .into_future(),
+    );
+    let provider = sepia_gateway::Provider {
+        id: 1,
+        name: "test".into(),
+        protocol: ProviderProtocol::OpenAI,
+        endpoint: format!("http://{address}/v1"),
+        models: vec![],
+        key_count: 1,
+    };
+    assert_eq!(
+        discover_models(&reqwest::Client::new(), &provider, "secret")
+            .await
+            .unwrap(),
+        vec!["example-model"]
+    );
 }

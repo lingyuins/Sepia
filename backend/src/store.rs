@@ -57,6 +57,7 @@ pub struct NewRoute {
     pub provider_id: i64,
     pub model: String,
     pub is_default: bool,
+    pub list_members: bool,
     pub candidates: Vec<(i64, String)>,
 }
 #[derive(Debug, Clone)]
@@ -65,6 +66,7 @@ pub struct Route {
     pub slug: String,
     pub patterns: Vec<String>,
     pub is_default: bool,
+    pub list_members: bool,
     pub candidates: Vec<(i64, String)>,
 }
 #[derive(Debug, Clone)]
@@ -260,6 +262,50 @@ impl Store {
         }
         Ok(providers)
     }
+    pub async fn add_provider_key(
+        &self,
+        provider_id: i64,
+        secret: &str,
+        key_store: &KeyStore,
+    ) -> Result<i64, String> {
+        let (nonce, ciphertext) = key_store.encrypt(secret)?;
+        Ok(sqlx::query(
+            "INSERT INTO provider_keys (provider_id, nonce, ciphertext) VALUES (?, ?, ?)",
+        )
+        .bind(provider_id)
+        .bind(nonce)
+        .bind(ciphertext)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| e.to_string())?
+        .last_insert_rowid())
+    }
+    pub async fn upstream_key_for_attempt(
+        &self,
+        provider_id: i64,
+        start_index: usize,
+        cooldowns: &std::collections::HashMap<i64, chrono::DateTime<Utc>>,
+        key_store: &KeyStore,
+    ) -> Result<Option<(i64, String)>, String> {
+        let rows = sqlx::query("SELECT id, nonce, ciphertext FROM provider_keys WHERE provider_id = ? AND disabled = 0 ORDER BY id").bind(provider_id).fetch_all(&self.pool).await.map_err(|e| e.to_string())?;
+        if rows.is_empty() {
+            return Ok(None);
+        }
+        for offset in 0..rows.len() {
+            let row = &rows[(start_index + offset) % rows.len()];
+            let id = row.get("id");
+            if cooldowns.get(&id).is_some_and(|until| *until > Utc::now()) {
+                continue;
+            }
+            return Ok(Some((
+                id,
+                key_store
+                    .decrypt(row.get("nonce"), row.get("ciphertext"))?
+                    .to_string(),
+            )));
+        }
+        Ok(None)
+    }
     pub async fn upstream_key(
         &self,
         provider_id: i64,
@@ -281,11 +327,12 @@ impl Store {
             .map_err(|e| e.to_string())?
             .get::<i64, _>(0);
         let id = sqlx::query(
-            "INSERT INTO routes (slug, patterns, is_default, position) VALUES (?, ?, ?, ?)",
+            "INSERT INTO routes (slug, patterns, is_default, list_members, position) VALUES (?, ?, ?, ?, ?)",
         )
         .bind(input.slug)
         .bind(serde_json::to_string(&input.patterns).map_err(|e| e.to_string())?)
         .bind(input.is_default)
+        .bind(input.list_members)
         .bind(position)
         .execute(&mut *transaction)
         .await
@@ -308,7 +355,7 @@ impl Store {
     }
     pub async fn routes(&self) -> Result<Vec<Route>, String> {
         let rows = sqlx::query(
-            "SELECT id, slug, patterns, is_default FROM routes WHERE enabled = 1 ORDER BY position",
+            "SELECT id, slug, patterns, is_default, list_members FROM routes WHERE enabled = 1 ORDER BY position",
         )
         .fetch_all(&self.pool)
         .await
@@ -322,6 +369,7 @@ impl Store {
                 slug: row.get("slug"),
                 patterns: serde_json::from_str(row.get("patterns")).map_err(|e| e.to_string())?,
                 is_default: row.get("is_default"),
+                list_members: row.get("list_members"),
                 candidates,
             });
         }
