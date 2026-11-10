@@ -1,5 +1,5 @@
 - [Sepia product direction](sepia-product-direction.md) — 从零构建个人/小团队多供应商 AI 网关，核心是智能路由、观测与本地完整插件生态。
 - [Sepia frontend direction](sepia-frontend-direction.md) — 前端采用指定 React 技术栈与深绿玻璃拟态、薄荷绿渐变及轻量 3D 的高级视觉。
-- [Frontend approval gate](frontend-approval-gate.md) — 前端阶段已结束；用户于 2026-11-10 明确启动后端，下一步先确认 Rust 服务设计。
+- [Backend foundation](backend-foundation.md) — Rust 三协议推理、SSE、持久化、鉴权、额度与观测已实现；React 未联调，WASM 插件待实现。
 - [Complete change workflow](complete-change-workflow.md) — 完整变更交付前同步 AGENTS 与 memory，创建本地 Git 提交但不推送。
 - [Memory health check](memory-health-check.md) — 2026-11-09 检查结论：no-placeholder-ui 断链待处理；"尚未开始后端"为状态快照，后端启动后需更新。

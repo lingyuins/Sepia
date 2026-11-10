@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-Sepia is a frontend-only React control-plane preview for an AI model gateway: providers, routing rules, plugins, requests, analytics, and workspace settings. It uses seeded demo data and browser persistence, not a gateway backend. `src/` has no API client or request transport; connection tests, refreshes, and installs are simulated UI interactions. Preserve that boundary unless backend integration is explicitly requested.
+Sepia combines a React control-plane preview and an independent Rust AI-gateway service. The React UI still uses seeded demo data and browser persistence; its connection tests, refreshes, and installs remain simulated until the explicit frontend-integration change. The Rust service implements real configuration, authentication, protocol adaptation, routed HTTP inference, and observation. Do not imply the UI already consumes it.
 
 ## Architecture & Data Flow
 
@@ -13,6 +13,8 @@ Sepia is a frontend-only React control-plane preview for an AI model gateway: pr
 - Settings effects update the root element's theme, accent, language, reduced-motion, and compact-table attributes/classes.
 - `src/gateway.ts` only formats endpoint URLs. Local deployment always forces HTTP; cloud honors the configured protocol.
 - `src/components/RoutingOrb.tsx` is lazy-loaded and omitted when reduced motion is enabled. Three.js and chart dependencies are split into separate production chunks.
+- `backend/` is a Rust 2024 Axum/Tokio service: `server.rs` owns HTTP inference, `admin.rs` session-protected management, `protocol.rs` OpenAI/Anthropic/Gemini text and SSE codecs, `relay.rs` upstream HTTP/streaming, `store.rs` + migrations durable configuration, `crypto.rs` key protection, and `quota.rs` transactional quota reservations. `observability.rs` and `attempts.rs` persist request/attempt traces; `discovery.rs` performs real model-list connection tests.
+- Backend supports the three native text protocols in both directions and cross-protocol JSON/SSE; ordered failover only. Unsupported media/tools/multi-candidate features must fail explicitly, never silently drop content. The UI and service are not integrated yet; plugins remain a later WASM deliverable.
 
 ## Key Directories
 
@@ -31,7 +33,13 @@ npm run typecheck      # tsc --noEmit for src/
 npm test               # Node tests matching src/*.test.js
 npm run build          # tsc -b && vite build; writes dist/
 npm run preview        # serve the production build with Vite
+cargo test --manifest-path backend/Cargo.toml
+cargo clippy --manifest-path backend/Cargo.toml --all-targets -- -D warnings
+cargo fmt --manifest-path backend/Cargo.toml --check
+cargo run --manifest-path backend/Cargo.toml
 ```
+
+On Windows, install Rust stable plus Visual Studio Build Tools' C++ workload. Run Cargo from a Visual Studio Developer Command Prompt; plain shells may resolve Git's `link.exe` instead of MSVC's linker. Vite ignores `backend/target` to avoid Windows watcher locks. Backend defaults to `127.0.0.1:3425`; use `SEPIA_DATA_DIR`, `SEPIA_LISTEN`, and `SEPIA_BOOTSTRAP_TOKEN` for local configuration. Production uses the OS keyring. `SEPIA_DEV_INSECURE_KEYSTORE=1` is debug-only and must never be used for production secrets.
 
 Run `npm run typecheck` and `npm test` after source changes; run `npm run build` when bundling or lazy chunks are affected. No lint, formatting, coverage, end-to-end, or CI command is configured—do not claim one exists.
 
