@@ -197,16 +197,42 @@ async fn create_provider(
     State(state): State<AppState>,
     Json(input): Json<ProviderInput>,
 ) -> Response {
+    let ProviderInput {
+        name,
+        protocol,
+        endpoint,
+        mut models,
+        secret,
+        secrets,
+        group_id,
+        enabled,
+    } = input;
+    if models.is_empty() {
+        let candidate = crate::Provider {
+            id: 0,
+            name: name.clone(),
+            protocol,
+            endpoint: endpoint.clone(),
+            models: Vec::new(),
+            key_count: 0,
+            group_id: group_id.clone(),
+            enabled,
+        };
+        match crate::discovery::discover_models(&state.http, &candidate, &secret).await {
+            Ok(discovered) => models = discovered,
+            Err(message) => return error(StatusCode::BAD_GATEWAY, message),
+        }
+    }
     match state
         .store
         .create_provider(
             NewProvider {
-                name: input.name,
-                protocol: input.protocol,
-                endpoint: input.endpoint,
-                models: input.models,
+                name,
+                protocol,
+                endpoint,
+                models,
             },
-            &input.secret,
+            &secret,
             &state.keys,
         )
         .await
@@ -219,21 +245,19 @@ async fn create_provider(
                     &provider.name,
                     &provider.endpoint,
                     &provider.models,
-                    &input.group_id,
-                    input.enabled,
+                    &group_id,
+                    enabled,
                 )
                 .await
             {
                 return error(StatusCode::BAD_REQUEST, message);
             }
-            for secret in input
-                .secrets
-                .iter()
-                .filter(|secret| !secret.is_empty() && *secret != &input.secret)
-            {
+            for additional_secret in secrets.iter().filter(|additional_secret| {
+                !additional_secret.is_empty() && **additional_secret != secret
+            }) {
                 if let Err(message) = state
                     .store
-                    .add_provider_key(provider.id, secret, &state.keys)
+                    .add_provider_key(provider.id, additional_secret, &state.keys)
                     .await
                 {
                     return error(StatusCode::BAD_REQUEST, message);

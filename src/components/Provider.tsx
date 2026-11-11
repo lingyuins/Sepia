@@ -98,12 +98,17 @@ export function ProviderDialog({ open, onClose, onSave, onDelete, onTest, provid
   const addKey = () => setKeyDrafts((current) => [...current, createKeyDraft()])
   const updateKey = (id: number, value: string) => setKeyDrafts((current) => current.map((key) => key.id === id ? { ...key, value } : key))
   const removeKey = (id: number) => setKeyDrafts((current) => current.length > 1 ? current.filter((key) => key.id !== id) : current)
-  const submit = async (event: React.FormEvent) => {
+  const submit = async (event: React.FormEvent, fetchBeforeCreate = false) => {
     event.preventDefault()
+    if (!name.trim()) { notify(t('channelNameRequired')); return }
     if (!provider && !keyDrafts.some((key) => key.value.trim())) { notify(t('apiKeyRequired')); return }
-    const keyCount = keyDrafts.filter((key) => key.configured || key.value.trim()).length
-    const saved = { id: provider?.id || Date.now(), name: name.trim(), short: name.trim().charAt(0).toUpperCase(), type, group, models: models.length, latency: provider?.latency || 0, success: provider?.success || '—', requests: provider?.requests || '0', color: provider?.color || '#c4f4aa', enabled, endpoint, modelsList: models, keyCount }
-    try { await onSave(saved, keyDrafts.map((key) => key.value.trim()).filter(Boolean)) } catch (cause) { notify(cause instanceof Error ? cause.message : String(cause)) }
+    if (provider && !models.length) { notify(t('modelsRequired')); return }
+    if (fetchBeforeCreate) setFetchingModels(true)
+    try {
+      const keyCount = keyDrafts.filter((key) => key.configured || key.value.trim()).length
+      const saved = { id: provider?.id || Date.now(), name: name.trim(), short: name.trim().charAt(0).toUpperCase(), type, group, models: models.length, latency: provider?.latency || 0, success: provider?.success || '—', requests: provider?.requests || '0', color: provider?.color || '#c4f4aa', enabled, endpoint, modelsList: models, keyCount }
+      await onSave(saved, keyDrafts.map((key) => key.value.trim()).filter(Boolean))
+    } catch (cause) { notify(cause instanceof Error ? cause.message : String(cause)) } finally { if (fetchBeforeCreate) setFetchingModels(false) }
   }
   const createGroup = async (event: React.FormEvent) => {
     event.preventDefault()
@@ -145,7 +150,7 @@ export function ProviderDialog({ open, onClose, onSave, onDelete, onTest, provid
         <div className="model-toolbar">
           <input className="field model-id-input" value={modelDraft} onChange={(event) => setModelDraft(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') { event.preventDefault(); addModel() } }} placeholder={t('modelIdPlaceholder')} aria-label={t('modelIdPlaceholder')} />
           <button type="button" className="button secondary" disabled={!modelDraft.trim() || fetchingModels} onClick={addModel}><Plus size={13} />{t('addModel')}</button>
-          <button type="button" className="button primary" disabled={fetchingModels || !provider || !onTest} onClick={refreshModels}><RefreshCw className={fetchingModels ? 'spin' : ''} size={13} />{fetchingModels ? t('fetchingModels') : t('fetchModels')}</button>
+          <button type="button" className="button primary" disabled={fetchingModels || (provider ? !onTest : !name.trim() || !endpoint.trim() || !keyDrafts.some((key) => key.value.trim()))} onClick={(event) => provider ? refreshModels() : submit(event, true)}><RefreshCw className={fetchingModels ? 'spin' : ''} size={13} />{fetchingModels ? t('fetchingModels') : t('fetchModels')}</button>
           <button type="button" className="button secondary" disabled={fetchingModels || !provider || !onTest} onClick={refreshModels}><RefreshCw size={13} />{t('refetchModels')}</button>
           <button type="button" className="button secondary" disabled={!models.length || fetchingModels} onClick={testModels}><Play size={13} />{t('testModels')}</button>
           <button type="button" className="button secondary" onClick={() => setModelSettingsOpen(true)}><Settings2 size={13} />{t('modelSettings')}</button>
@@ -159,7 +164,7 @@ export function ProviderDialog({ open, onClose, onSave, onDelete, onTest, provid
         {modelTested && <div className="model-test-result"><Check size={13} />{t('modelsTested', { count: models.length })}</div>}
       </section>
       <div className="switch-row"><span>{t('enableProvider')}</span><Toggle label={t('enableProvider')} checked={enabled} onChange={() => setEnabled(!enabled)} /></div>
-      <div className="provider-test"><button type="button" className="button secondary" disabled={testing || !provider || !onTest} onClick={async () => { if (!provider || !onTest) return; setTesting(true); try { const discovered = await onTest(provider); setModels(discovered); setModelCatalog(discovered); setModelsFetchedAt(new Date().toISOString()); setTested(true) } catch (cause) { setTested(false); notify(cause instanceof Error ? cause.message : String(cause)) } finally { setTesting(false) } }}>{testing ? t('testingConnection') : t('testConnection')}</button>{tested && <span><Check size={13} />{t('configLooksGood')}</span>}</div>
+      <div className="provider-test"><button type="button" className="button secondary" disabled={testing || fetchingModels || (provider ? !onTest : !name.trim() || !endpoint.trim() || !keyDrafts.some((key) => key.value.trim()))} onClick={async (event) => { if (!provider) { setTesting(true); try { await submit(event, true); setTested(true) } finally { setTesting(false) }; return } if (!onTest) return; setTesting(true); try { const discovered = await onTest(provider); setModels(discovered); setModelCatalog(discovered); setModelsFetchedAt(new Date().toISOString()); setTested(true) } catch (cause) { setTested(false); notify(cause instanceof Error ? cause.message : String(cause)) } finally { setTesting(false) } }}>{testing || fetchingModels ? t('testingConnection') : t('testConnection')}</button>{tested && <span><Check size={13} />{t('configLooksGood')}</span>}</div>
       <DialogActions onClose={onClose} label={provider ? t('saveProvider') : t('connectProvider')} />
       {provider && onDelete && <button type="button" className="dialog-danger-link" onClick={onDelete}>{t('disconnectProvider')}</button>}
     </form>

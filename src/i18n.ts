@@ -541,6 +541,8 @@ export const translations = {
   addModel: ['Add model', '添加模型', 'モデルを追加'],
   fetchModels: ['Fetch models', '拉取模型', 'モデルを取得'],
   fetchingModels: ['Fetching models…', '正在拉取模型…', 'モデルを取得中…'],
+  channelNameRequired: ['Provider name required', '请填写渠道名称', 'プロバイダー名を入力してください'],
+  modelsRequired: ['Add or fetch at least one model before saving', '保存前请添加或拉取至少一个模型', '保存前にモデルを追加または取得してください'],
   refetchModels: ['Refetch models', '重新获取模型', 'モデルを再取得'],
   testModels: ['Test models', '测试模型', 'モデルをテスト'],
   modelSettings: ['Model settings', '模型设置', 'モデル設定'],
