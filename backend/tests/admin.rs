@@ -188,9 +188,14 @@ async fn provider_creation_discovers_models_before_persisting() {
     let client = reqwest::Client::new();
     let created = client.post(format!("http://{address}/api/v1/providers"))
         .header("cookie", format!("sepia_session={session}"))
-        .json(&json!({"name":"Discovered","protocol":"openai","endpoint":upstream_url,"models":[],"secret":"initial-secret","group_id":"official","enabled":true}))
+        .json(&json!({"name":"Discovered","protocol":"openai","endpoint":upstream_url,"models":[],"secret":"initial-secret","secrets":["initial-secret"],"group_id":"official","enabled":true}))
         .send().await.unwrap();
-    assert_eq!(created.status(), 200, "{}", created.text().await.unwrap());
+    assert_eq!(
+        created.status(),
+        200,
+        "create: {}",
+        created.text().await.unwrap()
+    );
     let providers = store.providers().await.unwrap();
     assert_eq!(providers.len(), 1);
     assert_eq!(providers[0].models, vec!["discovered-model"]);
@@ -204,7 +209,12 @@ async fn provider_creation_discovers_models_before_persisting() {
         .send()
         .await
         .unwrap();
-    assert_eq!(retested.status(), 200, "{}", retested.text().await.unwrap());
+    assert_eq!(
+        retested.status(),
+        200,
+        "retest: {}",
+        retested.text().await.unwrap()
+    );
     let models: Value = retested.json().await.unwrap();
     assert_eq!(models["models"][0], "discovered-model");
     let fallback = client
@@ -217,5 +227,10 @@ async fn provider_creation_discovers_models_before_persisting() {
         .send()
         .await
         .unwrap();
-    assert_eq!(fallback.status(), 200, "{}", fallback.text().await.unwrap());
+    assert_eq!(
+        fallback.status(),
+        200,
+        "fallback: {}",
+        fallback.text().await.unwrap()
+    );
 }

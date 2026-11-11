@@ -26,6 +26,11 @@ test('serializes editor data for the real management API', () => {
   assert.deepEqual(routeInput(route, [provider]), { slug: 'chat', name: 'Chat route', description: 'Real description', patterns: ['chat-*'], is_default: true, list_members: true, enabled: true, candidates: [[7, 'local-model']] })
 })
 
+test('uses the first entered secret for discovery and retains additional keys', () => {
+  const provider = mapProvider(remoteProvider)
+  assert.deepEqual(providerInput(provider, ['first-secret', 'second-secret']), { name: 'Local OpenAI', protocol: 'openai', endpoint: 'http://127.0.0.1:9000/v1', models: ['local-model'], secret: 'first-secret', secrets: ['first-secret', 'second-secret'], group_id: 'official', enabled: true })
+})
+
 test('serializes key creation and policy without accepting a client-generated secret', () => {
   const policy = { name: 'CI', customValue: 'sk-client-value', tags: [], maxAmount: 12.5, tokenLimit: 5000, rpm: 60, tpm: 10000, modelQuotas: { chat: { rpm: 10, tpm: 500 } }, ipWhitelist: ['127.0.0.1'], expiresAt: '2026-12-01', models: ['chat'], allowedGroups: ['official'], excludedProviders: ['7'], enabled: true }
   assert.deepEqual(keyInput(policy), { name: 'CI', models: ['chat'], token_limit: 5000, max_amount_micros: 12500000, rpm: 60, tpm: 10000, expires_at: '2026-12-01T00:00:00.000Z' })

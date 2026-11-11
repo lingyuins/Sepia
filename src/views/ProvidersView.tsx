@@ -30,7 +30,7 @@ export function ProvidersView() {
   const filtered = providers.filter((p) => p.name.toLowerCase().includes(query.toLowerCase()) && (filter === 'All' || (filter === 'Active' ? p.enabled : !p.enabled)) && (groupFilter === 'all' || p.group === groupFilter))
   const save = async (provider: Provider, secrets: string[]) => {
     const existing = providers.some((item) => item.id === provider.id)
-    const input = { ...providerInput(provider), secrets }
+    const input = providerInput(provider, secrets)
     await run(() => api(existing ? `/api/v1/providers/${provider.id}` : '/api/v1/providers', { method: existing ? 'PUT' : 'POST', body: JSON.stringify(input) }))
     if (existing && secrets.length) await run(() => Promise.all(secrets.map((secret) => api(`/api/v1/providers/${provider.id}/keys`, { method: 'POST', body: JSON.stringify({ secret }) }))))
     setDialogOpen(false); setEditing(null); notify(editing ? t('providerUpdated', { name: provider.name }) : t('providerConnected', { name: provider.name }))

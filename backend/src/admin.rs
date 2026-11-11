@@ -224,7 +224,16 @@ async fn create_provider(
             group_id: group_id.clone(),
             enabled,
         };
-        match crate::discovery::discover_models(&state.http, &candidate, &secret).await {
+        let discovery_secret = if secret.trim().is_empty() {
+            secrets
+                .iter()
+                .find(|value| !value.trim().is_empty())
+                .map(String::as_str)
+                .unwrap_or("")
+        } else {
+            secret.as_str()
+        };
+        match crate::discovery::discover_models(&state.http, &candidate, discovery_secret).await {
             Ok(discovered) => models = discovered,
             Err(message) => return error(StatusCode::BAD_GATEWAY, message),
         }

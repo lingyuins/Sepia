@@ -33,8 +33,9 @@ export function mapRequest(request: ApiRequest): RequestRecord {
   const time = new Date(request.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false })
   return { id: request.id, createdAt: request.created_at, time, model: request.model || 'unknown', provider: request.provider || '—', tokens: total.toLocaleString('en-US'), inputTokens: request.input_tokens, outputTokens: request.output_tokens, latency: `${request.latency_ms} ms`, latencyMs: request.latency_ms, status: request.status === 'success' ? '200 OK' : request.status === 'failed' ? 'Failed' : request.status, key: request.key || '—', cost: `$${(request.cost_micros / 1000000).toFixed(6)}`, route: '—' }
 }
-export function providerInput(provider: Provider & { keyDrafts?: { value: string }[] }) {
-  return { name: provider.name, protocol: provider.type, endpoint: provider.endpoint, models: provider.modelsList, secret: provider.keyDrafts?.find((key) => key.value.trim())?.value || '', group_id: provider.group, enabled: provider.enabled }
+export function providerInput(provider: Provider & { keyDrafts?: { value: string }[] }, secrets?: string[]) {
+  const entered = secrets || provider.keyDrafts?.map((key) => key.value).filter(Boolean) || []
+  return { name: provider.name, protocol: provider.type, endpoint: provider.endpoint, models: provider.modelsList, secret: entered[0] || '', ...(secrets ? { secrets } : {}), group_id: provider.group, enabled: provider.enabled }
 }
 export function keyInput(policy: KeyPolicy) {
   return { name: policy.name, models: policy.models, token_limit: policy.tokenLimit || 0, max_amount_micros: Math.round((policy.maxAmount || 0) * 1000000), rpm: policy.rpm, tpm: policy.tpm, expires_at: policy.expiresAt ? new Date(`${policy.expiresAt}T00:00:00.000Z`).toISOString() : null }
