@@ -47,6 +47,7 @@ On Windows, use Rust stable with Visual Studio C++ Build Tools and an MSVC Devel
 
 - TypeScript/TSX: 2-space indentation, single quotes, no semicolons, strict types, relative imports. `noUnusedLocals` and `noUnusedParameters` are enabled.
 - Keep the existing React + semantic CSS design: `glass-panel`, `button`, `settings-card`, theme variables and responsive rules. Reuse `Modal`, `Field`, `Toggle`, `DialogActions`, Headless UI and Lucide icons.
+- Dropdown menus use `width: 100%` of their own trigger for both field and compact variants. Do not restore fixed menu widths. Long option labels ellipsize and expose their full text through `title`; verify narrow viewports do not overflow.
 - Add user-facing strings to `src/i18n.ts` as `[English, 简体中文, 日本語]`; use `useTranslation()`. Verify dynamic labels in the running UI.
 - Keep backend snake_case and frontend camelCase conversion in `api.ts`. Route candidates use Provider IDs in API tuples and Provider names in UI state. Route names/descriptions must survive refresh.
 - Provider model discovery uses `POST /api/v1/providers/:id/test` for saved Providers. Fetch/refetch and test replace only the dialog draft and require “Save provider” to persist; failures keep the existing draft. For new Providers, fetch/test submits the current name, protocol, endpoint and keys to `POST /api/v1/providers`; when models are empty, the backend discovers before creating and returns the model list. Success closes the dialog; failure creates nothing. Loading disables model mutations.

@@ -953,7 +953,7 @@ select.field { appearance: auto; }
 .dropdown-selected > span:last-child { min-width: 0; }
 .dropdown-selected strong { display: block; color: #c7d8bb; font-size: 10px; font-weight: 500; white-space: nowrap; text-overflow: ellipsis; overflow: hidden; }
 .dropdown-selected small { display: none; }
-.dropdown-menu { position: absolute; top: calc(100% + 8px); left: 0; width: 310px; max-width: min(370px, calc(100vw - 65px)); max-height: min(420px, calc(100vh - 165px)); z-index: 130; display: flex; flex-direction: column; border: 1px solid #b5d99f1c; background: #1d261bf7; backdrop-filter: blur(24px); border-radius: 10px; box-shadow: 0 18px 65px #00000066, inset 0 1px 0 #ffffff04; overflow: hidden; transform-origin: top center; animation: dropdown-in .18s cubic-bezier(.16, 1, .3, 1); }
+.dropdown-menu { position: absolute; top: calc(100% + 8px); left: 0; width: 100%; min-width: 0; max-width: calc(100vw - 32px); max-height: min(420px, calc(100vh - 165px)); z-index: 130; display: flex; flex-direction: column; border: 1px solid #b5d99f1c; background: #1d261bf7; backdrop-filter: blur(24px); border-radius: 10px; box-shadow: 0 18px 65px #00000066, inset 0 1px 0 #ffffff04; overflow: hidden; transform-origin: top center; animation: dropdown-in .18s cubic-bezier(.16, 1, .3, 1); }
 .dropdown-menu.is-closing { pointer-events: none; animation: dropdown-out .15s ease-in both; }
 .dropdown-field:last-child .dropdown-menu { left: auto; right: 0; }
 .dropdown-menu-top { display: flex; align-items: center; justify-content: space-between; padding: 9px 12px 8px; color: #7d9270; border-bottom: 1px solid #ffffff07; font-size: 9px; letter-spacing: .3px; }
@@ -964,7 +964,7 @@ select.field { appearance: auto; }
 .dropdown-option-icon { color: #8ca17d; display: flex; }
 .dropdown-option.selected .dropdown-option-icon { color: var(--accent); }
 .dropdown-option-copy { flex: 1; min-width: 0; }
-.dropdown-option-copy strong { display: block; font-size: 11px; font-weight: 500; color: #c4d4b9; }
+.dropdown-option-copy strong { display: block; font-size: 11px; font-weight: 500; color: #c4d4b9; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .dropdown-option-copy small { display: block; margin-top: 5px; color: #839777; font-size: 9px; line-height: 1.5; }
 .dropdown-badge { flex-shrink: 0; padding: 3px 5px; border: 1px solid #ffffff0b; border-radius: 4px; color: #8d9e82; font-size: 8px; }
 .dropdown-check { display: grid; place-items: center; width: 16px; height: 16px; color: var(--accent); flex-shrink: 0; }
@@ -975,7 +975,7 @@ select.field { appearance: auto; }
 .dropdown-field.compact .dropdown-trigger { min-width: 128px; height: 36px; min-height: 36px; padding: 6px 9px; background: #ffffff03; }
 .dropdown-field.compact .dropdown-selected { gap: 6px; }
 .dropdown-field.compact .dropdown-selected strong { color: #a7bb9b; font-size: 10px; font-weight: 400; white-space: nowrap; }
-.dropdown-field.compact .dropdown-menu { left: 0; right: auto; width: 220px; max-width: calc(100vw - 50px); }
+.dropdown-field.compact .dropdown-menu { left: 0; right: auto; width: 100%; max-width: calc(100vw - 32px); }
 .dropdown-field.compact .dropdown-options { padding: 5px; }
 .dropdown-field.compact .dropdown-option { gap: 8px; padding: 9px 8px; }
 .dropdown-field.compact .dropdown-option-copy strong { font-size: 10px; font-weight: 400; }
