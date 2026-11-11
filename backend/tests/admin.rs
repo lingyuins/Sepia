@@ -127,12 +127,37 @@ async fn provider_creation_discovers_models_before_persisting() {
     let session = store.login("admin", "correct horse").await.unwrap();
     let upstream = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let upstream_url = format!("http://{}/v1", upstream.local_addr().unwrap());
+    let request_count = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let upstream_count = request_count.clone();
     tokio::spawn(
         axum::serve(
             upstream,
             axum::Router::new().route(
                 "/v1/models",
-                axum::routing::get(|| async { Json(json!({"data":[{"id":"discovered-model"}]})) }),
+                axum::routing::get(move |headers: axum::http::HeaderMap| {
+                    let count = upstream_count.clone();
+                    async move {
+                        let stage = count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                        let expected = match stage {
+                            1 => "Bearer replacement-secret",
+                            _ => "Bearer initial-secret",
+                        };
+                        if headers
+                            .get("authorization")
+                            .and_then(|value| value.to_str().ok())
+                            != Some(expected)
+                        {
+                            return (
+                                axum::http::StatusCode::UNAUTHORIZED,
+                                Json(json!({"error":"wrong credential"})),
+                            );
+                        }
+                        (
+                            axum::http::StatusCode::OK,
+                            Json(json!({"data":[{"id":"discovered-model"}]})),
+                        )
+                    }
+                }),
             ),
         )
         .into_future(),
@@ -163,10 +188,34 @@ async fn provider_creation_discovers_models_before_persisting() {
     let client = reqwest::Client::new();
     let created = client.post(format!("http://{address}/api/v1/providers"))
         .header("cookie", format!("sepia_session={session}"))
-        .json(&json!({"name":"Discovered","protocol":"openai","endpoint":upstream_url,"models":[],"secret":"test-secret","group_id":"official","enabled":true}))
+        .json(&json!({"name":"Discovered","protocol":"openai","endpoint":upstream_url,"models":[],"secret":"initial-secret","group_id":"official","enabled":true}))
         .send().await.unwrap();
     assert_eq!(created.status(), 200, "{}", created.text().await.unwrap());
     let providers = store.providers().await.unwrap();
     assert_eq!(providers.len(), 1);
     assert_eq!(providers[0].models, vec!["discovered-model"]);
+    let retested = client
+        .post(format!(
+            "http://{address}/api/v1/providers/{}/test",
+            providers[0].id
+        ))
+        .header("cookie", format!("sepia_session={session}"))
+        .json(&json!({"endpoint":upstream_url,"secret":"replacement-secret"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(retested.status(), 200, "{}", retested.text().await.unwrap());
+    let models: Value = retested.json().await.unwrap();
+    assert_eq!(models["models"][0], "discovered-model");
+    let fallback = client
+        .post(format!(
+            "http://{address}/api/v1/providers/{}/test",
+            providers[0].id
+        ))
+        .header("cookie", format!("sepia_session={session}"))
+        .json(&json!({}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(fallback.status(), 200, "{}", fallback.text().await.unwrap());
 }

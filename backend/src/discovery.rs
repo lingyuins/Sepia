@@ -30,7 +30,26 @@ pub async fn discover_models(
         .await
         .map_err(|_| "provider connection failed".to_string())?;
     if !response.status().is_success() {
-        return Err(format!("provider returned HTTP {}", response.status()));
+        let status = response.status();
+        let detail = response.text().await.unwrap_or_default();
+        let message = serde_json::from_str::<Value>(&detail)
+            .ok()
+            .and_then(|body| {
+                body.get("message")
+                    .or_else(|| body.get("error"))
+                    .and_then(|value| {
+                        value
+                            .as_str()
+                            .or_else(|| value.get("message").and_then(Value::as_str))
+                    })
+                    .map(str::to_owned)
+            })
+            .unwrap_or_else(|| detail.chars().take(300).collect());
+        return Err(if message.trim().is_empty() {
+            format!("provider returned HTTP {status}")
+        } else {
+            format!("provider returned HTTP {status}: {message}")
+        });
     }
     let value: Value = response
         .json()

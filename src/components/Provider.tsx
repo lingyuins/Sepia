@@ -15,7 +15,7 @@ export function ProviderMark({ name, short, color, small = false }: Pick<Provide
   return <span className={`provider-mark ${small ? 'small' : ''}`} style={{ background: `${color}14`, color }} aria-label={name}>{short}</span>
 }
 
-export function ProviderDialog({ open, onClose, onSave, onDelete, onTest, provider }: { open: boolean; onClose: () => void; onSave: (provider: Provider, keys: string[]) => Promise<void>; onDelete?: () => void; onTest?: (provider: Provider) => Promise<string[]>; provider?: Provider | null }) {
+export function ProviderDialog({ open, onClose, onSave, onDelete, onTest, provider }: { open: boolean; onClose: () => void; onSave: (provider: Provider, keys: string[]) => Promise<void>; onDelete?: () => void; onTest?: (provider: Provider, secret?: string) => Promise<string[]>; provider?: Provider | null }) {
   const [name, setName] = useState('')
   const { channelGroups, run, notify, settings } = useWorkspace()
   const t = useTranslation()
@@ -77,14 +77,15 @@ export function ProviderDialog({ open, onClose, onSave, onDelete, onTest, provid
     setModelTested(false)
     notify(t('modelAdded', { name: id }))
   }
+  const testProvider = () => provider && onTest ? onTest({ ...provider, type, endpoint }, keyDrafts.find((key) => key.value.trim())?.value.trim()) : Promise.reject(new Error(t('saveProvider')))
   const refreshModels = async () => {
     if (!provider || !onTest) { notify(t('saveProvider')); return }
     setFetchingModels(true)
-    try { const catalog = await onTest(provider); setModels([...catalog]); setModelCatalog([...catalog]); setModelsFetchedAt(new Date().toISOString()); setModelTested(false); notify(t('modelsRefreshed', { count: catalog.length })) } catch (cause) { notify(cause instanceof Error ? cause.message : String(cause)) } finally { setFetchingModels(false) }
+    try { const catalog = await testProvider(); setModels([...catalog]); setModelCatalog([...catalog]); setModelsFetchedAt(new Date().toISOString()); setModelTested(false); notify(t('modelsRefreshed', { count: catalog.length })) } catch (cause) { notify(cause instanceof Error ? cause.message : String(cause)) } finally { setFetchingModels(false) }
   }
   const testModels = async () => {
     if (!provider || !onTest) { notify(t('saveProvider')); return }
-    try { const discovered = await onTest(provider); setModelTested(models.every((model) => discovered.includes(model))); notify(t('modelsTested', { count: models.filter((model) => discovered.includes(model)).length })) } catch (cause) { setModelTested(false); notify(cause instanceof Error ? cause.message : String(cause)) }
+    try { const discovered = await testProvider(); setModelTested(models.every((model) => discovered.includes(model))); notify(t('modelsTested', { count: models.filter((model) => discovered.includes(model)).length })) } catch (cause) { setModelTested(false); notify(cause instanceof Error ? cause.message : String(cause)) }
   }
   const clearModels = () => {
     setModels([])
@@ -164,7 +165,7 @@ export function ProviderDialog({ open, onClose, onSave, onDelete, onTest, provid
         {modelTested && <div className="model-test-result"><Check size={13} />{t('modelsTested', { count: models.length })}</div>}
       </section>
       <div className="switch-row"><span>{t('enableProvider')}</span><Toggle label={t('enableProvider')} checked={enabled} onChange={() => setEnabled(!enabled)} /></div>
-      <div className="provider-test"><button type="button" className="button secondary" disabled={testing || fetchingModels || (provider ? !onTest : !name.trim() || !endpoint.trim() || !keyDrafts.some((key) => key.value.trim()))} onClick={async (event) => { if (!provider) { setTesting(true); try { await submit(event, true); setTested(true) } finally { setTesting(false) }; return } if (!onTest) return; setTesting(true); try { const discovered = await onTest(provider); setModels(discovered); setModelCatalog(discovered); setModelsFetchedAt(new Date().toISOString()); setTested(true) } catch (cause) { setTested(false); notify(cause instanceof Error ? cause.message : String(cause)) } finally { setTesting(false) } }}>{testing || fetchingModels ? t('testingConnection') : t('testConnection')}</button>{tested && <span><Check size={13} />{t('configLooksGood')}</span>}</div>
+      <div className="provider-test"><button type="button" className="button secondary" disabled={testing || fetchingModels || (provider ? !onTest : !name.trim() || !endpoint.trim() || !keyDrafts.some((key) => key.value.trim()))} onClick={async (event) => { if (!provider) { setTesting(true); try { await submit(event, true); setTested(true) } finally { setTesting(false) }; return } if (!onTest) return; setTesting(true); try { const discovered = await testProvider(); setModels(discovered); setModelCatalog(discovered); setModelsFetchedAt(new Date().toISOString()); setTested(true) } catch (cause) { setTested(false); notify(cause instanceof Error ? cause.message : String(cause)) } finally { setTesting(false) } }}>{testing || fetchingModels ? t('testingConnection') : t('testConnection')}</button>{tested && <span><Check size={13} />{t('configLooksGood')}</span>}</div>
       <DialogActions onClose={onClose} label={provider ? t('saveProvider') : t('connectProvider')} />
       {provider && onDelete && <button type="button" className="dialog-danger-link" onClick={onDelete}>{t('disconnectProvider')}</button>}
     </form>

@@ -41,6 +41,12 @@ pub struct ProviderInput {
     #[serde(default = "default_true")]
     enabled: bool,
 }
+#[derive(Deserialize, Default)]
+pub struct ProviderTestInput {
+    protocol: Option<crate::ProviderProtocol>,
+    endpoint: Option<String>,
+    secret: Option<String>,
+}
 #[derive(Deserialize)]
 pub struct RouteInput {
     slug: String,
@@ -397,17 +403,34 @@ async fn attempts(State(state): State<AppState>, Path(id): Path<String>) -> Resp
         Err(message) => error(StatusCode::INTERNAL_SERVER_ERROR, message),
     }
 }
-async fn test_provider(State(state): State<AppState>, Path(id): Path<i64>) -> Response {
-    let provider = match state.store.providers().await {
+async fn test_provider(
+    State(state): State<AppState>,
+    Path(id): Path<i64>,
+    input: Option<Json<ProviderTestInput>>,
+) -> Response {
+    let mut provider = match state.store.providers().await {
         Ok(providers) => match providers.into_iter().find(|provider| provider.id == id) {
             Some(provider) => provider,
             None => return error(StatusCode::NOT_FOUND, "provider not found"),
         },
         Err(message) => return error(StatusCode::INTERNAL_SERVER_ERROR, message),
     };
-    let secret = match state.store.upstream_key(id, &state.keys).await {
-        Ok(secret) => secret,
-        Err(message) => return error(StatusCode::BAD_REQUEST, message),
+    let input = input.map(|Json(input)| input).unwrap_or_default();
+    if let Some(protocol) = input.protocol {
+        provider.protocol = protocol;
+    }
+    if let Some(endpoint) = input
+        .endpoint
+        .filter(|endpoint| !endpoint.trim().is_empty())
+    {
+        provider.endpoint = endpoint;
+    }
+    let secret = match input.secret.filter(|secret| !secret.trim().is_empty()) {
+        Some(secret) => secret,
+        None => match state.store.upstream_key(id, &state.keys).await {
+            Ok(secret) => secret,
+            Err(message) => return error(StatusCode::BAD_REQUEST, message),
+        },
     };
     match crate::discovery::discover_models(&state.http, &provider, &secret).await {
         Ok(models) => Json(json!({"models":models})).into_response(),
