@@ -337,6 +337,12 @@ async fn relay(
     if path.is_some_and(|p| p.1) {
         request.stream = true;
     }
+    if initial_model.is_empty() {
+        let _ = state
+            .store
+            .set_request_model(&request_id, &request.model)
+            .await;
+    }
     if !client
         .models
         .iter()
@@ -424,7 +430,7 @@ async fn relay(
             continue;
         }
         loop {
-            if attempts_used >= 3 {
+            if attempts_used >= snapshot.max_attempts {
                 break 'candidates;
             }
             let (key_id, secret) = {

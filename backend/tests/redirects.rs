@@ -20,6 +20,8 @@ async fn upstream_redirects_do_not_forward_provider_credentials() {
         endpoint: format!("http://{address}"),
         models: vec!["x".into()],
         key_count: 1,
+        group_id: "official".into(),
+        enabled: true,
     };
     let request = ChatRequest {
         model: "x".into(),

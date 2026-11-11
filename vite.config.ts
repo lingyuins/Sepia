@@ -3,7 +3,7 @@ import react from '@vitejs/plugin-react'
 
 export default defineConfig({
   plugins: [react()],
-  server: { host: '0.0.0.0', port: 5173, watch: { ignored: ['**/backend/target/**', '**/backend/data/**'] } },
+  server: { host: '0.0.0.0', port: 5173, watch: { ignored: ['**/backend/target/**', '**/backend/data/**'] }, proxy: Object.fromEntries(['/api', '/v1'].map((path) => [path, process.env.SEPIA_GATEWAY_URL || 'http://127.0.0.1:3425'])) },
   build: {
     rollupOptions: {
       output: {

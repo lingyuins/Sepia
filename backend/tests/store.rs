@@ -50,6 +50,8 @@ async fn bootstrap_authenticates_sessions_and_persists_configuration() {
     store
         .create_route(NewRoute {
             slug: "example".into(),
+            name: "example".into(),
+            description: String::new(),
             patterns: vec!["example-*".into()],
             provider_id: provider.id,
             model: "example-1".into(),

@@ -71,6 +71,21 @@ impl Store {
             .get("group_id");
         Ok(policy.allowed_groups.contains(&group))
     }
+    pub async fn channel_groups(&self) -> Result<Vec<crate::store::ChannelGroup>, String> {
+        sqlx::query("SELECT id, name, description FROM channel_groups ORDER BY id")
+            .fetch_all(&self.pool)
+            .await
+            .map_err(|e| e.to_string())?
+            .into_iter()
+            .map(|row| {
+                Ok(crate::store::ChannelGroup {
+                    id: row.get("id"),
+                    name: row.get("name"),
+                    description: row.get("description"),
+                })
+            })
+            .collect()
+    }
     pub async fn set_group(&self, id: &str, name: &str, description: &str) -> Result<(), String> {
         sqlx::query("INSERT INTO channel_groups (id, name, description) VALUES (?, ?, ?) ON CONFLICT(id) DO UPDATE SET name = excluded.name, description = excluded.description").bind(id).bind(name).bind(description).execute(&self.pool).await.map_err(|e| e.to_string())?;
         Ok(())

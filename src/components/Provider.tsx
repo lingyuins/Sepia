@@ -2,7 +2,8 @@ import { useEffect, useState } from 'react'
 import { Check, Copy, Play, Plus, RefreshCw, Settings2, X } from 'lucide-react'
 import { DialogActions, Field, Modal, Toggle } from './UI'
 import { Dropdown } from './Dropdown'
-import { protocolModels, protocolOf, useTranslation, useWorkspace, type ProtocolType, type Provider } from '../workspace'
+import { api } from '../api'
+import { protocolOf, useTranslation, useWorkspace, type ProtocolType, type Provider } from '../workspace'
 export type { Provider } from '../workspace'
 
 type KeyDraft = { id: number; value: string; configured: boolean }
@@ -14,9 +15,9 @@ export function ProviderMark({ name, short, color, small = false }: Pick<Provide
   return <span className={`provider-mark ${small ? 'small' : ''}`} style={{ background: `${color}14`, color }} aria-label={name}>{short}</span>
 }
 
-export function ProviderDialog({ open, onClose, onSave, onDelete, provider }: { open: boolean; onClose: () => void; onSave: (provider: Provider) => void; onDelete?: () => void; provider?: Provider | null }) {
+export function ProviderDialog({ open, onClose, onSave, onDelete, onTest, provider }: { open: boolean; onClose: () => void; onSave: (provider: Provider, keys: string[]) => Promise<void>; onDelete?: () => void; onTest?: (provider: Provider) => Promise<string[]>; provider?: Provider | null }) {
   const [name, setName] = useState('')
-  const { channelGroups, setChannelGroups, notify, settings } = useWorkspace()
+  const { channelGroups, run, notify, settings } = useWorkspace()
   const t = useTranslation()
   const [type, setType] = useState<ProtocolType>('openai')
   const [group, setGroup] = useState('official')
@@ -28,14 +29,12 @@ export function ProviderDialog({ open, onClose, onSave, onDelete, provider }: { 
   const [groupOpen, setGroupOpen] = useState(false)
   const [groupName, setGroupName] = useState('')
   const [groupDescription, setGroupDescription] = useState('')
-  const [models, setModels] = useState<string[]>(provider?.modelsList || protocolModels(type))
+  const [models, setModels] = useState<string[]>(provider?.modelsList || [])
   const [modelDraft, setModelDraft] = useState('')
-  const [routeOnly, setRouteOnly] = useState(provider?.routeOnly ?? false)
-  const [autoFetchModels, setAutoFetchModels] = useState(provider?.fetchModels ?? true)
   const [modelsFetchedAt, setModelsFetchedAt] = useState(provider?.modelsFetchedAt || '')
   const [modelTested, setModelTested] = useState(false)
   const [modelSettingsOpen, setModelSettingsOpen] = useState(false)
-  const [modelCatalog, setModelCatalog] = useState<string[]>(provider?.modelCatalog || protocolModels(type))
+  const [modelCatalog, setModelCatalog] = useState<string[]>(provider?.modelCatalog || [])
   useEffect(() => {
     if (!open) return
     const nextType = provider ? protocolOf(provider) : 'openai'
@@ -46,12 +45,10 @@ export function ProviderDialog({ open, onClose, onSave, onDelete, provider }: { 
     setEnabled(provider?.enabled ?? true)
     setKeyDrafts(keyDraftsFor(provider))
     setTested(false)
-    setModels([...(provider?.modelsList || protocolModels(nextType))])
+    setModels([...(provider?.modelsList || [])])
     setModelDraft('')
-    setRouteOnly(provider?.routeOnly ?? false)
-    setAutoFetchModels(provider?.fetchModels ?? true)
     setModelsFetchedAt(provider?.modelsFetchedAt || '')
-    setModelCatalog([...(provider?.modelCatalog || protocolModels(nextType))])
+    setModelCatalog([...(provider?.modelCatalog || [])])
     setModelTested(false)
     setModelSettingsOpen(false)
     setGroupOpen(false)
@@ -64,8 +61,6 @@ export function ProviderDialog({ open, onClose, onSave, onDelete, provider }: { 
   const changeType = (value: string) => {
     const nextType = value as ProtocolType
     setType(nextType)
-    setModels(protocolModels(nextType))
-    setModelCatalog(protocolModels(nextType))
     setModelsFetchedAt('')
     setTested(false)
     setModelTested(false)
@@ -80,17 +75,13 @@ export function ProviderDialog({ open, onClose, onSave, onDelete, provider }: { 
     setModelTested(false)
     notify(t('modelAdded', { name: id }))
   }
-  const refreshModels = () => {
-    const catalog = protocolModels(type)
-    setModels([...catalog])
-    setModelCatalog([...catalog])
-    setModelsFetchedAt(new Date().toISOString())
-    setModelTested(false)
-    notify(t('modelsRefreshed', { count: catalog.length }))
+  const refreshModels = async () => {
+    if (!provider || !onTest) { notify(t('saveProvider')); return }
+    try { const catalog = await onTest(provider); setModels([...catalog]); setModelCatalog([...catalog]); setModelsFetchedAt(new Date().toISOString()); setModelTested(false); notify(t('modelsRefreshed', { count: catalog.length })) } catch (cause) { notify(cause instanceof Error ? cause.message : String(cause)) }
   }
-  const testModels = () => {
-    setModelTested(true)
-    notify(t('modelsTested', { count: models.length }))
+  const testModels = async () => {
+    if (!provider || !onTest) { notify(t('saveProvider')); return }
+    try { const discovered = await onTest(provider); setModelTested(models.every((model) => discovered.includes(model))); notify(t('modelsTested', { count: models.filter((model) => discovered.includes(model)).length })) } catch (cause) { setModelTested(false); notify(cause instanceof Error ? cause.message : String(cause)) }
   }
   const clearModels = () => {
     setModels([])
@@ -104,25 +95,20 @@ export function ProviderDialog({ open, onClose, onSave, onDelete, provider }: { 
   const addKey = () => setKeyDrafts((current) => [...current, createKeyDraft()])
   const updateKey = (id: number, value: string) => setKeyDrafts((current) => current.map((key) => key.id === id ? { ...key, value } : key))
   const removeKey = (id: number) => setKeyDrafts((current) => current.length > 1 ? current.filter((key) => key.id !== id) : current)
-  const changeAutoSync = () => {
-    const next = !autoFetchModels
-    setAutoFetchModels(next)
-    if (next) refreshModels()
-  }
-  const submit = (event: React.FormEvent) => {
+  const submit = async (event: React.FormEvent) => {
     event.preventDefault()
     if (!provider && !keyDrafts.some((key) => key.value.trim())) { notify(t('apiKeyRequired')); return }
     const keyCount = keyDrafts.filter((key) => key.configured || key.value.trim()).length
-    onSave({ id: provider?.id || Date.now(), name: name.trim(), short: name.trim().charAt(0).toUpperCase(), type, group, models: models.length, latency: provider?.latency || 0, success: provider?.success || '—', requests: provider?.requests || '0', color: provider?.color || '#c4f4aa', enabled, endpoint, modelsList: models, routeOnly, fetchModels: autoFetchModels, modelsFetchedAt, modelCatalog, keyCount })
+    const saved = { id: provider?.id || Date.now(), name: name.trim(), short: name.trim().charAt(0).toUpperCase(), type, group, models: models.length, latency: provider?.latency || 0, success: provider?.success || '—', requests: provider?.requests || '0', color: provider?.color || '#c4f4aa', enabled, endpoint, modelsList: models, keyCount }
+    try { await onSave(saved, keyDrafts.map((key) => key.value.trim()).filter(Boolean)) } catch (cause) { notify(cause instanceof Error ? cause.message : String(cause)) }
   }
-  const createGroup = (event: React.FormEvent) => {
+  const createGroup = async (event: React.FormEvent) => {
     event.preventDefault()
     const name = groupName.trim()
     if (!name) { notify(t('groupNameRequired')); return }
     if (channelGroups.some((item) => item.name.toLowerCase() === name.toLowerCase())) { notify(t('groupExists')); return }
     const id = `group-${Date.now()}`
-    setChannelGroups((current) => [...current, { id, name, description: groupDescription.trim() }])
-    setGroup(id); setGroupOpen(false); setGroupName(''); setGroupDescription(''); notify(t('groupCreated'))
+    try { await run(() => api('/api/v1/groups', { method: 'POST', body: JSON.stringify({ id, name, description: groupDescription.trim() }) })); setGroup(id); setGroupOpen(false); setGroupName(''); setGroupDescription(''); notify(t('groupCreated')) } catch (cause) { notify(cause instanceof Error ? cause.message : String(cause)) }
   }
   const groupLabel = (id: string) => {
     if (id === 'official') return t('officialChannels')
@@ -162,10 +148,6 @@ export function ProviderDialog({ open, onClose, onSave, onDelete, provider }: { 
           <span className="model-list-meta">{t('providerList')} · {modelListLabel}</span>
           <button type="button" className="button secondary" disabled={!models.length} onClick={clearModels}>{t('clear')}</button>
         </div>
-        <div className="model-options">
-          <div className="model-option-toggle"><Toggle label={t('routeOnly')} checked={routeOnly} onChange={() => setRouteOnly(!routeOnly)} /><span>{t('routeOnly')}</span></div>
-          <div className="model-option-toggle"><Toggle label={t('autoSync')} checked={autoFetchModels} onChange={changeAutoSync} /><span>{t('autoSync')}</span></div>
-        </div>
         <div className={`model-chip-list ${models.length ? '' : 'is-empty'}`}>
           {models.map((model) => <span className="model-chip" key={model}><code>{model}</code><button type="button" onClick={() => { setModels((current) => current.filter((item) => item !== model)); setModelTested(false) }} aria-label={t('removeModel', { name: model })}><X size={12} /></button></span>)}
           {!models.length && <span>{t('noModelsConfigured')}</span>}
@@ -173,15 +155,13 @@ export function ProviderDialog({ open, onClose, onSave, onDelete, provider }: { 
         {modelTested && <div className="model-test-result"><Check size={13} />{t('modelsTested', { count: models.length })}</div>}
       </section>
       <div className="switch-row"><span>{t('enableProvider')}</span><Toggle label={t('enableProvider')} checked={enabled} onChange={() => setEnabled(!enabled)} /></div>
-      <div className="provider-test"><button type="button" className="button secondary" disabled={testing} onClick={() => { setTesting(true); setTimeout(() => { setTesting(false); setTested(true) }, 650) }}>{testing ? t('testingConnection') : t('testConnection')}</button>{tested && <span><Check size={13} />{t('configLooksGood')}</span>}</div>
+      <div className="provider-test"><button type="button" className="button secondary" disabled={testing || !provider || !onTest} onClick={async () => { if (!provider || !onTest) return; setTesting(true); try { const discovered = await onTest(provider); setModels(discovered); setModelCatalog(discovered); setModelsFetchedAt(new Date().toISOString()); setTested(true) } catch (cause) { setTested(false); notify(cause instanceof Error ? cause.message : String(cause)) } finally { setTesting(false) } }}>{testing ? t('testingConnection') : t('testConnection')}</button>{tested && <span><Check size={13} />{t('configLooksGood')}</span>}</div>
       <DialogActions onClose={onClose} label={provider ? t('saveProvider') : t('connectProvider')} />
       {provider && onDelete && <button type="button" className="dialog-danger-link" onClick={onDelete}>{t('disconnectProvider')}</button>}
     </form>
   </Modal>}
   <Modal open={modelSettingsOpen} onClose={() => setModelSettingsOpen(false)} title={t('modelSettings')} description={t('modelSettingsSubtitle')} size="nested-dialog model-settings-dialog">
     <div className="model-settings-body">
-      <div className="switch-row"><span>{t('routeOnly')}</span><Toggle label={t('routeOnly')} checked={routeOnly} onChange={() => setRouteOnly(!routeOnly)} /></div>
-      <div className="switch-row"><span>{t('autoSync')}</span><Toggle label={t('autoSync')} checked={autoFetchModels} onChange={changeAutoSync} /></div>
       <div className="model-catalog-heading"><span>{t('catalogModels')}</span><small>{models.length} {t('models')}</small></div>
       <div className="model-selection-list">{modelCatalog.map((model) => <label className="model-setting-option" key={model}><input type="checkbox" checked={models.includes(model)} onChange={() => toggleModel(model)} /><code>{model}</code></label>)}</div>
     </div>

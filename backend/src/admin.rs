@@ -1,7 +1,7 @@
 use crate::{NewProvider, NewRoute, UpsertClientKey, server::AppState};
 use axum::{
     Json, Router,
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::{HeaderMap, StatusCode, header},
     middleware::{self, Next},
     response::{IntoResponse, Response},
@@ -12,6 +12,9 @@ use serde_json::json;
 
 fn default_true() -> bool {
     true
+}
+fn default_group() -> String {
+    "official".into()
 }
 #[derive(Deserialize)]
 pub struct Credentials {
@@ -31,16 +34,26 @@ pub struct ProviderInput {
     endpoint: String,
     models: Vec<String>,
     secret: String,
+    #[serde(default)]
+    secrets: Vec<String>,
+    #[serde(default = "default_group")]
+    group_id: String,
+    #[serde(default = "default_true")]
+    enabled: bool,
 }
 #[derive(Deserialize)]
 pub struct RouteInput {
     slug: String,
+    name: String,
+    description: String,
     patterns: Vec<String>,
     candidates: Vec<(i64, String)>,
     #[serde(default)]
     is_default: bool,
     #[serde(default = "default_true")]
     list_members: bool,
+    #[serde(default = "default_true")]
+    enabled: bool,
 }
 #[derive(Deserialize)]
 pub struct PriceInput {
@@ -73,6 +86,12 @@ fn session_cookie(headers: &HeaderMap) -> Option<&str> {
         .ok()?
         .split(';')
         .find_map(|part| part.trim().strip_prefix("sepia_session="))
+}
+async fn status(State(state): State<AppState>) -> Response {
+    match state.store.initialized().await {
+        Ok(initialized) => Json(json!({"initialized":initialized})).into_response(),
+        Err(message) => error(StatusCode::INTERNAL_SERVER_ERROR, message),
+    }
 }
 async fn bootstrap(State(state): State<AppState>, Json(input): Json<Bootstrap>) -> Response {
     match state
@@ -172,7 +191,7 @@ async fn auth(
     }
 }
 async fn providers(State(state): State<AppState>) -> Response {
-    match state.store.providers().await { Ok(providers) => Json(json!(providers.into_iter().map(|p| json!({"id":p.id,"name":p.name,"protocol":p.protocol,"endpoint":p.endpoint,"models":p.models,"key_count":p.key_count})).collect::<Vec<_>>())).into_response(), Err(message) => error(StatusCode::INTERNAL_SERVER_ERROR, message) }
+    match state.store.providers().await { Ok(providers) => Json(json!(providers.into_iter().map(|p| json!({"id":p.id,"name":p.name,"protocol":p.protocol,"endpoint":p.endpoint,"models":p.models,"key_count":p.key_count,"group_id":p.group_id,"enabled":p.enabled})).collect::<Vec<_>>())).into_response(), Err(message) => error(StatusCode::INTERNAL_SERVER_ERROR, message) }
 }
 async fn create_provider(
     State(state): State<AppState>,
@@ -193,6 +212,33 @@ async fn create_provider(
         .await
     {
         Ok(provider) => {
+            if let Err(message) = state
+                .store
+                .update_provider(
+                    provider.id,
+                    &provider.name,
+                    &provider.endpoint,
+                    &provider.models,
+                    &input.group_id,
+                    input.enabled,
+                )
+                .await
+            {
+                return error(StatusCode::BAD_REQUEST, message);
+            }
+            for secret in input
+                .secrets
+                .iter()
+                .filter(|secret| !secret.is_empty() && *secret != &input.secret)
+            {
+                if let Err(message) = state
+                    .store
+                    .add_provider_key(provider.id, secret, &state.keys)
+                    .await
+                {
+                    return error(StatusCode::BAD_REQUEST, message);
+                }
+            }
             if let Err(message) = state.snapshots.refresh(&state.store).await {
                 return error(StatusCode::INTERNAL_SERVER_ERROR, message);
             }
@@ -202,7 +248,7 @@ async fn create_provider(
     }
 }
 async fn routes(State(state): State<AppState>) -> Response {
-    match state.store.routes().await { Ok(routes) => Json(json!(routes.into_iter().map(|route| json!({"id":route.id,"slug":route.slug,"patterns":route.patterns,"is_default":route.is_default,"list_members":route.list_members,"candidates":route.candidates})).collect::<Vec<_>>())).into_response(), Err(message) => error(StatusCode::INTERNAL_SERVER_ERROR, message) }
+    match state.store.routes().await { Ok(routes) => Json(json!(routes.into_iter().map(|route| json!({"id":route.id,"slug":route.slug,"name":route.name,"description":route.description,"patterns":route.patterns,"is_default":route.is_default,"list_members":route.list_members,"enabled":route.enabled,"candidates":route.candidates})).collect::<Vec<_>>())).into_response(), Err(message) => error(StatusCode::INTERNAL_SERVER_ERROR, message) }
 }
 async fn create_route(State(state): State<AppState>, Json(input): Json<RouteInput>) -> Response {
     let Some((provider_id, model)) = input.candidates.first().cloned() else {
@@ -212,6 +258,8 @@ async fn create_route(State(state): State<AppState>, Json(input): Json<RouteInpu
         .store
         .create_route(NewRoute {
             slug: input.slug,
+            name: input.name,
+            description: input.description,
             patterns: input.patterns,
             provider_id,
             model,
@@ -222,10 +270,66 @@ async fn create_route(State(state): State<AppState>, Json(input): Json<RouteInpu
         .await
     {
         Ok(route) => {
+            if let Err(message) = state.store.set_route_enabled(route.id, input.enabled).await {
+                return error(StatusCode::BAD_REQUEST, message);
+            }
             if let Err(message) = state.snapshots.refresh(&state.store).await {
                 return error(StatusCode::INTERNAL_SERVER_ERROR, message);
             }
             Json(json!({"id":route.id})).into_response()
+        }
+        Err(message) => error(StatusCode::BAD_REQUEST, message),
+    }
+}
+async fn update_provider(
+    State(state): State<AppState>,
+    Path(id): Path<i64>,
+    Json(input): Json<ProviderInput>,
+) -> Response {
+    match state
+        .store
+        .update_provider(
+            id,
+            &input.name,
+            &input.endpoint,
+            &input.models,
+            &input.group_id,
+            input.enabled,
+        )
+        .await
+    {
+        Ok(()) => {
+            let _ = state.snapshots.refresh(&state.store).await;
+            StatusCode::OK.into_response()
+        }
+        Err(message) => error(StatusCode::BAD_REQUEST, message),
+    }
+}
+async fn update_route(
+    State(state): State<AppState>,
+    Path(id): Path<i64>,
+    Json(input): Json<RouteInput>,
+) -> Response {
+    match state
+        .store
+        .update_route(
+            id,
+            crate::updates::RouteUpdate {
+                slug: &input.slug,
+                name: &input.name,
+                description: &input.description,
+                patterns: &input.patterns,
+                is_default: input.is_default,
+                list_members: input.list_members,
+                enabled: input.enabled,
+                candidates: &input.candidates,
+            },
+        )
+        .await
+    {
+        Ok(()) => {
+            let _ = state.snapshots.refresh(&state.store).await;
+            StatusCode::OK.into_response()
         }
         Err(message) => error(StatusCode::BAD_REQUEST, message),
     }
@@ -355,7 +459,10 @@ async fn update_settings(
             return error(StatusCode::BAD_REQUEST, message);
         }
     }
-    StatusCode::OK.into_response()
+    match state.snapshots.refresh(&state.store).await {
+        Ok(()) => StatusCode::OK.into_response(),
+        Err(message) => error(StatusCode::INTERNAL_SERVER_ERROR, message),
+    }
 }
 async fn settings(State(state): State<AppState>) -> Response {
     match state.store.settings().await {
@@ -363,9 +470,19 @@ async fn settings(State(state): State<AppState>) -> Response {
         Err(message) => error(StatusCode::INTERNAL_SERVER_ERROR, message),
     }
 }
-async fn analytics(State(state): State<AppState>) -> Response {
-    match state.store.analytics().await {
+async fn analytics(
+    State(state): State<AppState>,
+    Query(query): Query<std::collections::HashMap<String, String>>,
+) -> Response {
+    let period = query.get("period").map(String::as_str).unwrap_or("30 days");
+    match state.store.analytics_for(period).await {
         Ok(analytics) => Json(analytics).into_response(),
+        Err(message) => error(StatusCode::BAD_REQUEST, message),
+    }
+}
+async fn groups(State(state): State<AppState>) -> Response {
+    match state.store.channel_groups().await {
+        Ok(groups) => Json(groups).into_response(),
         Err(message) => error(StatusCode::INTERNAL_SERVER_ERROR, message),
     }
 }
@@ -445,9 +562,17 @@ async fn client_key_enabled(
         Err(message) => error(StatusCode::BAD_REQUEST, message),
     }
 }
+async fn clear_requests(State(state): State<AppState>) -> Response {
+    match state.store.clear_requests().await {
+        Ok(()) => StatusCode::OK.into_response(),
+        Err(message) => error(StatusCode::INTERNAL_SERVER_ERROR, message),
+    }
+}
 pub fn router(state: AppState) -> Router<AppState> {
     let protected = Router::new()
         .route("/providers", get(providers).post(create_provider))
+        .route("/providers/{id}", axum::routing::put(update_provider))
+        .route("/routes/{id}", axum::routing::put(update_route))
         .route("/providers/{id}/test", post(test_provider))
         .route("/providers/{id}/keys", post(add_key))
         .route("/providers/{id}/enabled", post(provider_enabled))
@@ -459,13 +584,14 @@ pub fn router(state: AppState) -> Router<AppState> {
         .route("/keys/{id}/revoke", post(revoke_key))
         .route("/keys/{id}/policy", post(set_policy))
         .route("/keys/{id}/enabled", post(client_key_enabled))
-        .route("/groups", post(set_group))
+        .route("/groups", get(groups).post(set_group))
         .route("/settings", get(settings).post(update_settings))
         .route("/analytics", get(analytics))
-        .route("/requests", get(requests))
+        .route("/requests", get(requests).delete(clear_requests))
         .route("/requests/{id}/attempts", get(attempts))
         .route_layer(middleware::from_fn_with_state(state.clone(), auth));
     Router::new()
+        .route("/auth/status", get(status))
         .route("/auth/bootstrap", post(bootstrap))
         .route("/auth/login", post(login))
         .route("/auth/logout", post(logout))

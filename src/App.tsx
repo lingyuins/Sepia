@@ -1,6 +1,6 @@
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react'
 import {
-  Activity, ArrowDownRight, ArrowRight, ArrowUpRight, BarChart3, Bell, Blocks,
+  Activity, ArrowRight, ArrowUpRight, BarChart3, Bell, Blocks,
   ChevronRight, CircleHelp, Command,
   ExternalLink, Gauge, GitBranch, Inbox, Layers3, LayoutDashboard,
   Menu as MenuIcon, Network, Plus, RefreshCw,
@@ -8,8 +8,9 @@ import {
 } from 'lucide-react'
 import { Dialog } from '@headlessui/react'
 import { Area, AreaChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
-import { chartData, useWorkspace, useTranslation, type Provider, type RequestRecord } from './workspace'
+import { useWorkspace, useTranslation, type Provider, type RequestRecord } from './workspace'
 import { gatewayUrl } from './gateway'
+import { api, providerInput } from './api'
 import { CopyButton, ProviderDialog, ProviderMark, Toast } from './components/Provider'
 import { ProvidersView } from './views/ProvidersView'
 import { RoutingView } from './views/RoutingView'
@@ -45,41 +46,41 @@ function SectionHeading({ eyebrow, title, description, action }: { eyebrow?: str
   return <div className="page-heading"><div>{eyebrow && <div className="eyebrow">{eyebrow}</div>}<h1>{title}</h1><p>{description}</p></div>{action}</div>
 }
 
-function MetricCard({ title, value, change, foot, icon: Icon, good = true, bars }: { title: string; value: string; change: string; foot: string; icon: typeof Activity; good?: boolean; bars: number[] }) {
+function MetricCard({ title, value, foot, icon: Icon }: { title: string; value: string; foot: string; icon: typeof Activity }) {
   return <div className="metric-card glass-panel">
     <div className="metric-top"><span>{title}</span><span className="metric-icon"><Icon size={16} /></span></div>
     <div className="metric-value">{value}</div>
-    <div className="metric-foot"><span className={good ? 'positive' : 'positive'}>{good ? <ArrowUpRight size={12} /> : <ArrowDownRight size={12} />}{change}</span><span>{foot}</span></div>
-    <div className="mini-bars">{bars.map((height, index) => <i key={index} style={{ height: `${height}%` }} />)}</div>
+    <div className="metric-foot"><span>{foot}</span></div>
   </div>
 }
 
 function Overview({ providers, navigate, onAdd, onNotify, onRequest }: { providers: Provider[]; navigate: (page: Page) => void; onAdd: () => void; onNotify: (message: string) => void; onRequest: (row: RequestRecord) => void }) {
-  const { requests, settings } = useWorkspace()
+  const { requests, settings, analytics, refresh } = useWorkspace()
   const t = useTranslation()
   const endpoint = gatewayUrl(settings)
-  const [period, setPeriod] = useState<Period>('24 hours')
-  const data = period === '24 hours' ? chartData : chartData.map((point, index) => ({ ...point, requests: Math.round(point.requests * (period === '7 days' ? 6.4 : 25.7) + index * 80), successful: Math.round(point.requests * (period === '7 days' ? 6.39 : 25.68) + index * 80) }))
+  const [period, setPeriod] = useState<Period>('30 days')
+  const periodLabel = (value: Period) => value === '24 hours' ? '24h' : value === '7 days' ? '7d' : '30d'
+  const data = analytics.series || []
   const [refreshing, setRefreshing] = useState(false)
-  const refresh = () => { setRefreshing(true); setTimeout(() => { setRefreshing(false); onNotify(t('metricsRefreshed')) }, 700) }
+  const refreshData = async () => { setRefreshing(true); try { await refresh(period); onNotify(t('metricsRefreshed')) } finally { setRefreshing(false) } }
   return <>
-    <SectionHeading title={t('goodToSeeYou')} description={t('overviewSubtitle')} action={<button className="button secondary heading-refresh" onClick={refresh}><RefreshCw size={15} className={refreshing ? 'spin' : ''} />{t('refresh')}</button>} />
+    <SectionHeading title={t('goodToSeeYou')} description={t('overviewSubtitle')} action={<button className="button secondary heading-refresh" onClick={refreshData}><RefreshCw size={15} className={refreshing ? 'spin' : ''} />{t('refresh')}</button>} />
     <section className="hero-panel glass-panel">
       <div className="hero-copy"><div className="hero-badge"><Sparkles size={12} /> {t('heroEyebrow')}</div><h2>{t('heroTitle')}<span>.</span></h2><p>{t('heroSubtitle')}</p><div className="hero-actions"><button className="button primary" onClick={() => navigate('Routing')}>{t('exploreRouting')} <ArrowUpRight size={16} /></button><button className="button text-button" onClick={() => navigate('Providers')}>{t('viewProviders')} <ArrowRight size={15} /></button></div></div>
-      <div className="orb-wrap"><div className="orb-halo" />{!settings.reducedMotion && <Suspense fallback={<div className="orb-fallback" />}><RoutingOrb /></Suspense>}<div className="orb-label label-one"><StatusDot />{providers.filter((p) => p.enabled).length} {t('providersEnabledShort')}</div><div className="orb-label label-two"><Zap size={11} /> {t('smartRoutingActive')}</div></div>
+      <div className="orb-wrap"><div className="orb-halo" />{!settings.reducedMotion && <Suspense fallback={<div className="orb-fallback" />}><RoutingOrb /></Suspense>}<div className="orb-label label-one"><StatusDot />{providers.filter((p) => p.enabled).length} {t('providersEnabledShort')}</div><div className="orb-label label-two"><Zap size={11} /> {t('gatewayReady')}</div></div>
       <div className="hero-grid" />
     </section>
     <div className="metrics-grid">
-      <MetricCard title={t('requestsToday')} value="24,892" change="12.8%" foot={t('vsYesterday')} icon={Inbox} bars={[36, 55, 44, 63, 48, 68, 73, 57, 79, 67, 85, 92]} />
-      <MetricCard title={t('successRate')} value="99.97%" change="0.04%" foot={t('vsYesterday')} icon={ShieldCheck} bars={[65, 72, 67, 79, 75, 82, 79, 88, 83, 86, 90, 94]} />
-      <MetricCard title={t('avgLatency')} value="684 ms" change="8.2%" foot={t('fasterYesterday')} icon={Gauge} bars={[93, 83, 89, 72, 77, 64, 70, 58, 63, 54, 59, 48]} />
-      <MetricCard title={t('spendToday')} value="$24.68" change="12.4%" foot={t('underBaseline')} icon={BarChart3} bars={[90, 71, 79, 66, 70, 54, 62, 49, 51, 43, 46, 35]} />
+      <MetricCard title={t('requestsToday')} value={analytics.requests.toLocaleString()} foot={periodLabel(period)} icon={Inbox} />
+      <MetricCard title={t('successRate')} value={analytics.requests ? `${(analytics.successful / analytics.requests * 100).toFixed(2)}%` : '—'} foot={periodLabel(period)} icon={ShieldCheck} />
+      <MetricCard title={t('avgLatency')} value={analytics.latency_ms ? `${Math.round(analytics.latency_ms)} ms` : '—'} foot={periodLabel(period)} icon={Gauge} />
+      <MetricCard title={t('spendToday')} value={`$${(analytics.cost_micros / 1000000).toFixed(4)}`} foot={periodLabel(period)} icon={BarChart3} />
     </div>
     <div className="dashboard-grid">
       <section className="chart-panel glass-panel">
-        <div className="panel-heading"><div><h3>{t('requestActivity')}</h3><p>{t('trafficSubtitle')}</p></div><div className="segmented">{(['24 hours', '7 days', '30 days'] as Period[]).map((p) => <button className={period === p ? 'active' : ''} onClick={() => setPeriod(p)} key={p}>{p === '24 hours' ? '24h' : p === '7 days' ? '7d' : '30d'}</button>)}</div></div>
-        <div className="chart-legend"><span><i className="legend-mint" />{t('allRequests')} <strong>{period === '24 hours' ? '24,892' : period === '7 days' ? '148,206' : '614,729'}</strong></span><span><i className="legend-grey" />{t('successful')} <strong>{period === '24 hours' ? '24,885' : period === '7 days' ? '148,161' : '614,544'}</strong></span></div>
-        <div className="traffic-chart"><ResponsiveContainer width="100%" height="100%"><AreaChart data={data} margin={{ top: 14, right: 4, left: -24, bottom: 0 }}><defs><linearGradient id="requestGradient" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor="#bceba4" stopOpacity={0.22} /><stop offset="100%" stopColor="#bceba4" stopOpacity={0} /></linearGradient></defs><CartesianGrid vertical={false} stroke="#ffffff09" /><XAxis dataKey="time" axisLine={false} tickLine={false} tick={{ fill: '#788177', fontSize: 10 }} interval={2} dy={10} /><YAxis axisLine={false} tickLine={false} tick={{ fill: '#788177', fontSize: 10 }} ticks={[0, 250, 500, 750, 1000, 1250]} /><Tooltip contentStyle={{ background: '#20271f', border: '1px solid #ffffff15', borderRadius: 10, fontSize: 12 }} labelStyle={{ color: '#aab2a6' }} cursor={{ stroke: '#bceba455' }} /><Area type="monotone" dataKey="requests" stroke="#bceba4" strokeWidth={2} fill="url(#requestGradient)" activeDot={{ r: 4, fill: '#d8fac5', stroke: '#1c2819', strokeWidth: 3 }} /><Area type="monotone" dataKey="successful" stroke="#7a8578" strokeWidth={1} strokeDasharray="4 5" fill="transparent" /></AreaChart></ResponsiveContainer></div>
+        <div className="panel-heading"><div><h3>{t('requestActivity')}</h3><p>{t('trafficSubtitle')}</p></div><div className="segmented">{(['24 hours', '7 days', '30 days'] as Period[]).map((p) => <button className={period === p ? 'active' : ''} onClick={() => { setPeriod(p); void refresh(p) }} key={p}>{p === '24 hours' ? '24h' : p === '7 days' ? '7d' : '30d'}</button>)}</div></div>
+        <div className="chart-legend"><span><i className="legend-mint" />{t('allRequests')} <strong>{analytics.requests.toLocaleString()}</strong></span><span><i className="legend-grey" />{t('successful')} <strong>{analytics.successful.toLocaleString()}</strong></span></div>
+        <div className="traffic-chart"><ResponsiveContainer width="100%" height="100%"><AreaChart data={data} margin={{ top: 14, right: 4, left: -24, bottom: 0 }}><defs><linearGradient id="requestGradient" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor="var(--chart-accent)" stopOpacity={0.22} /><stop offset="100%" stopColor="var(--chart-accent)" stopOpacity={0} /></linearGradient></defs><CartesianGrid vertical={false} stroke="var(--chart-grid)" /><XAxis dataKey="time" axisLine={false} tickLine={false} tick={{ fill: 'var(--chart-text)', fontSize: 10 }} interval={2} dy={10} /><YAxis axisLine={false} tickLine={false} tick={{ fill: 'var(--chart-text)', fontSize: 10 }} ticks={[0, 250, 500, 750, 1000, 1250]} /><Tooltip contentStyle={{ background: 'var(--panel-solid)', border: '1px solid var(--border)', borderRadius: 10, fontSize: 12 }} labelStyle={{ color: 'var(--chart-text)' }} cursor={{ stroke: 'var(--chart-accent)' }} /><Area type="monotone" dataKey="requests" stroke="var(--chart-accent)" strokeWidth={2} fill="url(#requestGradient)" activeDot={{ r: 4, fill: 'var(--chart-accent)', stroke: 'var(--panel-solid)', strokeWidth: 3 }} /><Area type="monotone" dataKey="successful" stroke="var(--chart-text)" strokeWidth={1} strokeDasharray="4 5" fill="transparent" /></AreaChart></ResponsiveContainer></div>
       </section>
       <section className="health-panel glass-panel"><div className="panel-heading"><div><h3>{t('providerHealth')}</h3><p>{t('providerHealthSubtitle')}</p></div><button className="icon-button" onClick={() => navigate('Providers')} aria-label="{t('viewProviders')}"><ArrowUpRight size={17} /></button></div><div className="health-list">{providers.slice(0, 4).map((provider) => <div className="health-row" key={provider.id}><ProviderMark {...provider} /><div className="health-name"><strong>{provider.name}</strong><span>{provider.models} {t('modelsConnected')}</span></div><div className="health-latency"><strong>{provider.latency ? `${provider.latency} ms` : t('new')}</strong><span><StatusDot />{provider.enabled ? t('operational') : t('paused')}</span></div></div>)}</div><button className="add-provider-link" onClick={onAdd}><Plus size={14} /> {t('connectAnother')}</button></section>
     </div>
@@ -93,7 +94,7 @@ function Overview({ providers, navigate, onAdd, onNotify, onRequest }: { provide
 
 
 function App() {
-  const { settings, providers, setProviders, plugins, routes, requests, notices, notify, toast, clearToast } = useWorkspace()
+  const { settings, providers, plugins, routes, requests, notices, notify, toast, clearToast, run } = useWorkspace()
   const t = useTranslation()
   const getPage = (): Page => { const p = window.location.hash.slice(1); return p === 'Settings' || [...navItems, ...insightItems].some((item) => item.label === p) ? p as Page : 'Overview' }
   const [page, setPage] = useState<Page>(getPage)
@@ -136,7 +137,7 @@ function App() {
       {page === 'Settings' && <SettingsView />}
       <footer className="page-footer"><span><Logo compact />{t('footer')}</span><span>Sepia v0.1.0 <i /> <span className="positive">{t('frontendPreview')}</span></span></footer>
     </div></main>
-    <ProviderDialog open={addProvider} onClose={() => setAddProvider(false)} onSave={(provider) => { setProviders((current) => [...current, provider]); setAddProvider(false); notify(t('providerConnected', { name: provider.name })) }} />
+    <ProviderDialog open={addProvider} onClose={() => setAddProvider(false)} onSave={async (provider, secrets) => { await run(() => api('/api/v1/providers', { method: 'POST', body: JSON.stringify({ ...providerInput(provider), secrets }) })); setAddProvider(false); notify(t('providerConnected', { name: provider.name })) }} />
     <Dialog open={searchOpen} onClose={() => setSearchOpen(false)} className="dialog-root"><div className="dialog-backdrop" /><div className="dialog-position search-position"><Dialog.Panel className="dialog-panel search-dialog glass-panel"><div className="search-dialog-input"><Search size={19} /><input autoFocus placeholder={t('searchPlaceholder')} aria-label={t('searchWorkspace')} value={search} onChange={(e) => setSearch(e.target.value)} /><button className="icon-button" onClick={() => setSearchOpen(false)}><X size={16} /></button></div><div className="search-results"><span className="nav-label">{t('page')}</span>{searchResults.map(({ label, icon: Icon, type, page: target }, index) => <button key={`${type}-${label}-${index}`} onClick={() => { navigate(target); setSearchOpen(false); setSearch('') }}><Icon size={17} /><span>{label}</span><small>{type}</small><ArrowUpRight size={14} /></button>)}{searchResults.length === 0 && <p>{t('searchEmpty')}</p>}</div><div className="search-footer"><span><kbd>↵</kbd> {t('toSelect')}</span><span><kbd>esc</kbd> {t('toClose')}</span></div></Dialog.Panel></div></Dialog>
     {selectedRequest && <Dialog open={!!selectedRequest} onClose={() => setSelectedRequest(null)} className="dialog-root"><div className="dialog-backdrop" /><div className="dialog-position"><Dialog.Panel className="dialog-panel glass-panel"><button className="icon-button dialog-close" onClick={() => setSelectedRequest(null)} aria-label={t('close')}><X size={18} /></button><div className="dialog-symbol"><Activity size={22} /></div><Dialog.Title>{t('requestDetails')}</Dialog.Title><Dialog.Description>{t('requestDetailsSubtitle')}</Dialog.Description><dl className="request-details"><div><dt>{t('requestId')}</dt><dd>{selectedRequest.id}</dd></div><div><dt>{t('time')}</dt><dd>{selectedRequest.time}</dd></div><div><dt>{t('model')}</dt><dd>{selectedRequest.model}</dd></div><div><dt>{t('provider')}</dt><dd><ProviderCell name={selectedRequest.provider} /></dd></div><div><dt>{t('route')}</dt><dd>{selectedRequest.route}</dd></div><div><dt>{t('apiKey')}</dt><dd>{selectedRequest.key === 'Development' ? t('development') : selectedRequest.key === 'Production' ? t('production') : selectedRequest.key}</dd></div><div><dt>{t('tokensDetail')}</dt><dd>{t('inputOutput', { input: selectedRequest.inputTokens.toLocaleString(), output: selectedRequest.outputTokens.toLocaleString() })}</dd></div><div><dt>{t('latency')}</dt><dd>{selectedRequest.latency}</dd></div><div><dt>{t('estimatedCost')}</dt><dd>{selectedRequest.cost}</dd></div><div><dt>{t('status')}</dt><dd><span className={`status-pill ${selectedRequest.status === 'Failover' ? 'warning' : ''}`}><StatusDot />{selectedRequest.status === 'Failover' ? t('failover') : selectedRequest.status}</span></dd></div></dl><div className="secure-note"><ShieldCheck size={15} />{t('metadataOnly')}</div></Dialog.Panel></div></Dialog>}
     <HelpDialog open={helpOpen} onClose={() => setHelpOpen(false)} />

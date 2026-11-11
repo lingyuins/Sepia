@@ -23,6 +23,8 @@ async fn discovery_uses_protocol_credentials_and_returns_ids() {
         endpoint: format!("http://{address}/v1"),
         models: vec![],
         key_count: 1,
+        group_id: "official".into(),
+        enabled: true,
     };
     assert_eq!(
         discover_models(&reqwest::Client::new(), &provider, "secret")

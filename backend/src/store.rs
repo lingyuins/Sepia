@@ -49,10 +49,14 @@ pub struct Provider {
     pub endpoint: String,
     pub models: Vec<String>,
     pub key_count: i64,
+    pub group_id: String,
+    pub enabled: bool,
 }
 #[derive(Debug, Clone)]
 pub struct NewRoute {
     pub slug: String,
+    pub name: String,
+    pub description: String,
     pub patterns: Vec<String>,
     pub provider_id: i64,
     pub model: String,
@@ -64,9 +68,12 @@ pub struct NewRoute {
 pub struct Route {
     pub id: i64,
     pub slug: String,
+    pub name: String,
+    pub description: String,
     pub patterns: Vec<String>,
     pub is_default: bool,
     pub list_members: bool,
+    pub enabled: bool,
     pub candidates: Vec<(i64, String)>,
 }
 #[derive(Debug, Clone)]
@@ -78,6 +85,12 @@ pub struct UpsertClientKey {
     pub rpm: i64,
     pub tpm: i64,
     pub expires_at: Option<String>,
+}
+#[derive(Debug, Clone, Serialize)]
+pub struct ChannelGroup {
+    pub id: String,
+    pub name: String,
+    pub description: String,
 }
 pub struct CreatedClientKey {
     pub id: i64,
@@ -205,6 +218,10 @@ impl Store {
             return Err("provider endpoint must be HTTP(S)".into());
         }
         let mut transaction = self.pool.begin().await.map_err(|e| e.to_string())?;
+        sqlx::query("INSERT INTO channel_groups (id, name, description) VALUES ('official', 'Official', 'Built-in provider group') ON CONFLICT(id) DO NOTHING")
+            .execute(&mut *transaction)
+            .await
+            .map_err(|e| e.to_string())?;
         let id = sqlx::query("INSERT INTO providers (name, protocol, endpoint) VALUES (?, ?, ?)")
             .bind(input.name)
             .bind(input.protocol.as_str())
@@ -237,7 +254,7 @@ impl Store {
             .ok_or("provider not saved".into())
     }
     pub async fn providers(&self) -> Result<Vec<Provider>, String> {
-        let rows = sqlx::query("SELECT p.id, p.name, p.protocol, p.endpoint, COUNT(k.id) key_count FROM providers p LEFT JOIN provider_keys k ON k.provider_id = p.id AND k.disabled = 0 WHERE p.enabled = 1 GROUP BY p.id ORDER BY p.id").fetch_all(&self.pool).await.map_err(|e| e.to_string())?;
+        let rows = sqlx::query("SELECT p.id, p.name, p.protocol, p.endpoint, p.group_id, p.enabled, COUNT(k.id) key_count FROM providers p LEFT JOIN provider_keys k ON k.provider_id = p.id AND k.disabled = 0 GROUP BY p.id ORDER BY p.id").fetch_all(&self.pool).await.map_err(|e| e.to_string())?;
         let mut providers = Vec::new();
         for row in rows {
             let id = row.get("id");
@@ -258,6 +275,8 @@ impl Store {
                 endpoint: row.get("endpoint"),
                 models,
                 key_count: row.get("key_count"),
+                group_id: row.get("group_id"),
+                enabled: row.get("enabled"),
             });
         }
         Ok(providers)
@@ -327,9 +346,11 @@ impl Store {
             .map_err(|e| e.to_string())?
             .get::<i64, _>(0);
         let id = sqlx::query(
-            "INSERT INTO routes (slug, patterns, is_default, list_members, position) VALUES (?, ?, ?, ?, ?)",
+            "INSERT INTO routes (slug, name, description, patterns, is_default, list_members, position) VALUES (?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(input.slug)
+        .bind(input.name)
+        .bind(input.description)
         .bind(serde_json::to_string(&input.patterns).map_err(|e| e.to_string())?)
         .bind(input.is_default)
         .bind(input.list_members)
@@ -355,7 +376,7 @@ impl Store {
     }
     pub async fn routes(&self) -> Result<Vec<Route>, String> {
         let rows = sqlx::query(
-            "SELECT id, slug, patterns, is_default, list_members FROM routes WHERE enabled = 1 ORDER BY position",
+            "SELECT id, slug, name, description, patterns, is_default, list_members, enabled FROM routes ORDER BY position",
         )
         .fetch_all(&self.pool)
         .await
@@ -367,9 +388,12 @@ impl Store {
             routes.push(Route {
                 id,
                 slug: row.get("slug"),
+                name: row.get("name"),
+                description: row.get("description"),
                 patterns: serde_json::from_str(row.get("patterns")).map_err(|e| e.to_string())?,
                 is_default: row.get("is_default"),
                 list_members: row.get("list_members"),
+                enabled: row.get("enabled"),
                 candidates,
             });
         }

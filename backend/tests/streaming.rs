@@ -61,6 +61,8 @@ async fn failed_first_candidate_fails_over_and_records_attempts() {
     store
         .create_route(NewRoute {
             slug: "chat".into(),
+            name: "chat".into(),
+            description: String::new(),
             patterns: vec!["chat".into()],
             provider_id: first,
             model: "upstream-model".into(),
@@ -119,6 +121,8 @@ async fn anthropic_stream_is_converted_to_openai_sse() {
     store
         .create_route(NewRoute {
             slug: "chat".into(),
+            name: "chat".into(),
+            description: String::new(),
             patterns: vec!["chat".into()],
             provider_id: provider,
             model: "upstream-model".into(),

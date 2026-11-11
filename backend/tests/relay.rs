@@ -138,6 +138,8 @@ async fn all_native_protocols_relay_to_all_provider_protocols() {
         store
             .create_route(NewRoute {
                 slug: format!("example-{index}"),
+                name: format!("example-{index}"),
+                description: String::new(),
                 patterns: vec![format!("example-{index}")],
                 provider_id: provider.id,
                 model: "example".into(),

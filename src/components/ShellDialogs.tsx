@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Bell, Check, Code2, ExternalLink, Layers3, Route, ShieldCheck, X } from 'lucide-react'
+import { Bell, Check, Code2, ExternalLink, Layers3, LogOut, Route, ShieldCheck, X } from 'lucide-react'
 import { downloadFile, useWorkspace, useTranslation } from '../workspace'
 import { gatewayUrl } from '../gateway'
 import { Modal } from './UI'
@@ -15,10 +15,9 @@ export function HelpDialog({ open, onClose }: { open: boolean; onClose: () => vo
 }
 
 export function WorkspaceDialog({ open, onClose, onSettings }: { open: boolean; onClose: () => void; onSettings: () => void }) {
-  const { settings, notify, resetWorkspace } = useWorkspace()
+  const { settings, notify, logout } = useWorkspace()
   const t = useTranslation()
-  const [confirmReset, setConfirmReset] = useState(false)
-  return <Modal open={open} onClose={onClose} title={settings.workspace} description={t('yourWorkspace')}><div className="workspace-info"><span className="workspace-avatar">P</span><div><strong>{settings.workspace}</strong><p>{t('administrator')} · {t('browserWorkspace')}</p></div><span className="live-pill"><span className="status-dot" />{t('active')}</span></div><div className="workspace-menu"><button onClick={() => { onSettings(); onClose() }}><SettingsIcon />{t('workspaceSettings')}<span>{t('settingsMenuHint')}</span></button><button onClick={() => { const element = document.createElement('a'); element.href = gatewayUrl(settings, '/v1/models'); element.target = '_blank'; element.rel = 'noreferrer'; element.click(); notify(t('gatewayOpened')) }}><ExternalLink size={16} />{t('openGateway')}<span>{settings.host}:{settings.port}</span></button><button onClick={() => setConfirmReset(true)}><X size={16} />{t('restoreDemo')}<span>{t('restoreMenuHint')}</span></button></div>{confirmReset && <div className="workspace-reset"><p>{t('resetQuestion')}</p><button className="button secondary" onClick={() => setConfirmReset(false)}>{t('keepWorkspace')}</button><button className="button primary" onClick={() => { resetWorkspace(); setConfirmReset(false); onClose() }}>{t('restoreDemo')}</button></div>}</Modal>
+  return <Modal open={open} onClose={onClose} title={settings.workspace} description={t('yourWorkspace')}><div className="workspace-info"><span className="workspace-avatar">P</span><div><strong>{settings.workspace}</strong><p>{t('administrator')} · {t('browserWorkspace')}</p></div><span className="live-pill"><span className="status-dot" />{t('active')}</span></div><div className="workspace-menu"><button onClick={() => { onSettings(); onClose() }}><SettingsIcon />{t('workspaceSettings')}<span>{t('settingsMenuHint')}</span></button><button onClick={() => { const element = document.createElement('a'); element.href = gatewayUrl(settings, '/v1/models'); element.target = '_blank'; element.rel = 'noreferrer'; element.click(); notify(t('gatewayOpened')) }}><ExternalLink size={16} />{t('openGateway')}<span>{settings.host}:{settings.port}</span></button><button onClick={() => { logout().catch((cause) => notify(cause instanceof Error ? cause.message : String(cause))); onClose() }}><LogOut size={16} />{t('logout')}<span>{t('logoutHint')}</span></button></div></Modal>
 }
 function SettingsIcon() { return <span className="settings-icon">⚙</span> }
 

@@ -43,6 +43,15 @@ async fn management_requires_session_and_client_secret_is_returned_once() {
         .await
         .unwrap();
     assert_eq!(denied.status(), 401);
+    let status = client
+        .get(url("/api/v1/auth/status"))
+        .send()
+        .await
+        .unwrap()
+        .json::<Value>()
+        .await
+        .unwrap();
+    assert_eq!(status["initialized"], false);
     let initialized = client
         .post(url("/api/v1/auth/bootstrap"))
         .json(&json!({"username":"admin","password":"correct horse","token":"bootstrap"}))
