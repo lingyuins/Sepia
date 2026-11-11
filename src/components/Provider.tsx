@@ -33,6 +33,7 @@ export function ProviderDialog({ open, onClose, onSave, onDelete, onTest, provid
   const [modelDraft, setModelDraft] = useState('')
   const [modelsFetchedAt, setModelsFetchedAt] = useState(provider?.modelsFetchedAt || '')
   const [modelTested, setModelTested] = useState(false)
+  const [fetchingModels, setFetchingModels] = useState(false)
   const [modelSettingsOpen, setModelSettingsOpen] = useState(false)
   const [modelCatalog, setModelCatalog] = useState<string[]>(provider?.modelCatalog || [])
   useEffect(() => {
@@ -50,6 +51,7 @@ export function ProviderDialog({ open, onClose, onSave, onDelete, onTest, provid
     setModelsFetchedAt(provider?.modelsFetchedAt || '')
     setModelCatalog([...(provider?.modelCatalog || [])])
     setModelTested(false)
+    setFetchingModels(false)
     setModelSettingsOpen(false)
     setGroupOpen(false)
   }, [open, provider])
@@ -77,7 +79,8 @@ export function ProviderDialog({ open, onClose, onSave, onDelete, onTest, provid
   }
   const refreshModels = async () => {
     if (!provider || !onTest) { notify(t('saveProvider')); return }
-    try { const catalog = await onTest(provider); setModels([...catalog]); setModelCatalog([...catalog]); setModelsFetchedAt(new Date().toISOString()); setModelTested(false); notify(t('modelsRefreshed', { count: catalog.length })) } catch (cause) { notify(cause instanceof Error ? cause.message : String(cause)) }
+    setFetchingModels(true)
+    try { const catalog = await onTest(provider); setModels([...catalog]); setModelCatalog([...catalog]); setModelsFetchedAt(new Date().toISOString()); setModelTested(false); notify(t('modelsRefreshed', { count: catalog.length })) } catch (cause) { notify(cause instanceof Error ? cause.message : String(cause)) } finally { setFetchingModels(false) }
   }
   const testModels = async () => {
     if (!provider || !onTest) { notify(t('saveProvider')); return }
@@ -141,9 +144,10 @@ export function ProviderDialog({ open, onClose, onSave, onDelete, onTest, provid
         <div className="channel-section-title"><span className="channel-section-icon"><Settings2 size={14} /></span><h3>{t('modelManagement')}</h3><span className="model-count">{models.length} {t('models')}</span></div>
         <div className="model-toolbar">
           <input className="field model-id-input" value={modelDraft} onChange={(event) => setModelDraft(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') { event.preventDefault(); addModel() } }} placeholder={t('modelIdPlaceholder')} aria-label={t('modelIdPlaceholder')} />
-          <button type="button" className="button secondary" disabled={!modelDraft.trim()} onClick={addModel}><Plus size={13} />{t('addModel')}</button>
-          <button type="button" className="button secondary" onClick={refreshModels}><RefreshCw size={13} />{t('refetchModels')}</button>
-          <button type="button" className="button secondary" disabled={!models.length} onClick={testModels}><Play size={13} />{t('testModels')}</button>
+          <button type="button" className="button secondary" disabled={!modelDraft.trim() || fetchingModels} onClick={addModel}><Plus size={13} />{t('addModel')}</button>
+          <button type="button" className="button primary" disabled={fetchingModels || !provider || !onTest} onClick={refreshModels}><RefreshCw className={fetchingModels ? 'spin' : ''} size={13} />{fetchingModels ? t('fetchingModels') : t('fetchModels')}</button>
+          <button type="button" className="button secondary" disabled={fetchingModels || !provider || !onTest} onClick={refreshModels}><RefreshCw size={13} />{t('refetchModels')}</button>
+          <button type="button" className="button secondary" disabled={!models.length || fetchingModels} onClick={testModels}><Play size={13} />{t('testModels')}</button>
           <button type="button" className="button secondary" onClick={() => setModelSettingsOpen(true)}><Settings2 size={13} />{t('modelSettings')}</button>
           <span className="model-list-meta">{t('providerList')} · {modelListLabel}</span>
           <button type="button" className="button secondary" disabled={!models.length} onClick={clearModels}>{t('clear')}</button>

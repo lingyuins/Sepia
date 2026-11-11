@@ -539,6 +539,8 @@ export const translations = {
   modelManagement: ['Model management', '模型管理', 'モデル管理'],
   modelIdPlaceholder: ['Add model ID...', '添加模型 ID…', 'モデル ID を追加…'],
   addModel: ['Add model', '添加模型', 'モデルを追加'],
+  fetchModels: ['Fetch models', '拉取模型', 'モデルを取得'],
+  fetchingModels: ['Fetching models…', '正在拉取模型…', 'モデルを取得中…'],
   refetchModels: ['Refetch models', '重新获取模型', 'モデルを再取得'],
   testModels: ['Test models', '测试模型', 'モデルをテスト'],
   modelSettings: ['Model settings', '模型设置', 'モデル設定'],

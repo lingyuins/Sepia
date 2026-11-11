@@ -49,6 +49,7 @@ On Windows, use Rust stable with Visual Studio C++ Build Tools and an MSVC Devel
 - Keep the existing React + semantic CSS design: `glass-panel`, `button`, `settings-card`, theme variables and responsive rules. Reuse `Modal`, `Field`, `Toggle`, `DialogActions`, Headless UI and Lucide icons.
 - Add user-facing strings to `src/i18n.ts` as `[English, 简体中文, 日本語]`; use `useTranslation()`. Verify dynamic labels in the running UI.
 - Keep backend snake_case and frontend camelCase conversion in `api.ts`. Route candidates use Provider IDs in API tuples and Provider names in UI state. Route names/descriptions must survive refresh.
+- Provider model discovery uses `POST /api/v1/providers/:id/test`. “Fetch models” and “Refetch models” share that request, replace only the dialog's draft catalog, and require “Save provider” to persist. Discovery failures keep the existing draft; loading disables model mutations.
 - Client-key plaintext is returned only by key creation and shown once in the current page. Never persist it in localStorage or claim an existing key can be revealed later. Do not accept a browser-generated client secret.
 - Use real empty states and real connection errors. Do not fabricate metrics, health, savings, request records, plugin capabilities or successful upstream calls.
 - Keep pure logic tests in top-level `src/*.test.js` using `node:test` and `node:assert/strict`. Rust integration coverage belongs in `backend/tests/`.
