@@ -15,4 +15,6 @@ metadata:
 
 2026-11-11 React 联调完成：真实管理员初始化/登录、Provider 创建与启停、路由名称/描述持久化、客户端 Key 创建/撤销、请求历史刷新与周期分析均通过浏览器验证；本地 OpenAI 上游返回真实 `pong`，页面显示成功请求、Token 和 Provider 统计。路由元数据使用 `0005_route_metadata.sql`，分析 API 使用统一 period 窗口。插件仍仅展示未实现空状态。
 
+2026-11-12 项目检查修复客户端 Key 过期时间：前端不再把 `datetime-local` 按 UTC 重新解释，而是原样传递所选时间；网关将无时区时间规范化为 UTC，并在创建时拒绝无效或已过期日期，避免生成无法鉴权的 Key 或返回 500。34 项 Rust 测试、22 项前端测试、Clippy、格式检查与生产构建通过，隔离网关验证了保存时间、鉴权和 400 错误。
+
 Windows Rust MSVC 构建需要 Visual Studio C++ Build Tools；Vite 必须忽略 `backend/target`，否则 watcher 可能因编译中的 EXE 返回 EBUSY。

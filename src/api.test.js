@@ -33,8 +33,13 @@ test('uses the first entered secret for discovery and retains additional keys', 
 
 test('serializes key creation and policy without accepting a client-generated secret', () => {
   const policy = { name: 'CI', customValue: 'sk-client-value', tags: [], maxAmount: 12.5, tokenLimit: 5000, rpm: 60, tpm: 10000, modelQuotas: { chat: { rpm: 10, tpm: 500 } }, ipWhitelist: ['127.0.0.1'], expiresAt: '2026-12-01', models: ['chat'], allowedGroups: ['official'], excludedProviders: ['7'], enabled: true }
-  assert.deepEqual(keyInput(policy), { name: 'CI', models: ['chat'], token_limit: 5000, max_amount_micros: 12500000, rpm: 60, tpm: 10000, expires_at: '2026-12-01T00:00:00.000Z' })
+  assert.deepEqual(keyInput(policy), { name: 'CI', models: ['chat'], token_limit: 5000, max_amount_micros: 12500000, rpm: 60, tpm: 10000, expires_at: '2026-12-01' })
   assert.deepEqual(policyInput(policy, [mapProvider(remoteProvider)]), { ip_whitelist: ['127.0.0.1'], model_quotas: { chat: { rpm: 10, tpm: 500 } }, allowed_groups: ['official'], excluded_providers: [7] })
+})
+
+test('preserves the selected client key expiration for the gateway', () => {
+  const policy = { name: 'timed', customValue: '', tags: [], maxAmount: null, tokenLimit: null, rpm: 0, tpm: 0, modelQuotas: {}, ipWhitelist: [], expiresAt: '2027-12-31T18:30', models: ['chat'], allowedGroups: [], excludedProviders: [], enabled: true }
+  assert.equal(keyInput(policy).expires_at, '2027-12-31T18:30')
 })
 
 test('loads workspace only through real API and surfaces failures', async () => {

@@ -2,7 +2,7 @@ use crate::{
     ClientKey,
     crypto::{KeyStore, password_hash, random_token, token_hash, verify_password},
 };
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, NaiveDateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::{
     Row, SqlitePool,
@@ -403,8 +403,20 @@ impl Store {
         &self,
         input: UpsertClientKey,
     ) -> Result<CreatedClientKey, String> {
+        let expires_at = input
+            .expires_at
+            .as_deref()
+            .map(normalize_expiration)
+            .transpose()?;
+        if let Some(expiry) = expires_at.as_deref() {
+            let expiry = DateTime::parse_from_rfc3339(expiry)
+                .map_err(|error| format!("invalid client key expiration: {error}"))?;
+            if expiry < Utc::now() {
+                return Err("client key expiration must be in the future".into());
+            }
+        }
         let plaintext = random_token("sk-sepia-");
-        let id = sqlx::query("INSERT INTO client_keys (token_hash, name, models, token_limit, max_amount_micros, rpm, tpm, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)").bind(token_hash(&plaintext)).bind(input.name).bind(serde_json::to_string(&input.models).map_err(|e| e.to_string())?).bind(input.token_limit).bind(input.max_amount_micros).bind(input.rpm).bind(input.tpm).bind(input.expires_at).execute(&self.pool).await.map_err(|e| e.to_string())?.last_insert_rowid();
+        let id = sqlx::query("INSERT INTO client_keys (token_hash, name, models, token_limit, max_amount_micros, rpm, tpm, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)").bind(token_hash(&plaintext)).bind(input.name).bind(serde_json::to_string(&input.models).map_err(|e| e.to_string())?).bind(input.token_limit).bind(input.max_amount_micros).bind(input.rpm).bind(input.tpm).bind(expires_at).execute(&self.pool).await.map_err(|e| e.to_string())?.last_insert_rowid();
         Ok(CreatedClientKey { id, plaintext })
     }
     pub async fn authenticate_client(&self, token: &str) -> Result<Option<ClientKey>, String> {
@@ -454,4 +466,19 @@ impl Store {
             })
             .collect()
     }
+}
+
+fn normalize_expiration(value: &str) -> Result<String, String> {
+    if let Ok(parsed) = DateTime::parse_from_rfc3339(value) {
+        return Ok(parsed
+            .to_utc()
+            .to_rfc3339_opts(chrono::SecondsFormat::Millis, true));
+    }
+    NaiveDateTime::parse_from_str(value, "%Y-%m-%dT%H:%M")
+        .map(|local| {
+            local
+                .and_utc()
+                .to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
+        })
+        .map_err(|error| format!("invalid client key expiration: {error}"))
 }

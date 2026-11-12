@@ -38,7 +38,8 @@ export function providerInput(provider: Provider & { keyDrafts?: { value: string
   return { name: provider.name, protocol: provider.type, endpoint: provider.endpoint, models: provider.modelsList, secret: entered[0] || '', ...(secrets ? { secrets } : {}), group_id: provider.group, enabled: provider.enabled }
 }
 export function keyInput(policy: KeyPolicy) {
-  return { name: policy.name, models: policy.models, token_limit: policy.tokenLimit || 0, max_amount_micros: Math.round((policy.maxAmount || 0) * 1000000), rpm: policy.rpm, tpm: policy.tpm, expires_at: policy.expiresAt ? new Date(`${policy.expiresAt}T00:00:00.000Z`).toISOString() : null }
+  const expiresAt = policy.expiresAt ? policy.expiresAt.slice(0, 16) : null
+  return { name: policy.name, models: policy.models, token_limit: policy.tokenLimit || 0, max_amount_micros: Math.round((policy.maxAmount || 0) * 1000000), rpm: policy.rpm, tpm: policy.tpm, expires_at: expiresAt }
 }
 export function policyInput(policy: KeyPolicy, providers: Provider[]) {
   return { ip_whitelist: policy.ipWhitelist, model_quotas: policy.modelQuotas, allowed_groups: policy.allowedGroups, excluded_providers: policy.excludedProviders.map((name) => { const provider = providers.find((item) => item.name === name || String(item.id) === name); if (!provider) throw new Error(`Unknown provider: ${name}`); return provider.id }) }
