@@ -76,6 +76,50 @@ async fn management_requires_session_and_client_secret_is_returned_once() {
         .next()
         .unwrap()
         .to_string();
+    let created_provider = client
+        .post(url("/api/v1/providers"))
+        .header("cookie", &cookie)
+        .json(&json!({
+            "name":"Protocol update",
+            "protocol":"openai",
+            "endpoint":"http://127.0.0.1:9000/v1",
+            "models":["model"],
+            "secret":"upstream-secret",
+            "group_id":"official",
+            "enabled":true
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(created_provider.status(), 200);
+    let created_provider: Value = created_provider.json().await.unwrap();
+    let provider_id = created_provider["id"].as_i64().unwrap();
+    let updated_provider = client
+        .put(url(&format!("/api/v1/providers/{provider_id}")))
+        .header("cookie", &cookie)
+        .json(&json!({
+            "name":"Protocol update",
+            "protocol":"anthropic",
+            "endpoint":"http://127.0.0.1:9000/v1",
+            "models":["model"],
+            "secret":"upstream-secret",
+            "group_id":"official",
+            "enabled":true
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(updated_provider.status(), 200);
+    let providers: Value = client
+        .get(url("/api/v1/providers"))
+        .header("cookie", &cookie)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(providers[0]["protocol"], "anthropic");
     let created = client.post(url("/api/v1/keys")).header("cookie", &cookie).json(&json!({"name":"client","models":["*"],"token_limit":0,"max_amount_micros":0,"rpm":0,"tpm":0})).send().await.unwrap();
     assert_eq!(created.status(), 200);
     let body: Value = created.json().await.unwrap();

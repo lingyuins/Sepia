@@ -23,18 +23,23 @@ async fn provider_and_route_updates_round_trip_and_analytics_are_real() {
         .await
         .unwrap();
     store
-        .update_provider(
-            provider.id,
-            "After",
-            "http://localhost/v2",
-            &["two".into()],
-            "team",
-            true,
-        )
+        .update_provider(sepia_gateway::updates::ProviderUpdate {
+            id: provider.id,
+            name: "After",
+            protocol: sepia_gateway::ProviderProtocol::Anthropic,
+            endpoint: "http://localhost/v2",
+            models: &["two".into()],
+            group: "team",
+            enabled: true,
+        })
         .await
         .unwrap();
     let providers = store.providers().await.unwrap();
     assert_eq!(providers[0].name, "After");
+    assert_eq!(
+        providers[0].protocol,
+        sepia_gateway::ProviderProtocol::Anthropic
+    );
     assert_eq!(providers[0].models, vec!["two"]);
     assert!(
         store

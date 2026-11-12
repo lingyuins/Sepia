@@ -18,3 +18,5 @@ metadata:
 2026-11-12 项目检查修复客户端 Key 过期时间：前端不再把 `datetime-local` 按 UTC 重新解释，而是原样传递所选时间；网关将无时区时间规范化为 UTC，并在创建时拒绝无效或已过期日期，避免生成无法鉴权的 Key 或返回 500。34 项 Rust 测试、22 项前端测试、Clippy、格式检查与生产构建通过，隔离网关验证了保存时间、鉴权和 400 错误。
 
 Windows Rust MSVC 构建需要 Visual Studio C++ Build Tools；Vite 必须忽略 `backend/target`，否则 watcher 可能因编译中的 EXE 返回 EBUSY。
+
+2026-11-12 项目检查修复两项管理与流式边界：编辑 Provider 时协议与其它配置在同一更新事务中持久化；上游 SSE 分帧同时接受 LF 和 CRLF，避免标准 CRLF 响应丢失内容、用量和终止事件。新增管理 API、存储更新和流式回归测试；35 项 Rust 测试、22 项前端测试、Clippy、格式检查、类型检查与生产构建通过。构建仍提示 `charts` 与 `three` chunk 超过 500 KB。

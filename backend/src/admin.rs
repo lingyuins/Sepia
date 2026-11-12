@@ -1,3 +1,4 @@
+use crate::updates::ProviderUpdate;
 use crate::{NewProvider, NewRoute, UpsertClientKey, server::AppState};
 use axum::{
     Json, Router,
@@ -293,14 +294,15 @@ async fn create_provider(
         Ok(provider) => {
             if let Err(message) = state
                 .store
-                .update_provider(
-                    provider.id,
-                    &provider.name,
-                    &provider.endpoint,
-                    &provider.models,
-                    &group_id,
+                .update_provider(ProviderUpdate {
+                    id: provider.id,
+                    name: &provider.name,
+                    protocol: provider.protocol,
+                    endpoint: &provider.endpoint,
+                    models: &provider.models,
+                    group: &group_id,
                     enabled,
-                )
+                })
                 .await
             {
                 return error(StatusCode::BAD_REQUEST, message);
@@ -365,14 +367,15 @@ async fn update_provider(
 ) -> Response {
     match state
         .store
-        .update_provider(
+        .update_provider(ProviderUpdate {
             id,
-            &input.name,
-            &input.endpoint,
-            &input.models,
-            &input.group_id,
-            input.enabled,
-        )
+            name: &input.name,
+            protocol: input.protocol,
+            endpoint: &input.endpoint,
+            models: &input.models,
+            group: &input.group_id,
+            enabled: input.enabled,
+        })
         .await
     {
         Ok(()) => {

@@ -51,6 +51,7 @@ On Windows, use Rust stable with Visual Studio C++ Build Tools and an MSVC Devel
 - Add user-facing strings to `src/i18n.ts` as `[English, 简体中文, 日本語]`; use `useTranslation()`. Verify dynamic labels in the running UI.
 - Keep backend snake_case and frontend camelCase conversion in `api.ts`. Route candidates use Provider IDs in API tuples and Provider names in UI state. Route names/descriptions must survive refresh.
 - Provider model discovery is one “Fetch models” action. New Providers use `POST /api/v1/providers/test`; saved Providers use `POST /api/v1/providers/:id/test` with the current protocol, endpoint and first newly entered key (blank falls back to saved). Both return models without persisting. Fetch/test only replaces the dialog draft; the explicit connect/save action persists. Failures keep the draft and show a sanitized upstream error. Loading disables model mutations.
+- Provider edits persist the selected protocol, endpoint, group, enabled state and model list together; streamed upstream SSE accepts both LF and CRLF frame separators before protocol conversion.
 - Client-key plaintext is returned only by key creation and shown once in the current page. Never persist it in localStorage or claim an existing key can be revealed later. Do not accept a browser-generated client secret.
 - Provider creation sends both `secret` (the first entered upstream key) and `secrets` (all entered keys). The backend deduplicates them for storage and may use either for discovery; never send only `secrets` with an empty `secret`, which would break saved-key fallback.
 - Use real empty states and real connection errors. Do not fabricate metrics, health, savings, request records, plugin capabilities or successful upstream calls.
@@ -78,4 +79,5 @@ On Windows, use Rust stable with Visual Studio C++ Build Tools and an MSVC Devel
 
 - Frontend tests are deterministic pure-logic tests; `npm test` discovers only top-level `src/*.test.js`.
 - Backend tests cover native/cross-protocol JSON/SSE, failover, quotas, credentials, management, settings and route metadata. Use local controllable HTTP upstreams for end-to-end inference checks; never substitute UI fixture data for real responses.
+- Keep regression coverage for both protocol persistence through the management API and CRLF-formatted upstream SSE streams.
 - Before a complete change is committed: update this file and `.memory/MEMORY.md` plus the relevant linked memory file; stage only related files. Force-add only specific ignored memory files when necessary. Commit locally and report the hash and exercised checks; do not push without an explicit request.

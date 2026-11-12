@@ -110,9 +110,30 @@ async fn failed_first_candidate_fails_over_and_records_attempts() {
 }
 #[tokio::test]
 async fn anthropic_stream_is_converted_to_openai_sse() {
-    let upstream = serve(Router::new().fallback(post(|| async {
-        axum::response::Response::builder().header("content-type", "text/event-stream").body(axum::body::Body::from(concat!("event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_1\",\"model\":\"upstream-model\"}}\n\n", "event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"delta\":{\"text\":\"streamed\"}}\n\n", "event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"input_tokens\":2,\"output_tokens\":1}}\n\n", "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n"))).unwrap()
-    }))).await;
+    assert_anthropic_stream_is_converted_to_openai_sse("\n").await;
+}
+
+#[tokio::test]
+async fn anthropic_stream_accepts_crlf_sse_frames() {
+    assert_anthropic_stream_is_converted_to_openai_sse("\r\n").await;
+}
+
+async fn assert_anthropic_stream_is_converted_to_openai_sse(line_ending: &str) {
+    let separator = format!("{line_ending}{line_ending}");
+    let wire = [
+        format!("event: message_start{line_ending}data: {{\"type\":\"message_start\",\"message\":{{\"id\":\"msg_1\",\"model\":\"upstream-model\"}}}}"),
+        format!("event: content_block_delta{line_ending}data: {{\"type\":\"content_block_delta\",\"delta\":{{\"text\":\"streamed\"}}}}"),
+        format!("event: message_delta{line_ending}data: {{\"type\":\"message_delta\",\"delta\":{{\"stop_reason\":\"end_turn\"}},\"usage\":{{\"input_tokens\":2,\"output_tokens\":1}}}}"),
+        format!("event: message_stop{line_ending}data: {{\"type\":\"message_stop\"}}"),
+    ]
+    .join(&separator);
+    let upstream = serve(Router::new().fallback(post(move || async move {
+        axum::response::Response::builder()
+            .header("content-type", "text/event-stream")
+            .body(axum::body::Body::from(wire.clone()))
+            .unwrap()
+    })))
+    .await;
     let directory = tempfile::tempdir().unwrap();
     let store = Store::connect(&directory.path().join("stream.db"))
         .await

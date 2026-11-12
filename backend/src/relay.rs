@@ -82,6 +82,21 @@ pub struct StreamContext {
     pub guard: crate::lifecycle::RequestGuard,
     pub started: Instant,
 }
+fn sse_boundary(buffer: &[u8]) -> Option<(usize, usize)> {
+    let lf = buffer
+        .windows(2)
+        .position(|window| window == b"\n\n")
+        .map(|index| (index, 2));
+    let crlf = buffer
+        .windows(4)
+        .position(|window| window == b"\r\n\r\n")
+        .map(|index| (index, 4));
+    match (lf, crlf) {
+        (Some(left), Some(right)) => Some(if left.0 <= right.0 { left } else { right }),
+        (Some(boundary), None) | (None, Some(boundary)) => Some(boundary),
+        (None, None) => None,
+    }
+}
 pub fn stream_response(
     inbound: Protocol,
     outbound: Protocol,
@@ -106,10 +121,10 @@ pub fn stream_response(
             let Ok(chunk) = chunk else { failed = true; break; };
             buffer.extend_from_slice(&chunk);
             let mut start = 0;
-            for index in 0..buffer.len().saturating_sub(1) {
-                if buffer[index] != b'\n' || buffer[index + 1] != b'\n' { continue; }
-                let frame = String::from_utf8_lossy(&buffer[start..index]).replace("\r\n", "\n");
-                start = index + 2;
+            while let Some((index, separator_length)) = sse_boundary(&buffer[start..]) {
+                let end = start + index;
+                let frame = String::from_utf8_lossy(&buffer[start..end]).replace("\r\n", "\n");
+                start = end + separator_length;
                 match decode_sse(outbound, &frame) {
                     Ok(decoded) => {
                         let events: Vec<_> = decoded.into_iter().filter(|event| !matches!(event, StreamEvent::Start { .. })).collect();

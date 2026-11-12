@@ -1,4 +1,4 @@
-use crate::Store;
+use crate::{ProviderProtocol, Store};
 
 pub struct RouteUpdate<'a> {
     pub slug: &'a str,
@@ -10,22 +10,33 @@ pub struct RouteUpdate<'a> {
     pub enabled: bool,
     pub candidates: &'a [(i64, String)],
 }
+pub struct ProviderUpdate<'a> {
+    pub id: i64,
+    pub name: &'a str,
+    pub protocol: ProviderProtocol,
+    pub endpoint: &'a str,
+    pub models: &'a [String],
+    pub group: &'a str,
+    pub enabled: bool,
+}
 
 impl Store {
-    pub async fn update_provider(
-        &self,
-        id: i64,
-        name: &str,
-        endpoint: &str,
-        models: &[String],
-        group: &str,
-        enabled: bool,
-    ) -> Result<(), String> {
+    pub async fn update_provider(&self, input: ProviderUpdate<'_>) -> Result<(), String> {
+        let ProviderUpdate {
+            id,
+            name,
+            protocol,
+            endpoint,
+            models,
+            group,
+            enabled,
+        } = input;
         let mut tx = self.pool.begin().await.map_err(|e| e.to_string())?;
         sqlx::query(
-            "UPDATE providers SET name = ?, endpoint = ?, group_id = ?, enabled = ? WHERE id = ?",
+            "UPDATE providers SET name = ?, protocol = ?, endpoint = ?, group_id = ?, enabled = ? WHERE id = ?",
         )
         .bind(name)
+        .bind(protocol.as_str())
         .bind(endpoint)
         .bind(group)
         .bind(enabled)
