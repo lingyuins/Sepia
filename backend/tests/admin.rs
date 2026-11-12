@@ -138,9 +138,10 @@ async fn provider_creation_discovers_models_before_persisting() {
                     let count = upstream_count.clone();
                     async move {
                         let stage = count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                        let expected = match stage {
-                            1 => "Bearer replacement-secret",
-                            _ => "Bearer initial-secret",
+                        let expected = if stage == 2 {
+                            "Bearer replacement-secret"
+                        } else {
+                            "Bearer initial-secret"
                         };
                         if headers
                             .get("authorization")
@@ -186,6 +187,20 @@ async fn provider_creation_discovers_models_before_persisting() {
         .into_future(),
     );
     let client = reqwest::Client::new();
+    let preview = client
+        .post(format!("http://{address}/api/v1/providers/test"))
+        .header("cookie", format!("sepia_session={session}"))
+        .json(&json!({"protocol":"openai","endpoint":upstream_url,"secret":"initial-secret"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        preview.status(),
+        200,
+        "preview: {}",
+        preview.text().await.unwrap()
+    );
+    assert!(store.providers().await.unwrap().is_empty());
     let created = client.post(format!("http://{address}/api/v1/providers"))
         .header("cookie", format!("sepia_session={session}"))
         .json(&json!({"name":"Discovered","protocol":"openai","endpoint":upstream_url,"models":[],"secret":"initial-secret","secrets":["initial-secret"],"group_id":"official","enabled":true}))

@@ -41,6 +41,15 @@ pub struct ProviderInput {
     #[serde(default = "default_true")]
     enabled: bool,
 }
+#[derive(Deserialize)]
+pub struct ProviderPreviewInput {
+    protocol: crate::ProviderProtocol,
+    endpoint: String,
+    #[serde(default)]
+    secret: String,
+    #[serde(default)]
+    secrets: Vec<String>,
+}
 #[derive(Deserialize, Default)]
 pub struct ProviderTestInput {
     protocol: Option<crate::ProviderProtocol>,
@@ -198,6 +207,35 @@ async fn auth(
 }
 async fn providers(State(state): State<AppState>) -> Response {
     match state.store.providers().await { Ok(providers) => Json(json!(providers.into_iter().map(|p| json!({"id":p.id,"name":p.name,"protocol":p.protocol,"endpoint":p.endpoint,"models":p.models,"key_count":p.key_count,"group_id":p.group_id,"enabled":p.enabled})).collect::<Vec<_>>())).into_response(), Err(message) => error(StatusCode::INTERNAL_SERVER_ERROR, message) }
+}
+async fn preview_provider_models(
+    State(state): State<AppState>,
+    Json(input): Json<ProviderPreviewInput>,
+) -> Response {
+    let secret = if input.secret.trim().is_empty() {
+        input
+            .secrets
+            .iter()
+            .find(|value| !value.trim().is_empty())
+            .map(String::as_str)
+            .unwrap_or("")
+    } else {
+        input.secret.as_str()
+    };
+    let provider = crate::Provider {
+        id: 0,
+        name: String::new(),
+        protocol: input.protocol,
+        endpoint: input.endpoint,
+        models: Vec::new(),
+        key_count: 0,
+        group_id: String::new(),
+        enabled: false,
+    };
+    match crate::discovery::discover_models(&state.http, &provider, secret).await {
+        Ok(models) => Json(json!({"models":models})).into_response(),
+        Err(message) => error(StatusCode::BAD_GATEWAY, message),
+    }
 }
 async fn create_provider(
     State(state): State<AppState>,
@@ -627,6 +665,7 @@ async fn clear_requests(State(state): State<AppState>) -> Response {
 pub fn router(state: AppState) -> Router<AppState> {
     let protected = Router::new()
         .route("/providers", get(providers).post(create_provider))
+        .route("/providers/test", post(preview_provider_models))
         .route("/providers/{id}", axum::routing::put(update_provider))
         .route("/routes/{id}", axum::routing::put(update_route))
         .route("/providers/{id}/test", post(test_provider))
