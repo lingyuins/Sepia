@@ -14,6 +14,6 @@ export function latestSuccessfulRouteRequest(route: RouteRule, requests: Request
 
 export function selectOverviewRoute(routes: RouteRule[], requests: RequestRecord[]) {
   const enabled = routes.filter((route) => route.active)
-  const latest = requests.reduce<RequestRecord | undefined>((current, request) => !current || Date.parse(request.createdAt) > Date.parse(current.createdAt) ? request : current, undefined)
+  const latest = requests.reduce<RequestRecord | undefined>((current, request) => enabled.some((route) => route.slug === request.route) && (!current || Date.parse(request.createdAt) > Date.parse(current.createdAt)) ? request : current, undefined)
   return enabled.find((route) => route.slug === latest?.route) || enabled[0]
 }

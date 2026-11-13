@@ -9,6 +9,7 @@ import { CopyButton, ProviderDialog, Toast } from './components/Provider'
 import { Modal, ProviderCell, SectionHeading, StatusDot } from './components/UI'
 import { Dropdown } from './components/Dropdown'
 import { RouteChain } from './components/RouteChain'
+import { chartTimeLabel } from './analytics'
 import { latestSuccessfulRouteRequest, selectOverviewRoute } from './route-display'
 import { ProvidersView } from './views/ProvidersView'
 import { RoutingView } from './views/RoutingView'
@@ -41,7 +42,7 @@ function Overview({ providers, navigate, onAdd, onNotify, onRequest }: { provide
   const selectedRoute = routes.find((route) => route.id === selectedRouteId && route.active) || defaultRoute
   useEffect(() => { if (selectedRouteId && !routes.some((route) => route.id === selectedRouteId && route.active)) setSelectedRouteId(undefined) }, [routes, selectedRouteId])
   const latestRequest = selectedRoute ? latestSuccessfulRouteRequest(selectedRoute, requests) : undefined
-  const data = analytics.series || []
+  const data = (analytics.series || []).map((point) => ({ ...point, time: chartTimeLabel(point.time, period, settings.language === '简体中文' ? 'zh-CN' : settings.language === '日本語' ? 'ja-JP' : 'en-US') }))
   const periodLabel = period === '24 hours' ? t('24h') : period === '7 days' ? t('7d') : t('30d')
   const [refreshing, setRefreshing] = useState(false)
   const refreshData = async () => { setRefreshing(true); try { await refresh(period); onNotify(t('metricsRefreshed')) } finally { setRefreshing(false) } }
@@ -54,7 +55,7 @@ function Overview({ providers, navigate, onAdd, onNotify, onRequest }: { provide
     <div className="metrics-grid">
       <MetricCard title={t('requestsInPeriod')} value={analytics.requests.toLocaleString()} foot={periodLabel} icon={Inbox} />
       <MetricCard title={t('successRate')} value={analytics.requests ? `${(analytics.successful / analytics.requests * 100).toFixed(2)}%` : '—'} foot={`${analytics.successful.toLocaleString()} ${t('successful')}`} icon={ShieldCheck} />
-      <MetricCard title={t('periodLatency')} value={analytics.latency_ms ? `${Math.round(analytics.latency_ms)} ms` : '—'} foot={t('noLatencyData')} icon={Gauge} />
+      <MetricCard title={t('periodLatency')} value={analytics.latency_ms ? `${Math.round(analytics.latency_ms)} ms` : '—'} foot={analytics.latency_ms ? periodLabel : t('noLatencyData')} icon={Gauge} />
       <MetricCard title={t('periodCost')} value={`$${(analytics.cost_micros / 1000000).toFixed(4)}`} foot={periodLabel} icon={BarChart3} />
     </div>
     <div className="dashboard-grid"><section className="chart-panel glass-panel"><div className="panel-heading"><div><h3>{t('requestActivity')}</h3><p>{t('trafficSubtitle')}</p></div><div className="segmented">{(['24 hours', '7 days', '30 days'] as Period[]).map((item) => <button className={period === item ? 'active' : ''} onClick={() => { setPeriod(item); void refresh(item) }} key={item}>{item === '24 hours' ? t('24h') : item === '7 days' ? t('7d') : t('30d')}</button>)}</div></div><div className="chart-legend"><span><i className="legend-mint" />{t('allRequests')} <strong>{analytics.requests.toLocaleString()}</strong></span><span><i className="legend-grey" />{t('successful')} <strong>{analytics.successful.toLocaleString()}</strong></span></div><div className="traffic-chart"><ResponsiveContainer width="100%" height="100%"><AreaChart data={data} margin={{ top: 14, right: 4, left: -24, bottom: 0 }}><defs><linearGradient id="requestGradient" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor="var(--chart-accent)" stopOpacity={0.18} /><stop offset="100%" stopColor="var(--chart-accent)" stopOpacity={0} /></linearGradient></defs><CartesianGrid vertical={false} stroke="var(--chart-grid)" /><XAxis dataKey="time" axisLine={false} tickLine={false} tick={{ fill: 'var(--chart-text)', fontSize: 12 }} interval={2} dy={10} /><YAxis axisLine={false} tickLine={false} tick={{ fill: 'var(--chart-text)', fontSize: 12 }} allowDecimals={false} width={44} /><Tooltip contentStyle={{ background: 'var(--panel-solid)', border: '1px solid var(--border)', borderRadius: 8, color: 'var(--text)' }} /><Area type="monotone" dataKey="requests" stroke="var(--chart-accent)" strokeWidth={2} fill="url(#requestGradient)" /><Area type="monotone" dataKey="successful" stroke="var(--chart-series-2)" strokeDasharray="4 4" fill="transparent" /></AreaChart></ResponsiveContainer></div></section>

@@ -22,6 +22,11 @@ test('uses request timestamps when older route requests appear first', () => {
   assert.equal(selectOverviewRoute(routes, [requests[2], requests[1]])?.slug, 'recent')
 })
 
+test('ignores newer unrouted and disabled-route requests when choosing the overview', () => {
+  assert.equal(selectOverviewRoute(routes, [requests[1], { ...requests[0], id: 'legacy', createdAt: '2026-11-13T13:00:00Z', route: '—' }])?.slug, 'recent')
+  assert.equal(selectOverviewRoute(routes, [requests[1], { ...requests[0], id: 'disabled', createdAt: '2026-11-13T14:00:00Z', route: 'paused' }])?.slug, 'recent')
+})
+
 test('falls back to the first enabled route when no requests exist', () => {
   assert.equal(selectOverviewRoute(routes, [])?.slug, 'unused')
   assert.equal(selectOverviewRoute([routes[2]], []) , undefined)

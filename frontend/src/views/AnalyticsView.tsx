@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { ArrowDownRight, Gauge, Layers3, Route } from 'lucide-react'
 import { Area, AreaChart, Bar, BarChart, CartesianGrid, Cell, Pie, PieChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 import { useWorkspace, useTranslation } from '../workspace'
+import { chartTimeLabel } from '../analytics'
 import { ProviderCell, SectionHeading } from '../components/UI'
 
 const requestCount = (value: string) => {
@@ -12,7 +13,7 @@ const requestCount = (value: string) => {
 }
 
 export function AnalyticsView() {
-  const { providers, requests, routes, channelGroups, analytics, refresh, notify } = useWorkspace()
+  const { providers, requests, routes, channelGroups, analytics, refresh, notify, settings } = useWorkspace()
   const t = useTranslation()
   const [period, setPeriod] = useState('30 days')
   const [metric, setMetric] = useState('Requests')
@@ -21,7 +22,7 @@ export function AnalyticsView() {
     const age = Date.now() - Date.parse(request.createdAt)
     return Number.isFinite(age) && age <= (period === '24 hours' ? 86400000 : period === '7 days' ? 604800000 : 2592000000)
   })
-  const data = (analytics.series || []).map((point) => ({ ...point, cost: point.cost_micros / 1000000, latency: Math.round(point.latency_ms) }))
+  const data = (analytics.series || []).map((point) => ({ ...point, time: chartTimeLabel(point.time, period, settings.language === '简体中文' ? 'zh-CN' : settings.language === '日本語' ? 'ja-JP' : 'en-US'), cost: point.cost_micros / 1000000, latency: Math.round(point.latency_ms) }))
   const colors = ['var(--chart-accent)', 'var(--chart-series-2)', 'var(--chart-series-3)', 'var(--chart-series-4)']
   const totalProviderRequests = providers.reduce((sum, provider) => sum + requestCount(provider.requests), 0)
   const providerData = providers.map((provider, index) => ({ name: provider.name, value: totalProviderRequests ? requestCount(provider.requests) / totalProviderRequests * 100 : 0, color: colors[index % colors.length], requests: provider.requests }))

@@ -15,7 +15,7 @@ const lightAccents: Record<string, [string, string]> = {
 
 export function themeTokens(mode: ThemeMode, accent: string) {
   const [accentColor, accentText] = (mode === 'light' ? lightAccents : darkAccents)[accent] || (mode === 'light' ? lightAccents : darkAccents).Sage
-  return { accent: accentColor, accentText }
+  return { accent: accentColor, accentText, connection: accentColor, focus: accentColor }
 }
 
 export function applyTheme(root: HTMLElement, settings: { theme: string; accent: string; reducedMotion: boolean; compact: boolean; language: string }, systemLight = false) {
@@ -25,6 +25,8 @@ export function applyTheme(root: HTMLElement, settings: { theme: string; accent:
   root.dataset.accent = settings.accent in darkAccents ? settings.accent : 'Sage'
   root.style.setProperty('--accent', tokens.accent)
   root.style.setProperty('--accent-text', tokens.accentText)
+  root.style.setProperty('--focus', tokens.focus)
+  root.style.setProperty('--connection', tokens.connection)
   root.classList.toggle('reduce-motion', settings.reducedMotion)
   root.classList.toggle('compact-tables', settings.compact)
   root.lang = settings.language === '简体中文' ? 'zh-CN' : settings.language === '日本語' ? 'ja' : 'en'

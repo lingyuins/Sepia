@@ -648,6 +648,9 @@ export const translations = {
   localAnalyticsNote: ['Based on up to the latest 200 request records, filtered to this period.', '基于最多最近 200 条请求，再按所选周期过滤。', '最新200件以内のリクエストを期間で絞り込んで集計します。'],
   noProvidersConfigured: ['No providers connected', '尚未连接供应商', 'プロバイダー未接続'],
   noProvidersConfiguredHint: ['Connect a provider to make its models available through the gateway.', '连接供应商后，即可通过网关使用其模型。', 'プロバイダーを接続すると、ゲートウェイでモデルを利用できます。'],
+  providerUnavailable: ['Provider disabled; unavailable for new requests', '供应商已停用，不可用于新请求', 'プロバイダー無効・新規リクエスト不可'],
+  notMeasured: ['Not measured', '未测量', '未測定'],
+  noUpstreamRequest: ['This preview only shows route matching and saved candidates. No upstream request is sent.', '此处仅展示路由匹配和已保存候选，不会请求上游。', 'このプレビューはルート一致と保存済み候補のみを表示し、上流リクエストは送信しません。'],
 
 } as const
 export type TranslationKey = keyof typeof translations
