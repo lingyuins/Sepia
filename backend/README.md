@@ -24,7 +24,7 @@ Useful environment variables:
 - `SEPIA_TRUSTED_PROXY=true`: required for non-loopback listening; TLS is terminated by a trusted proxy
 - `SEPIA_DEV_INSECURE_KEYSTORE=1`: debug builds only; uses a file test key and must not protect production secrets
 
-The service serves `dist/` as a same-origin SPA when built. Run `npm run build` before starting it for the production UI.
+The service serves `frontend/dist/` as a same-origin SPA when built. Run `npm run build --prefix frontend` and start the gateway from the repository root before using the production UI.
 
 ## API surfaces
 
@@ -41,8 +41,8 @@ Provider keys are AES-GCM encrypted with an OS-keyring master key. Redirects are
 cargo fmt --manifest-path backend/Cargo.toml --check
 cargo clippy --manifest-path backend/Cargo.toml --all-targets -- -D warnings
 cargo test --manifest-path backend/Cargo.toml
-npm run build
-npm test
+npm run build --prefix frontend
+npm test --prefix frontend
 ```
 
 Tests use local mock HTTP upstreams. They cover native/cross-protocol JSON and SSE, failover, secrets, quotas, lifecycle cleanup and management. They do not claim live third-party provider verification; that requires separately supplied credentials.

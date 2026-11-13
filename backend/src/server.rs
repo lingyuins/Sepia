@@ -52,8 +52,9 @@ pub fn app(state: AppState) -> Router {
         .route("/v1beta/models/{*path}", post(gemini))
         .nest("/api/v1", crate::admin::router(state.clone()))
         .fallback_service(
-            tower_http::services::ServeDir::new("dist")
-                .fallback(tower_http::services::ServeFile::new("dist/index.html")),
+            tower_http::services::ServeDir::new("frontend/dist").fallback(
+                tower_http::services::ServeFile::new("frontend/dist/index.html"),
+            ),
         )
         .with_state(state)
 }

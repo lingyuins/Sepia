@@ -20,3 +20,5 @@ metadata:
 Windows Rust MSVC 构建需要 Visual Studio C++ Build Tools；Vite 必须忽略 `backend/target`，否则 watcher 可能因编译中的 EXE 返回 EBUSY。
 
 2026-11-12 项目检查修复两项管理与流式边界：编辑 Provider 时协议与其它配置在同一更新事务中持久化；上游 SSE 分帧同时接受 LF 和 CRLF，避免标准 CRLF 响应丢失内容、用量和终止事件。新增管理 API、存储更新和流式回归测试；35 项 Rust 测试、22 项前端测试、Clippy、格式检查、类型检查与生产构建通过。构建仍提示 `charts` 与 `three` chunk 超过 500 KB。
+
+2026-11-13 仓库按前后端分层：React 源码、静态资源、npm 与构建配置全部位于 `frontend/`，Rust 服务继续位于 `backend/`，调查与设计资料集中在 `docs/`，临时输出使用被 Git 忽略的 `temp/`。Windows 根目录 `start.cmd` 启动前后端；生产网关从仓库根目录托管 `frontend/dist/`。
