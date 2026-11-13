@@ -121,8 +121,6 @@ export type Settings = {
   pluginNetwork: boolean
   pluginSecrets: boolean
 }
-export type Notice = { id: number; title: string; description: string; time: string; read: boolean }
-
 export const providerModels: Record<string, string[]> = {
   OpenAI: ['gpt-4.1', 'gpt-4.1-mini', 'gpt-4o', 'o3', 'o4-mini'],
   Anthropic: ['claude-sonnet-4', 'claude-opus-4.1', 'claude-haiku-3.5'],

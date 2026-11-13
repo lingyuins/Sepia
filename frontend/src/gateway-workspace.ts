@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { api, mapProvider, mapRequest, mapRoute, type ApiAnalytics, type ApiProvider, type ApiRequest, type ApiRoute, type ApiClientKey, type ApiGroup, type ApiSettings } from './api'
 import { defaultSettings } from './settings'
-import { type ChannelGroup, type Notice, type Plugin, type Provider, type RequestRecord, type RouteRule, type Settings } from './workspace'
+import { applyTheme } from './theme'
+import { type ChannelGroup, type Plugin, type Provider, type RequestRecord, type RouteRule, type Settings } from './workspace'
 
 export type ConnectionState = 'loading' | 'ready' | 'login' | 'error'
 export function useGatewayWorkspace(): GatewayWorkspace {
@@ -16,7 +17,6 @@ export function useGatewayWorkspace(): GatewayWorkspace {
   const applyServerSettings = useCallback((server: ApiSettings) => { setSettings((current) => ({ ...current, retries: String(server.max_attempts ?? current.retries) })) }, [])
   const [channelGroups, setChannelGroups] = useState<ChannelGroup[]>([])
   const [plugins] = useState<Plugin[]>([])
-  const [notices, setNotices] = useState<Notice[]>([])
   const [toast, setToast] = useState('')
   const sequence = useRef(0)
   const periodRef = useRef('30 days')
@@ -47,13 +47,13 @@ export function useGatewayWorkspace(): GatewayWorkspace {
     api<{ username: string }>('/api/v1/auth/session').then(() => refresh()).catch((cause) => { setError(cause instanceof Error ? cause.message : 'Gateway unavailable'); setStatus('login') })
   }, [refresh])
   useEffect(() => { try { const previous = JSON.parse(localStorage.getItem('sepia.workspace.v1') || '{}'); localStorage.setItem('sepia.workspace.v1', JSON.stringify({ settings: { ...defaultSettings, ...previous.settings, ...settings } })) } catch { /* Browser storage may be disabled. */ } }, [settings])
-  useEffect(() => { const colors: Record<string, string> = { Sage: '#c4eaaa', Sky: '#a5cfe5', Lavender: '#c3b3e5', Sand: '#dfc49f' }; const root = document.documentElement; root.dataset.theme = settings.theme === 'Light' || (settings.theme === 'System' && window.matchMedia('(prefers-color-scheme: light)').matches) ? 'light' : 'dark'; root.style.setProperty('--accent', colors[settings.accent] || colors.Sage); root.classList.toggle('reduce-motion', settings.reducedMotion); root.classList.toggle('compact-tables', settings.compact); root.lang = settings.language === '简体中文' ? 'zh-CN' : settings.language === '日本語' ? 'ja' : 'en' }, [settings])
+  useEffect(() => { applyTheme(document.documentElement, settings, window.matchMedia('(prefers-color-scheme: light)').matches) }, [settings])
   useEffect(() => { if (!toast) return; const timer = setTimeout(() => setToast(''), 3500); return () => clearTimeout(timer) }, [toast])
-  return { status, error, providers, routes, requests, analytics, clientKeys, settings, setSettings, channelGroups, setChannelGroups, plugins, notices, setNotices, toast, notify: setToast, clearToast: () => setToast(''), refresh, run, login, logout }
+  return { status, error, providers, routes, requests, analytics, clientKeys, settings, setSettings, channelGroups, setChannelGroups, plugins, toast, notify: setToast, clearToast: () => setToast(''), refresh, run, login, logout }
 }
 export interface GatewayWorkspace {
   status: ConnectionState; error: string; providers: Provider[]; routes: RouteRule[]; requests: RequestRecord[]; analytics: ApiAnalytics; clientKeys: ApiClientKey[]
   settings: Settings; setSettings: React.Dispatch<React.SetStateAction<Settings>>; channelGroups: ChannelGroup[]; setChannelGroups: React.Dispatch<React.SetStateAction<ChannelGroup[]>>
-  plugins: Plugin[]; notices: Notice[]; setNotices: React.Dispatch<React.SetStateAction<Notice[]>>; toast: string; notify: (message: string) => void; clearToast: () => void
+  plugins: Plugin[]; toast: string; notify: (message: string) => void; clearToast: () => void
   refresh: (period?: string) => Promise<void>; run: <T>(operation: () => Promise<T>) => Promise<T>; login: (username: string, password: string) => Promise<void>; logout: () => Promise<void>
 }

@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Bell, Check, Code2, ExternalLink, Layers3, LogOut, Route, ShieldCheck, X } from 'lucide-react'
+import { Code2, ExternalLink, Layers3, LogOut, Route, Settings, ShieldCheck } from 'lucide-react'
 import { downloadFile, useWorkspace, useTranslation } from '../workspace'
 import { gatewayUrl } from '../gateway'
 import { Modal } from './UI'
@@ -19,11 +19,4 @@ export function WorkspaceDialog({ open, onClose, onSettings }: { open: boolean; 
   const t = useTranslation()
   return <Modal open={open} onClose={onClose} title={settings.workspace} description={t('yourWorkspace')}><div className="workspace-info"><span className="workspace-avatar">P</span><div><strong>{settings.workspace}</strong><p>{t('administrator')} · {t('browserWorkspace')}</p></div><span className="live-pill"><span className="status-dot" />{t('active')}</span></div><div className="workspace-menu"><button onClick={() => { onSettings(); onClose() }}><SettingsIcon />{t('workspaceSettings')}<span>{t('settingsMenuHint')}</span></button><button onClick={() => { const element = document.createElement('a'); element.href = gatewayUrl(settings, '/v1/models'); element.target = '_blank'; element.rel = 'noreferrer'; element.click(); notify(t('gatewayOpened')) }}><ExternalLink size={16} />{t('openGateway')}<span>{settings.host}:{settings.port}</span></button><button onClick={() => { logout().catch((cause) => notify(cause instanceof Error ? cause.message : String(cause))); onClose() }}><LogOut size={16} />{t('logout')}<span>{t('logoutHint')}</span></button></div></Modal>
 }
-function SettingsIcon() { return <span className="settings-icon">⚙</span> }
-
-export function NotificationsPanel({ open, onClose, onRequests }: { open: boolean; onClose: () => void; onRequests: () => void }) {
-  const { notices, setNotices, notify } = useWorkspace()
-  const t = useTranslation()
-  if (!open) return null
-  return <div className="notifications-panel glass-panel"><div className="notifications-head"><div><h3>{t('catchUp')}</h3><p>{notices.filter((n) => !n.read).length} {t('unreadUpdates')}</p></div><button className="icon-button" onClick={onClose} aria-label={t('closeNotifications')}><X size={16} /></button></div><div className="notifications-list">{notices.map((notice) => <button key={notice.id} className={!notice.read ? 'unread' : ''} onClick={() => { setNotices((current) => current.map((n) => n.id === notice.id ? { ...n, read: true } : n)); if (notice.id === 1) { onRequests(); onClose() } }}><span className="notification-icon">{notice.id === 1 ? <Route size={16} /> : notice.id === 2 ? <Check size={16} /> : <Bell size={16} />}</span><span><strong>{t(`notice${notice.id}Title` as 'notice1Title')}</strong><p>{t(`notice${notice.id}Description` as 'notice1Description')}</p><small>{notice.id === 1 ? t('minutesAgo') : notice.id === 2 ? t('hourAgo') : t('yesterday')}</small></span>{!notice.read && <i />}</button>)}{notices.length === 0 && <div className="empty-state">{t('allCaughtUp')}</div>}</div><div className="notifications-foot"><button className="button text-button" onClick={() => { setNotices((current) => current.map((n) => ({ ...n, read: true }))); notify(t('allMarkedRead')) }}>{t('markAllRead')}</button><button className="icon-button" onClick={() => { setNotices([]); notify(t('notificationsCleared')) }} aria-label={t('clearNotifications')}><X size={13} /></button></div></div>
-}
+function SettingsIcon() { return <Settings size={16} className="settings-icon" /> }
