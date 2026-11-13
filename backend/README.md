@@ -29,7 +29,7 @@ The service serves `frontend/dist/` as a same-origin SPA when built. Run `npm ru
 ## API surfaces
 
 - OpenAI: `GET /v1/models`, `POST /v1/chat/completions` with Bearer Key
-- Anthropic: `GET /v1/models`, `POST /v1/messages` with `x-api-key` and `anthropic-version: 2023-06-01`
+- Anthropic: `GET /v1/models` with `x-api-key`; `anthropic-version: 2023-06-01` is optional for model listing but required by `POST /v1/messages`
 - Gemini: `GET /v1beta/models`, `POST /v1beta/models/{model}:generateContent` and `:streamGenerateContent` with `x-goog-api-key` or `?key=`
 - Management: `/api/v1/auth/*`, `/providers`, `/routes`, `/keys`, `/groups`, `/settings`, `/requests`, `/analytics`; session cookie required except bootstrap/login
 

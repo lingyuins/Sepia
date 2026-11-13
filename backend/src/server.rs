@@ -162,12 +162,10 @@ async fn models(State(state): State<AppState>, headers: HeaderMap) -> Response {
         return error(StatusCode::UNAUTHORIZED, "missing API key");
     };
     if anthropic
-        && headers
-            .get("anthropic-version")
-            .and_then(|value| value.to_str().ok())
-            != Some("2023-06-01")
+        && headers.contains_key("anthropic-version")
+        && let Err(status) = extract_credential(&headers, ProtocolCredential::Anthropic, None)
     {
-        return error(StatusCode::BAD_REQUEST, "unsupported anthropic-version");
+        return error(status, "unsupported anthropic-version");
     }
     let Ok(Some(client)) = state.store.authenticate_client(&token).await else {
         return error(StatusCode::UNAUTHORIZED, "invalid API key");
