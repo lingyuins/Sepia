@@ -59,7 +59,7 @@ export function ProviderDialog({ open, onClose, onSave, onDelete, onTest, provid
     ? Date.now() - new Date(modelsFetchedAt).getTime() < 60000
       ? t('justNow')
       : new Intl.DateTimeFormat(settings.language === '简体中文' ? 'zh-CN' : settings.language === '日本語' ? 'ja-JP' : 'en-US', { month: 'short', day: 'numeric' }).format(new Date(modelsFetchedAt))
-    : t('yesterday')
+    : t('notFetched')
   const changeType = (value: string) => {
     const nextType = value as ProtocolType
     setType(nextType)

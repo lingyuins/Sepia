@@ -4,8 +4,7 @@ import { downloadFile, useWorkspace, useTranslation, type Settings } from '../wo
 import { api, keyInput, policyInput } from '../api'
 import type { KeyPolicy } from '../key-policy'
 import { gatewayUrl } from '../gateway'
-import { Toggle } from '../components/UI'
-import { SectionHeading } from '../views/ProvidersView'
+import { Toggle, SectionHeading } from '../components/UI'
 import { Dropdown } from './Dropdown'
 import KeyPolicyDialog, { type PreviewKey } from './KeyPolicyDialog'
 

@@ -1,6 +1,6 @@
 import { Blocks } from 'lucide-react'
 import { useTranslation } from '../workspace'
-import { SectionHeading } from './ProvidersView'
+import { SectionHeading } from '../components/UI'
 
 export function PluginsView() {
   const t = useTranslation()
