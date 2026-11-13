@@ -29,7 +29,7 @@ if not exist "frontend\node_modules\" (
 start "Sepia Gateway" /D "%~dp0" cmd /k cargo run --manifest-path backend/Cargo.toml
 start "Sepia Frontend" /D "%~dp0" cmd /k npm run dev --prefix frontend
 
-echo [Sepia] Gateway:  http://127.0.0.1:3425
+echo [Sepia] Gateway:  http://127.0.0.1:5000
 echo [Sepia] Frontend: http://localhost:5173
 echo [Sepia] Close the two service windows to stop Sepia.
 endlocal

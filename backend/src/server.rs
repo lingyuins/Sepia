@@ -129,10 +129,17 @@ fn public_model_ids(
 ) -> Vec<String> {
     let mut models = Vec::new();
     for route in &snapshot.routes {
-        if !client
-            .models
-            .iter()
-            .any(|pattern| glob(pattern, &route.slug))
+        let candidate_access = route.candidates.iter().any(|candidate| {
+            client
+                .models
+                .iter()
+                .any(|pattern| glob(pattern, &candidate.1))
+        });
+        if !candidate_access
+            && !client
+                .models
+                .iter()
+                .any(|pattern| glob(pattern, &route.slug))
         {
             continue;
         }

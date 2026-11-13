@@ -2,6 +2,11 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 
 import { gatewayUrl } from './gateway.ts'
+import { defaultSettings } from './settings.ts'
+
+test('defaults the local gateway to port 5000', () => {
+  assert.equal(defaultSettings.port, '5000')
+})
 
 test('keeps local deployments on HTTP', () => {
   assert.equal(

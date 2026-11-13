@@ -73,3 +73,71 @@ async fn anthropic_model_listing_does_not_require_a_version_header() {
         ])
     );
 }
+
+#[tokio::test]
+async fn a_candidate_permission_exposes_its_route_slug() {
+    let directory = tempfile::tempdir().unwrap();
+    let store = Store::connect(&directory.path().join("models.db"))
+        .await
+        .unwrap();
+    let provider = store
+        .create_provider(
+            NewProvider {
+                name: "Provider".into(),
+                protocol: ProviderProtocol::OpenAI,
+                endpoint: "http://localhost".into(),
+                models: vec!["GLM-5.3-Premium".into()],
+            },
+            "upstream-secret",
+            &KeyStore::testing(),
+        )
+        .await
+        .unwrap();
+    store
+        .create_route(NewRoute {
+            slug: "hbhh".into(),
+            name: "Route".into(),
+            description: String::new(),
+            patterns: vec!["*".into()],
+            provider_id: provider.id,
+            model: "GLM-5.3-Premium".into(),
+            is_default: true,
+            list_members: true,
+            candidates: vec![],
+        })
+        .await
+        .unwrap();
+    let key = store
+        .create_client_key(UpsertClientKey {
+            name: "Candidate-only client".into(),
+            models: vec!["GLM-5.3-Premium".into()],
+            token_limit: 0,
+            max_amount_micros: 0,
+            rpm: 0,
+            tpm: 0,
+            expires_at: None,
+        })
+        .await
+        .unwrap();
+    let response = app(AppState::for_testing(store).await)
+        .oneshot(
+            Request::get("/v1/models")
+                .header("authorization", format!("Bearer {}", key.plaintext))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 200);
+    let body = axum::body::to_bytes(response.into_body(), 1024 * 1024)
+        .await
+        .unwrap();
+    let models: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(
+        models["data"],
+        serde_json::json!([
+            {"id":"GLM-5.3-Premium","object":"model","owned_by":"sepia"},
+            {"id":"hbhh","object":"model","owned_by":"sepia"}
+        ])
+    );
+}

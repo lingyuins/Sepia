@@ -14,7 +14,7 @@ Rust/Axum service for native OpenAI, Anthropic and Gemini text APIs. The React a
 cargo run --manifest-path backend/Cargo.toml
 ```
 
-Defaults: `127.0.0.1:3425`, SQLite under the user data directory. On first start, a one-time bootstrap token is printed and written in that directory. `POST /api/v1/auth/bootstrap` with `{username,password,token}` initializes the administrator and revokes the token file. Passwords must contain at least 12 characters.
+Defaults: `127.0.0.1:5000`, SQLite under the user data directory. On first start, a one-time bootstrap token is printed and written in that directory. `POST /api/v1/auth/bootstrap` with `{username,password,token}` initializes the administrator and revokes the token file. Passwords must contain at least 12 characters.
 
 Useful environment variables:
 

@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Activity, ArrowDown, ArrowUp, ArrowUpRight, Copy, Pencil, Play, Plus, ShieldCheck, Sparkles, Trash2, X, Zap } from 'lucide-react'
+import { Activity, ArrowDown, ArrowUp, ArrowUpRight, Check, ChevronDown, Copy, GripVertical, Pencil, Play, Plus, Search, ShieldCheck, Sparkles, Trash2, X, Zap } from 'lucide-react'
 import { useWorkspace, useTranslation, type Provider, type RouteCandidate, type RouteRule } from '../workspace'
 import { api, routeInput } from '../api'
 import { DialogActions, Field, Modal, Toggle } from '../components/UI'
@@ -34,15 +34,28 @@ function RouteForm({ route, onClose }: { route: RouteRule | null; onClose: () =>
   const [name, setName] = useState(route?.name || '')
   const [slug, setSlug] = useState(route?.slug || (route ? slugify(route.name) : 'new-route'))
   const [description, setDescription] = useState(route?.description || '')
-  const [candidates, setCandidates] = useState<RouteCandidate[]>(() => route ? routeCandidates(route).map((candidate) => ({ ...candidate })) : providers.length ? [makeCandidate(providers[0]), ...(providers[1] ? [makeCandidate(providers[1])] : [])] : [])
+  const [candidates, setCandidates] = useState<RouteCandidate[]>(() => route ? routeCandidates(route).filter((candidate) => candidate.enabled).map((candidate) => ({ ...candidate })) : providers.length ? [makeCandidate(providers[0])] : [])
+  const [expandedProvider, setExpandedProvider] = useState(providers[0]?.name || '')
+  const [modelQuery, setModelQuery] = useState('')
   const [patterns, setPatterns] = useState<string[]>(route?.patterns || (route ? [route.match] : []))
   const [patternDraft, setPatternDraft] = useState('')
   const [modelListing, setModelListing] = useState(route?.listMembers === false ? 'group' : 'members')
   const [strategy, setStrategy] = useState(route?.strategy === 'Smart routing' ? 'Failover' : route?.strategy || 'Failover')
   const [active, setActive] = useState(route?.active ?? true)
-  const names = providers.map((provider) => provider.name)
   const updateCandidate = (id: string, patch: Partial<RouteCandidate>) => setCandidates((current) => current.map((candidate) => candidate.id === id ? { ...candidate, ...patch } : candidate))
   const changeCandidateProvider = (id: string, provider: string) => updateCandidate(id, { provider, model: modelsFor(provider)[0] || '' })
+  const toggleCandidate = (provider: Provider, model: string) => setCandidates((current) => {
+    const existing = current.find((candidate) => candidate.provider === provider.name && candidate.model === model)
+    if (existing) return current.filter((candidate) => candidate.id !== existing.id)
+    return [...current, { ...makeCandidate(provider), model }]
+  })
+  const dragCandidate = (event: React.DragEvent, index: number) => { event.dataTransfer.effectAllowed = 'move'; event.dataTransfer.setData('text/plain', String(index)) }
+  const dropCandidate = (event: React.DragEvent, index: number) => {
+    event.preventDefault()
+    const source = Number(event.dataTransfer.getData('text/plain'))
+    if (!Number.isInteger(source) || source === index) return
+    setCandidates((current) => { const next = [...current]; const [candidate] = next.splice(source, 1); next.splice(index, 0, candidate); return next })
+  }
   const moveCandidate = (index: number, direction: -1 | 1) => setCandidates((current) => {
     const target = index + direction
     if (target < 0 || target >= current.length) return current
@@ -66,7 +79,7 @@ function RouteForm({ route, onClose }: { route: RouteRule | null; onClose: () =>
     const saved: RouteRule = {
       id: route?.id || Date.now(), name: name.trim(), slug: slug.trim() || slugify(name), description: description.trim() || t('defaultRouteDescription'),
       match: finalPatterns[0], primary: enabled[0].provider, primaryModel: enabled[0].model, fallback: enabled[1]?.provider || '', fallbackModel: enabled[1]?.model || '',
-      strategy, active, requests: route?.requests || '0', candidates: candidates.map((candidate) => ({ ...candidate, weight: Math.max(1, candidate.weight || 1) })), patterns: finalPatterns,
+      strategy, active, requests: route?.requests || '0', candidates: enabled.map((candidate) => ({ ...candidate, weight: Math.max(1, candidate.weight || 1) })), patterns: finalPatterns,
       listMembers: modelListing === 'members', isDefault: route?.isDefault || false,
     }
     try { await run(() => api(route ? `/api/v1/routes/${route.id}` : '/api/v1/routes', { method: route ? 'PUT' : 'POST', body: JSON.stringify(routeInput(saved, providers)) })); notify(route ? t('routeUpdated') : t('routeCreated')); onClose() } catch (cause) { notify(cause instanceof Error ? cause.message : String(cause)) }
@@ -81,24 +94,40 @@ function RouteForm({ route, onClose }: { route: RouteRule | null; onClose: () =>
       <Field label={t('description')} value={description} onChange={setDescription} placeholder={t('routeDescriptionPlaceholder')} />
       <div className="route-id-preview"><span>{t('agentModelId')}</span><code>{slug || 'route'}</code></div>
     </section>
-    <section className="route-editor-section">
-      <div className="route-editor-section-title"><h3>{t('candidateModels')}</h3><span>{candidates.filter((candidate) => candidate.enabled).length} / {candidates.length}</span></div>
-      <div className="route-candidate-editor">{candidates.map((candidate, index) => {
-        const provider = providers.find((item) => item.name === candidate.provider)
-        return <div className={`route-candidate-row ${candidate.enabled ? '' : 'disabled'}`} key={candidate.id}>
-          <Toggle checked={candidate.enabled} onChange={() => updateCandidate(candidate.id, { enabled: !candidate.enabled })} label={t('toggleNamed', { name: candidate.model || candidate.provider })} />
-          <span className="route-candidate-index">{index + 1}</span>
-          <div className="candidate-selects">
-            <Dropdown className="candidate-dropdown" variant="compact" label={t('candidateProvider', { number: index + 1 })} value={candidate.provider} options={names.map((providerName) => ({ value: providerName, label: providerName }))} onChange={(value) => changeCandidateProvider(candidate.id, value)} />
-            <Dropdown className="candidate-dropdown" variant="compact" label={t('candidateModel', { number: index + 1 })} value={candidate.model} options={modelsFor(candidate.provider).map((model) => ({ value: model, label: model }))} onChange={(value) => updateCandidate(candidate.id, { model: value })} />
-          </div>
-          {!!provider?.latency && <span className="candidate-latency">{provider.latency} ms</span>}
-          {strategy === 'Weighted' && <label className="candidate-weight"><span>{t('weight')}</span><input className="field" type="number" min="1" max="100" value={candidate.weight} onChange={(event) => updateCandidate(candidate.id, { weight: Number(event.target.value) })} /></label>}
-          <div className="candidate-actions"><button type="button" className="icon-button" disabled={index === 0} onClick={() => moveCandidate(index, -1)} aria-label={t('moveCandidateUp', { name: candidate.model })}><ArrowUp size={14} /></button><button type="button" className="icon-button" disabled={index === candidates.length - 1} onClick={() => moveCandidate(index, 1)} aria-label={t('moveCandidateDown', { name: candidate.model })}><ArrowDown size={14} /></button><button type="button" className="icon-button danger-icon" onClick={() => setCandidates((current) => current.filter((item) => item.id !== candidate.id))} aria-label={t('removeCandidate', { name: candidate.model })}><X size={14} /></button></div>
+    <section className="route-editor-section route-candidate-section">
+      <div className="route-editor-section-title"><h3>{t('candidateModels')}</h3><span>{candidates.length}</span></div>
+      <div className="route-candidate-workspace">
+        <div className="candidate-catalog">
+          <label className="candidate-search"><Search size={14} /><input value={modelQuery} onChange={(event) => setModelQuery(event.target.value)} placeholder={t('searchModels')} aria-label={t('searchModels')} /></label>
+          <div className="candidate-provider-list">{providers.map((provider) => {
+            const models = modelsForProvider(provider).filter((model) => model.toLowerCase().includes(modelQuery.trim().toLowerCase()))
+            const expanded = expandedProvider === provider.name
+            return <div className={`candidate-provider ${expanded ? 'expanded' : ''}`} key={provider.id}>
+              <button type="button" className="candidate-provider-toggle" aria-expanded={expanded} onClick={() => setExpandedProvider(expanded ? '' : provider.name)}><span>{provider.name}</span><small>{models.length}/{modelsForProvider(provider).length}</small><ChevronDown size={13} /></button>
+              {expanded && <div className="candidate-provider-models">{models.length ? models.map((model) => {
+                const selected = candidates.some((candidate) => candidate.provider === provider.name && candidate.model === model)
+                return <button type="button" className={selected ? 'selected' : ''} aria-pressed={selected} key={model} onClick={() => toggleCandidate(provider, model)}><span title={model}>{model}</span>{selected && <Check size={13} />}</button>
+              }) : <span className="candidate-no-models">{t('noMatchingModels')}</span>}</div>}
+            </div>
+          })}</div>
+          <button type="button" className="add-candidate-button" disabled={!providers.some((provider) => modelsForProvider(provider).length)} onClick={() => { const next = providers.flatMap((provider) => modelsForProvider(provider).map((model) => ({ provider, model }))).find(({ provider, model }) => !candidates.some((candidate) => candidate.provider === provider.name && candidate.model === model)); if (next) toggleCandidate(next.provider, next.model) }}><Plus size={13} />{t('addAnotherModel')}</button>
         </div>
-      })}</div>
-      <button type="button" className="add-candidate-button" disabled={!providers.length} onClick={() => setCandidates((current) => [...current, makeCandidate(providers[0])])}><Plus size={14} />{t('addAnotherModel')}</button>
-      <p className="route-section-hint">{t('candidateOrderHint')}</p>
+        <div className="candidate-selection">
+          <div className="candidate-selection-heading"><strong>{t('selectedModels')}</strong><span>{candidates.length}</span><button type="button" disabled={!candidates.length} onClick={() => setCandidates([])}><Trash2 size={13} />{t('clear')}</button></div>
+          <div className="route-candidate-editor">{candidates.map((candidate, index) => <div className="route-candidate-row" key={candidate.id} onDragOver={(event) => event.preventDefault()} onDrop={(event) => dropCandidate(event, index)}>
+            <span className="route-candidate-index">{index + 1}</span>
+            <span className="candidate-drag-handle" draggable onDragStart={(event) => dragCandidate(event, index)} aria-label={t('moveCandidateUp', { name: candidate.model })}><GripVertical size={15} /></span>
+            <div className="candidate-card-copy">
+              <Dropdown className="candidate-dropdown" variant="compact" label={t('candidateModel', { number: index + 1 })} value={candidate.model} options={modelsFor(candidate.provider).map((model) => ({ value: model, label: model }))} onChange={(value) => updateCandidate(candidate.id, { model: value })} />
+              <Dropdown className="candidate-provider-dropdown" variant="compact" label={t('candidateProvider', { number: index + 1 })} value={candidate.provider} options={providers.map((provider) => ({ value: provider.name, label: provider.name }))} onChange={(value) => changeCandidateProvider(candidate.id, value)} />
+            </div>
+            {strategy === 'Weighted' && <label className="candidate-weight"><span>{t('weight')}</span><input className="field" type="number" min="1" max="100" value={candidate.weight} onChange={(event) => updateCandidate(candidate.id, { weight: Number(event.target.value) })} /></label>}
+            <div className="candidate-actions"><button type="button" className="icon-button" disabled={index === 0} onClick={() => moveCandidate(index, -1)} aria-label={t('moveCandidateUp', { name: candidate.model })}><ArrowUp size={13} /></button><button type="button" className="icon-button" disabled={index === candidates.length - 1} onClick={() => moveCandidate(index, 1)} aria-label={t('moveCandidateDown', { name: candidate.model })}><ArrowDown size={13} /></button><button type="button" className="icon-button danger-icon" onClick={() => setCandidates((current) => current.filter((item) => item.id !== candidate.id))} aria-label={t('removeCandidate', { name: candidate.model })}><X size={14} /></button></div>
+          </div>)}</div>
+          {!candidates.length && <div className="candidate-selection-empty">{t('routeNeedsModel')}</div>}
+          <p className="route-section-hint">{t('candidateOrderHint')}</p>
+        </div>
+      </div>
     </section>
     <section className="route-editor-section">
       <div className="route-editor-section-title"><h3>{t('matchPatterns')}</h3></div>

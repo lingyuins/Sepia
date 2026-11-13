@@ -20,7 +20,7 @@ async fn main() -> Result<(), String> {
     let store = sepia_gateway::Store::connect(&directory.join("sepia.db"))
         .await
         .map_err(|error| format!("database {}: {error}", directory.display()))?;
-    let address = std::env::var("SEPIA_LISTEN").unwrap_or_else(|_| "127.0.0.1:3425".into());
+    let address = std::env::var("SEPIA_LISTEN").unwrap_or_else(|_| "127.0.0.1:5000".into());
     let non_loopback = !address.starts_with("127.0.0.1:") && !address.starts_with("[::1]:");
     let trusted_proxy = std::env::var("SEPIA_TRUSTED_PROXY").ok().as_deref() == Some("true");
     if non_loopback && !trusted_proxy {

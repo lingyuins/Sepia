@@ -142,13 +142,6 @@ export function protocolOf(provider: Pick<Provider, 'type'>): ProtocolType {
 export function protocolModels(type: ProtocolType) {
   return type === 'anthropic' ? providerModels.Anthropic : type === 'gemini' ? providerModels['Google AI'] : providerModels.OpenAI
 }
-export const defaultSettings: Settings = {
-  workspace: 'Personal workspace', language: 'English', telemetry: false, updates: true,
-  deployment: 'local', protocol: 'http', host: '127.0.0.1', port: '3425', allowLan: false, requestLogging: true, logBodies: false,
-  timeout: '60', retries: '2', strategy: 'Failover', affinity: false, affinityTtl: '30', circuitBreaker: false,
-  theme: 'Sepia dark', accent: 'Sage', reducedMotion: false, compact: false,
-  requireApproval: true, pluginNetwork: false, pluginSecrets: false,
-}
 
 const WorkspaceCtx = createContext<GatewayWorkspace | null>(null)
 

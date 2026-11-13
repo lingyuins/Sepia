@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { api, mapProvider, mapRequest, mapRoute, type ApiAnalytics, type ApiProvider, type ApiRequest, type ApiRoute, type ApiClientKey, type ApiGroup, type ApiSettings } from './api'
-import { defaultSettings, type ChannelGroup, type Notice, type Plugin, type Provider, type RequestRecord, type RouteRule, type Settings } from './workspace'
+import { defaultSettings } from './settings'
+import { type ChannelGroup, type Notice, type Plugin, type Provider, type RequestRecord, type RouteRule, type Settings } from './workspace'
 
 export type ConnectionState = 'loading' | 'ready' | 'login' | 'error'
 export function useGatewayWorkspace(): GatewayWorkspace {
@@ -11,7 +12,7 @@ export function useGatewayWorkspace(): GatewayWorkspace {
   const [requests, setRequests] = useState<RequestRecord[]>([])
   const [analytics, setAnalytics] = useState<ApiAnalytics>({ requests: 0, successful: 0, input_tokens: 0, output_tokens: 0, cost_micros: 0 })
   const [clientKeys, setClientKeys] = useState<ApiClientKey[]>([])
-  const [settings, setSettings] = useState<Settings>(() => { try { const stored = JSON.parse(localStorage.getItem('sepia.workspace.v1') || '{}'); return { ...defaultSettings, ...stored.settings } } catch { return defaultSettings } })
+  const [settings, setSettings] = useState<Settings>(() => { try { const stored = JSON.parse(localStorage.getItem('sepia.workspace.v1') || '{}'); const merged = { ...defaultSettings, ...stored.settings }; return stored.settings?.port === '3425' ? { ...merged, port: defaultSettings.port } : merged } catch { return defaultSettings } })
   const applyServerSettings = useCallback((server: ApiSettings) => { setSettings((current) => ({ ...current, retries: String(server.max_attempts ?? current.retries) })) }, [])
   const [channelGroups, setChannelGroups] = useState<ChannelGroup[]>([])
   const [plugins] = useState<Plugin[]>([])
