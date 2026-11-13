@@ -1,8 +1,10 @@
-use axum::{body::Body, http::Request};
+use axum::{Router, body::Body, http::Request, response::Json, routing::post};
 use sepia_gateway::{
     KeyStore, NewProvider, NewRoute, ProviderProtocol, Store, UpsertClientKey,
     server::{AppState, app},
 };
+use serde_json::json;
+use tokio::net::TcpListener;
 use tower::ServiceExt;
 
 #[tokio::test]
@@ -76,6 +78,21 @@ async fn anthropic_model_listing_does_not_require_a_version_header() {
 
 #[tokio::test]
 async fn a_candidate_permission_exposes_its_route_slug() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let upstream = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        axum::serve(
+            listener,
+            Router::new().route(
+                "/chat/completions",
+                post(|| async {
+                    Json(json!({"id":"chat_test","model":"GLM-5.3-Premium","choices":[{"index":0,"message":{"role":"assistant","content":"Hello from route"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1}}))
+                }),
+            ),
+        )
+        .await
+        .unwrap();
+    });
     let directory = tempfile::tempdir().unwrap();
     let store = Store::connect(&directory.path().join("models.db"))
         .await
@@ -85,7 +102,7 @@ async fn a_candidate_permission_exposes_its_route_slug() {
             NewProvider {
                 name: "Provider".into(),
                 protocol: ProviderProtocol::OpenAI,
-                endpoint: "http://localhost".into(),
+                endpoint: format!("http://{upstream}"),
                 models: vec!["GLM-5.3-Premium".into()],
             },
             "upstream-secret",
@@ -119,6 +136,33 @@ async fn a_candidate_permission_exposes_its_route_slug() {
         })
         .await
         .unwrap();
+    let gateway_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let gateway = gateway_listener.local_addr().unwrap();
+    let gateway_store = store.clone();
+    tokio::spawn(async move {
+        axum::serve(
+            gateway_listener,
+            app(AppState::for_testing(gateway_store).await)
+                .into_make_service_with_connect_info::<std::net::SocketAddr>(),
+        )
+        .await
+        .unwrap();
+    });
+    let inference = reqwest::Client::new()
+        .post(format!("http://{gateway}/v1/chat/completions"))
+        .bearer_auth(&key.plaintext)
+        .json(&json!({"model":"hbhh","messages":[{"role":"user","content":"hello"}]}))
+        .send()
+        .await
+        .unwrap();
+    let inference_status = inference.status();
+    let inference_body = inference.bytes().await.unwrap();
+    let inference_json: serde_json::Value = serde_json::from_slice(&inference_body).unwrap();
+    assert_eq!(inference_status, 200, "{inference_json}");
+    assert_eq!(
+        inference_json["choices"][0]["message"]["content"],
+        "Hello from route"
+    );
     let response = app(AppState::for_testing(store).await)
         .oneshot(
             Request::get("/v1/models")

@@ -123,6 +123,38 @@ fn credential(headers: &HeaderMap, protocol: Protocol) -> Option<String> {
             .map(str::to_owned),
     }
 }
+fn route_for_model<'a>(routes: &'a [crate::Route], model: &str) -> Option<&'a crate::Route> {
+    routes
+        .iter()
+        .find(|route| route.slug == model)
+        .or_else(|| {
+            routes.iter().find(|route| {
+                route
+                    .candidates
+                    .iter()
+                    .any(|candidate| candidate.1 == model)
+            })
+        })
+        .or_else(|| {
+            routes
+                .iter()
+                .find(|route| route.patterns.iter().any(|pattern| glob(pattern, model)))
+        })
+        .or_else(|| routes.iter().find(|route| route.is_default))
+}
+fn model_allowed(client: &crate::ClientKey, routes: &[crate::Route], model: &str) -> bool {
+    if client.models.iter().any(|pattern| glob(pattern, model)) {
+        return true;
+    }
+    route_for_model(routes, model).is_some_and(|route| {
+        route.candidates.iter().any(|candidate| {
+            client
+                .models
+                .iter()
+                .any(|pattern| glob(pattern, &candidate.1))
+        })
+    })
+}
 fn public_model_ids(
     client: &crate::ClientKey,
     snapshot: &crate::snapshot::ConfigSnapshot,
@@ -349,11 +381,8 @@ async fn relay(
             .set_request_model(&request_id, &request.model)
             .await;
     }
-    if !client
-        .models
-        .iter()
-        .any(|pattern| glob(pattern, &request.model))
-    {
+    let snapshot = state.snapshots.get();
+    if !model_allowed(&client, &snapshot.routes, &request.model) {
         let _ = state
             .store
             .finish_request(&request_id, "denied", 0, 0, 0)
@@ -365,21 +394,7 @@ async fn relay(
         .finish_request(&request_id, "routing", 0, 0, 0)
         .await;
     let started = Instant::now();
-    let snapshot = state.snapshots.get();
-    let routes = &snapshot.routes;
-    let Some(route) = routes
-        .iter()
-        .find(|route| route.slug == request.model)
-        .or_else(|| {
-            routes.iter().find(|route| {
-                route
-                    .patterns
-                    .iter()
-                    .any(|pattern| glob(pattern, &request.model))
-            })
-        })
-        .or_else(|| routes.iter().find(|route| route.is_default))
-    else {
+    let Some(route) = route_for_model(&snapshot.routes, &request.model) else {
         let _ = state
             .store
             .finish_request(&request_id, "no_route", 0, 0, 0)

@@ -571,6 +571,7 @@ export const translations = {
   routeId: ['Route ID', '路由 ID', 'ルート ID'],
   agentModelId: ['Agent model ID', 'Agent 模型 ID', 'Agent モデル ID'],
   candidateModels: ['Candidate models', '候选模型', '候補モデル'],
+  routeGroups: ['Smart route groups', '智能路由分组', 'スマートルートグループ'],
   selectedModels: ['Selected models', '已选模型', '選択済みモデル'],
   searchModels: ['Search models', '搜索模型', 'モデルを検索'],
   noMatchingModels: ['No matching models', '没有匹配的模型', '一致するモデルがありません'],
