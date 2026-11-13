@@ -19,15 +19,15 @@ export function RequestsView({ onSelect }: { onSelect: (row: RequestRecord) => v
   const [page, setPage] = useState(1)
   const [clearOpen, setClearOpen] = useState(false)
   const pageSize = 8
-  const filtered = useMemo(() => requests.filter((row) => `${row.model} ${row.provider} ${row.key} ${row.id}`.toLowerCase().includes(query.toLowerCase()) && (provider === 'All providers' || row.provider === provider) && (status === 'All statuses' || row.status === status)), [requests, query, provider, status])
+  const filtered = useMemo(() => requests.filter((row) => `${row.model} ${row.route} ${row.provider} ${row.key} ${row.id}`.toLowerCase().includes(query.toLowerCase()) && (provider === 'All providers' || row.provider === provider) && (status === 'All statuses' || row.status === status)), [requests, query, provider, status])
   const pages = Math.max(1, Math.ceil(filtered.length / pageSize))
   const currentPage = Math.min(page, pages)
   const exportLogs = (format: 'json' | 'csv') => {
     if (format === 'json') downloadFile('sepia-requests.json', JSON.stringify(filtered, null, 2))
     else {
-      const header = 'id,time,model,provider,tokens,latency_ms,status,key,cost\n'
+      const header = 'id,time,model,route,provider,tokens,latency_ms,status,key,cost\n'
       const escape = (value: string | number) => `"${String(value).replace(/"/g, '""')}"`
-      downloadFile('sepia-requests.csv', header + filtered.map((row) => [row.id, row.time, row.model, row.provider, row.tokens, row.latencyMs, row.status, row.key, row.cost].map(escape).join(',')).join('\n'), 'text/csv')
+      downloadFile('sepia-requests.csv', header + filtered.map((row) => [row.id, row.time, row.model, row.route, row.provider, row.tokens, row.latencyMs, row.status, row.key, row.cost].map(escape).join(',')).join('\n'), 'text/csv')
     }
     notify(`${filtered.length} ${t('requestRecordsExported')} · ${format.toUpperCase()}`)
   }

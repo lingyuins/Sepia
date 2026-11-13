@@ -15,6 +15,7 @@ pub struct RequestRecord {
     pub cost_micros: i64,
     pub latency_ms: i64,
     pub created_at: String,
+    pub route: Option<String>,
     pub provider: Option<String>,
     pub key: Option<String>,
 }
@@ -54,9 +55,9 @@ impl Store {
         sqlx::query("INSERT INTO requests (id, client_key_id, protocol, model, status, created_at) VALUES (?, ?, ?, ?, 'pending', ?)").bind(&id).bind(client_key_id).bind(protocol.as_str()).bind(model).bind(Utc::now().to_rfc3339()).execute(&self.pool).await.map_err(|e| e.to_string())?;
         Ok(id)
     }
-    pub async fn set_request_model(&self, request_id: &str, model: &str) -> Result<(), String> {
-        sqlx::query("UPDATE requests SET model = ? WHERE id = ?")
-            .bind(model)
+    pub async fn set_request_route(&self, request_id: &str, route: &str) -> Result<(), String> {
+        sqlx::query("UPDATE requests SET route = ? WHERE id = ?")
+            .bind(route)
             .bind(request_id)
             .execute(&self.pool)
             .await
@@ -101,7 +102,7 @@ impl Store {
         Ok(())
     }
     pub async fn requests(&self) -> Result<Vec<RequestRecord>, String> {
-        let rows = sqlx::query("SELECT r.id, r.protocol, r.model, r.status, r.input_tokens, r.output_tokens, r.cost_micros, r.latency_ms, r.created_at, (SELECT p.name FROM attempts a JOIN providers p ON p.id = a.provider_id WHERE a.request_id = r.id AND a.status IN ('success', 'streaming') ORDER BY a.id DESC LIMIT 1) provider, k.name key FROM requests r LEFT JOIN client_keys k ON k.id = r.client_key_id ORDER BY r.created_at DESC LIMIT 200").fetch_all(&self.pool).await.map_err(|e| e.to_string())?;
+        let rows = sqlx::query("SELECT r.id, r.protocol, COALESCE((SELECT a.model FROM attempts a WHERE a.request_id = r.id AND a.status IN ('success', 'streaming') ORDER BY a.id DESC LIMIT 1), r.model) model, r.route, r.status, r.input_tokens, r.output_tokens, r.cost_micros, r.latency_ms, r.created_at, (SELECT p.name FROM attempts a JOIN providers p ON p.id = a.provider_id WHERE a.request_id = r.id AND a.status IN ('success', 'streaming') ORDER BY a.id DESC LIMIT 1) provider, k.name key FROM requests r LEFT JOIN client_keys k ON k.id = r.client_key_id ORDER BY r.created_at DESC LIMIT 200").fetch_all(&self.pool).await.map_err(|e| e.to_string())?;
         Ok(rows
             .into_iter()
             .map(|row| RequestRecord {
@@ -114,6 +115,7 @@ impl Store {
                 cost_micros: row.get("cost_micros"),
                 latency_ms: row.get("latency_ms"),
                 created_at: row.get("created_at"),
+                route: row.get("route"),
                 provider: row.get("provider"),
                 key: row.get("key"),
             })

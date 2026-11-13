@@ -4,7 +4,7 @@ type ProviderProtocol = 'openai' | 'anthropic' | 'gemini'
 
 export type ApiProvider = { id: number; name: string; protocol: ProviderProtocol; endpoint: string; models: string[]; key_count: number; enabled: boolean; group_id: string }
 export type ApiRoute = { id: number; slug: string; name: string; description: string; patterns: string[]; is_default: boolean; list_members: boolean; enabled: boolean; candidates: [number, string][] }
-export type ApiRequest = { id: string; protocol: string; model: string; status: string; input_tokens: number; output_tokens: number; cost_micros: number; latency_ms: number; created_at: string; provider?: string; key?: string }
+export type ApiRequest = { id: string; protocol: string; model: string; route?: string; status: string; input_tokens: number; output_tokens: number; cost_micros: number; latency_ms: number; created_at: string; provider?: string; key?: string }
 export type ApiClientKey = { id: number; name: string; models: string[]; token_limit: number; max_amount_micros: number; rpm: number; tpm: number; expires_at: string | null }
 export type ApiGroup = { id: string; name: string; description: string }
 export type ApiSettings = Partial<{ connect_timeout_seconds: number; first_byte_timeout_seconds: number; stream_idle_timeout_seconds: number; max_attempts: number; retry_after_cap_seconds: number; log_bodies: boolean; body_retention_days: number }>
@@ -31,7 +31,7 @@ export function mapRoute(route: ApiRoute, providers: Provider[]): RouteRule {
 export function mapRequest(request: ApiRequest): RequestRecord {
   const total = request.input_tokens + request.output_tokens
   const time = new Date(request.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false })
-  return { id: request.id, createdAt: request.created_at, time, model: request.model || 'unknown', provider: request.provider || '—', tokens: total.toLocaleString('en-US'), inputTokens: request.input_tokens, outputTokens: request.output_tokens, latency: `${request.latency_ms} ms`, latencyMs: request.latency_ms, status: request.status === 'success' ? '200 OK' : request.status === 'failed' ? 'Failed' : request.status, key: request.key || '—', cost: `$${(request.cost_micros / 1000000).toFixed(6)}`, route: '—' }
+  return { id: request.id, createdAt: request.created_at, time, model: request.model || 'unknown', provider: request.provider || '—', tokens: total.toLocaleString('en-US'), inputTokens: request.input_tokens, outputTokens: request.output_tokens, latency: `${request.latency_ms} ms`, latencyMs: request.latency_ms, status: request.status === 'success' ? '200 OK' : request.status === 'failed' ? 'Failed' : request.status, key: request.key || '—', cost: `$${(request.cost_micros / 1000000).toFixed(6)}`, route: request.route || '—' }
 }
 export function providerInput(provider: Provider & { keyDrafts?: { value: string }[] }, secrets?: string[]) {
   const entered = secrets || provider.keyDrafts?.map((key) => key.value).filter(Boolean) || []

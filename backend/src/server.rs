@@ -375,12 +375,6 @@ async fn relay(
     if path.is_some_and(|p| p.1) {
         request.stream = true;
     }
-    if initial_model.is_empty() {
-        let _ = state
-            .store
-            .set_request_model(&request_id, &request.model)
-            .await;
-    }
     let snapshot = state.snapshots.get();
     if !model_allowed(&client, &snapshot.routes, &request.model) {
         let _ = state
@@ -406,6 +400,21 @@ async fn relay(
         .first()
         .map(|candidate| candidate.1.as_str())
         .unwrap_or(&request.model);
+    if state
+        .store
+        .set_request_route(&request_id, &route.slug)
+        .await
+        .is_err()
+    {
+        let _ = state
+            .store
+            .finish_request(&request_id, "failed", 0, 0, 0)
+            .await;
+        return error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "observability unavailable",
+        );
+    }
     let reservation = match state
         .store
         .reserve_quota(

@@ -103,6 +103,8 @@ async fn failed_first_candidate_fails_over_and_records_attempts() {
     );
     let requests = store.requests().await.unwrap();
     assert_eq!(requests[0].status, "success");
+    assert_eq!(requests[0].route.as_deref(), Some("chat"));
+    assert_eq!(requests[0].model, "upstream-model");
     let attempts = store.attempts(&requests[0].id).await.unwrap();
     assert_eq!(attempts.len(), 2);
     assert_eq!(attempts[0].status, "retry");
@@ -179,4 +181,8 @@ async fn assert_anthropic_stream_is_converted_to_openai_sse(line_ending: &str) {
     assert!(text.contains("streamed"), "{text}");
     assert!(text.contains("data: [DONE]"), "{text}");
     assert!(text.ends_with("data: [DONE]\n\n"), "{text}");
+    let requests = store.requests().await.unwrap();
+    assert_eq!(requests[0].status, "success");
+    assert_eq!(requests[0].model, "upstream-model");
+    assert_eq!(requests[0].route.as_deref(), Some("chat"));
 }

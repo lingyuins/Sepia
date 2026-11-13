@@ -163,6 +163,9 @@ async fn a_candidate_permission_exposes_its_route_slug() {
         inference_json["choices"][0]["message"]["content"],
         "Hello from route"
     );
+    let logged = serde_json::to_value(&store.requests().await.unwrap()[0]).unwrap();
+    assert_eq!(logged["model"], "GLM-5.3-Premium");
+    assert_eq!(logged["route"], "hbhh");
     let response = app(AppState::for_testing(store).await)
         .oneshot(
             Request::get("/v1/models")

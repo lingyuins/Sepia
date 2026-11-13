@@ -11,15 +11,6 @@ const requestCount = (value: string) => {
   return amount * (normalized.includes('m') ? 1000000 : normalized.includes('k') ? 1000 : 1)
 }
 
-const matchesModel = (pattern: string, model: string) => {
-  if (pattern.startsWith('re:')) {
-    try { return new RegExp(pattern.slice(3)).test(model) } catch { return false }
-  }
-  const escaped = pattern.replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*').replace(/\?/g, '.')
-  return new RegExp(`^${escaped}$`).test(model)
-}
-const routeMatches = (route: { slug?: string; patterns?: string[]; isDefault?: boolean }, model: string) => route.slug === model || (route.patterns || []).some((pattern) => matchesModel(pattern, model)) || Boolean(route.isDefault)
-
 export function AnalyticsView() {
   const { providers, requests, routes, channelGroups, analytics, refresh, notify } = useWorkspace()
   const t = useTranslation()
@@ -59,7 +50,7 @@ export function AnalyticsView() {
     const successRates = candidateProviders.map((provider) => Number.parseFloat(provider.success)).filter((rate) => Number.isFinite(rate))
     const name = route.name || route.slug || `Route ${route.id}`
     return {
-      id: route.id, name, chartName: name.length > 20 ? `${name.slice(0, 18)}…` : name, color: colors[index % colors.length], requests: periodRequests.filter((request) => routeMatches(route, request.model)).length,
+      id: route.id, name, chartName: name.length > 20 ? `${name.slice(0, 18)}…` : name, color: colors[index % colors.length], requests: periodRequests.filter((request) => request.route === route.slug).length,
       candidateCount: candidates.length, strategy: strategyLabel(route.strategy), latency: latencies.length ? Math.round(latencies.reduce((sum, latency) => sum + latency, 0) / latencies.length) : 0,
       success: successRates.length ? `${(successRates.reduce((sum, rate) => sum + rate, 0) / successRates.length).toFixed(2)}%` : '—',
     }

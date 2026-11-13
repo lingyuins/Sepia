@@ -5,7 +5,7 @@ import { scopedModels } from './key-models.ts'
 
 const remoteProvider = { id: 7, name: 'Local OpenAI', protocol: 'openai', endpoint: 'http://127.0.0.1:9000/v1', models: ['local-model'], key_count: 2, enabled: true, group_id: 'official' }
 const remoteRoute = { id: 4, slug: 'chat', name: 'Chat route', description: 'Real description', patterns: ['chat-*'], is_default: true, list_members: true, enabled: true, candidates: [[7, 'local-model']] }
-const remoteRequest = { id: 'req-real', protocol: 'openai', model: 'chat', status: 'success', input_tokens: 10, output_tokens: 5, cost_micros: 42, latency_ms: 25, created_at: '2026-11-11T10:00:00Z' }
+const remoteRequest = { id: 'req-real', protocol: 'openai', model: 'local-model', route: 'chat', status: 'success', input_tokens: 10, output_tokens: 5, cost_micros: 42, latency_ms: 25, created_at: '2026-11-11T10:00:00Z' }
 
 test('offers smart route groups separately from provider models', () => {
   const models = scopedModels([mapProvider(remoteProvider)], [mapRoute(remoteRoute, [mapProvider(remoteProvider)])])
@@ -25,6 +25,8 @@ test('maps real backend records to existing UI shapes', () => {
   assert.equal(mapRequest(remoteRequest).tokens, '15')
   assert.equal(mapRequest(remoteRequest).status, '200 OK')
   assert.equal(mapRequest(remoteRequest).cost, '$0.000042')
+  assert.equal(mapRequest(remoteRequest).model, 'local-model')
+  assert.equal(mapRequest(remoteRequest).route, 'chat')
 })
 
 test('serializes editor data for the real management API', () => {
