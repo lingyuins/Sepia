@@ -43,10 +43,17 @@ impl AppState {
         }
     }
 }
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum InboundProtocol {
+    Provider(Protocol),
+    OpenAIResponses,
+}
+
 pub fn app(state: AppState) -> Router {
     Router::new()
         .route("/v1/models", get(models))
         .route("/v1/chat/completions", post(openai))
+        .route("/v1/responses", post(openai_responses))
         .route("/v1beta/models", get(gemini_models))
         .route("/v1/messages", post(anthropic))
         .route("/v1beta/models/{*path}", post(gemini))
@@ -255,7 +262,24 @@ async fn openai(
     relay(
         state,
         headers,
-        Protocol::OpenAI,
+        InboundProtocol::Provider(Protocol::OpenAI),
+        None,
+        None,
+        peer.ip(),
+        body,
+    )
+    .await
+}
+async fn openai_responses(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    axum::extract::connect_info::ConnectInfo(peer): axum::extract::ConnectInfo<SocketAddr>,
+    Json(body): Json<Value>,
+) -> Response {
+    relay(
+        state,
+        headers,
+        InboundProtocol::OpenAIResponses,
         None,
         None,
         peer.ip(),
@@ -272,7 +296,7 @@ async fn anthropic(
     relay(
         state,
         headers,
-        Protocol::Anthropic,
+        InboundProtocol::Provider(Protocol::Anthropic),
         None,
         None,
         peer.ip(),
@@ -298,7 +322,7 @@ async fn gemini(
     relay(
         state,
         headers,
-        Protocol::Gemini,
+        InboundProtocol::Provider(Protocol::Gemini),
         Some((model, action == "streamGenerateContent")),
         credential_query.as_deref(),
         peer.ip(),
@@ -309,13 +333,17 @@ async fn gemini(
 async fn relay(
     state: AppState,
     headers: HeaderMap,
-    inbound: Protocol,
+    inbound: InboundProtocol,
     path: Option<(&str, bool)>,
     query: Option<&str>,
     peer: std::net::IpAddr,
     body: Value,
 ) -> Response {
-    let protocol_credential = match inbound {
+    let protocol = match inbound {
+        InboundProtocol::Provider(protocol) => protocol,
+        InboundProtocol::OpenAIResponses => Protocol::OpenAI,
+    };
+    let protocol_credential = match protocol {
         Protocol::OpenAI => ProtocolCredential::OpenAI,
         Protocol::Anthropic => ProtocolCredential::Anthropic,
         Protocol::Gemini => ProtocolCredential::Gemini,
@@ -345,7 +373,7 @@ async fn relay(
         .store
         .begin_request(
             client.id,
-            match inbound {
+            match protocol {
                 Protocol::OpenAI => ProviderProtocol::OpenAI,
                 Protocol::Anthropic => ProviderProtocol::Anthropic,
                 Protocol::Gemini => ProviderProtocol::Gemini,
@@ -362,7 +390,11 @@ async fn relay(
             );
         }
     };
-    let mut request = match decode_request(inbound, body, path.map(|p| p.0)) {
+    let decoded_request = match inbound {
+        InboundProtocol::OpenAIResponses => crate::responses::decode_request(body),
+        InboundProtocol::Provider(protocol) => decode_request(protocol, body, path.map(|p| p.0)),
+    };
+    let mut request = match decoded_request {
         Ok(request) => request,
         Err(message) => {
             let _ = state

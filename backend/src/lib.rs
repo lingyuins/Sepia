@@ -10,6 +10,7 @@ pub mod policy;
 pub mod protocol;
 pub mod quota;
 pub mod relay;
+pub mod responses;
 pub mod server;
 pub mod settings;
 pub mod snapshot;

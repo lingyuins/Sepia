@@ -67,10 +67,19 @@ pub async fn call(
         .await
         .map_err(|_| "upstream unavailable".into())
 }
-pub fn json_response(protocol: Protocol, response: ChatResponse) -> Response<Body> {
+pub fn json_response(
+    inbound: crate::server::InboundProtocol,
+    response: ChatResponse,
+) -> Response<Body> {
+    let value = match inbound {
+        crate::server::InboundProtocol::OpenAIResponses => {
+            crate::responses::encode_response(&response)
+        }
+        crate::server::InboundProtocol::Provider(protocol) => encode_response(protocol, &response),
+    };
     Response::builder()
         .header(header::CONTENT_TYPE, "application/json")
-        .body(Body::from(encode_response(protocol, &response).to_string()))
+        .body(Body::from(value.to_string()))
         .unwrap()
 }
 pub struct StreamContext {
@@ -98,7 +107,7 @@ fn sse_boundary(buffer: &[u8]) -> Option<(usize, usize)> {
     }
 }
 pub fn stream_response(
-    inbound: Protocol,
+    inbound: crate::server::InboundProtocol,
     outbound: Protocol,
     response: reqwest::Response,
     start: StreamEvent,
@@ -106,7 +115,21 @@ pub fn stream_response(
 ) -> Response<Body> {
     let stream = async_stream::stream! {
         let mut buffer = Vec::new();
-        yield Ok::<_, Infallible>(encode_sse(inbound, &[start]));
+        let mut responses = match inbound {
+            crate::server::InboundProtocol::OpenAIResponses => match &start {
+                StreamEvent::Start { id, model } => Some(crate::responses::StreamEncoder::new(id.clone(), model.clone())),
+                _ => None,
+            },
+            crate::server::InboundProtocol::Provider(_) => None,
+        };
+        let encode = |inbound: crate::server::InboundProtocol, events: &[StreamEvent], responses: &mut Option<crate::responses::StreamEncoder>| {
+            match (inbound, responses) {
+                (crate::server::InboundProtocol::OpenAIResponses, Some(encoder)) => encoder.encode(events),
+                (crate::server::InboundProtocol::Provider(protocol), _) => encode_sse(protocol, events),
+                _ => String::new(),
+            }
+        };
+        yield Ok::<_, Infallible>(encode(inbound, std::slice::from_ref(&start), &mut responses));
         let mut bytes = response.bytes_stream();
         let mut stopped = false;
         let mut terminal = None;
@@ -132,7 +155,7 @@ pub fn stream_response(
                         if let Some(stop) = stops.into_iter().next() { terminal = Some(stop); }
                         stopped |= terminal.is_some();
                         for event in &events { if let StreamEvent::Usage { input_tokens, output_tokens } = event { usage = (*input_tokens, *output_tokens); } }
-                        yield Ok(encode_sse(inbound, &events));
+                        yield Ok(encode(inbound, &events, &mut responses));
                     },
                     Err(_) => { failed = true; break; },
                 }
@@ -141,11 +164,15 @@ pub fn stream_response(
             if failed { break; }
         }
         if failed {
-            if inbound == Protocol::Anthropic { yield Ok("event: error\ndata: {\"type\":\"error\",\"error\":{\"type\":\"api_error\",\"message\":\"Upstream stream failed\"}}\n\n".into()); }
+            match inbound {
+                crate::server::InboundProtocol::Provider(Protocol::Anthropic) => yield Ok("event: error\ndata: {\"type\":\"error\",\"error\":{\"type\":\"api_error\",\"message\":\"Upstream stream failed\"}}\n\n".into()),
+                crate::server::InboundProtocol::OpenAIResponses => yield Ok(encode(inbound, &[StreamEvent::Stop(crate::protocol::FinishReason::Other)], &mut responses)),
+                crate::server::InboundProtocol::Provider(_) => {}
+            }
         } else if let Some(stop) = terminal {
-            yield Ok(encode_sse(inbound, &[stop]));
+            yield Ok(encode(inbound, &[stop], &mut responses));
         } else if !stopped {
-            yield Ok(encode_sse(inbound, &[StreamEvent::Stop(crate::protocol::FinishReason::Other)]));
+            yield Ok(encode(inbound, &[StreamEvent::Stop(crate::protocol::FinishReason::Other)], &mut responses));
         }
         let status = if stopped && !failed { "success" } else { "failed" };
         let _ = context.store.record_attempt(crate::observability::NewAttempt { request_id: &context.request_id, provider_id: Some(context.provider_id), provider_key_id: Some(context.provider_key_id), model: &context.model, status, error: None, input_tokens: usage.0, output_tokens: usage.1, latency_ms: context.started.elapsed().as_millis() as i64 }).await;

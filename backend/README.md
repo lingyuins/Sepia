@@ -28,7 +28,7 @@ The service serves `frontend/dist/` as a same-origin SPA when built. Run `npm ru
 
 ## API surfaces
 
-- OpenAI: `GET /v1/models`, `POST /v1/chat/completions` with Bearer Key
+- OpenAI: `GET /v1/models`, `POST /v1/chat/completions`, `POST /v1/responses` with Bearer Key. Responses accepts string/message-array text input, `input_text`, assistant `output_text` history, `instructions` and `max_output_tokens`; it returns native response JSON and lifecycle SSE. Tools, media, file input, conversation chaining and background execution are rejected rather than silently discarded. Existing Provider protocols continue to forward through Chat Completions, Anthropic Messages or Gemini generation.
 - Anthropic: `GET /v1/models` with `x-api-key`; `anthropic-version: 2023-06-01` is optional for model listing but required by `POST /v1/messages`
 - Gemini: `GET /v1beta/models`, `POST /v1beta/models/{model}:generateContent` and `:streamGenerateContent` with `x-goog-api-key` or `?key=`
 - Management: `/api/v1/auth/*`, `/providers`, `/routes`, `/keys`, `/groups`, `/settings`, `/requests`, `/analytics`; session cookie required except bootstrap/login

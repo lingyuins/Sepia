@@ -19,6 +19,7 @@ Sepia is a React 18 + TypeScript control plane connected to a Rust AI gateway. P
 - Analytics accepts `period=24 hours|7 days|30 days` and uses one SQL window for totals, series and Provider aggregates. Frontend route/model breakdowns filter at most the latest 200 request records to the same period and disclose that limit in the UI. Request logs persist the matched route slug and expose the final successful upstream model, including streaming and failover; route charts use that stored route instead of inferring from the model. Route name/description are persisted by migration `0005_route_metadata.sql`.
 - Only ordered failover is exposed. Do not add UI controls for unimplemented routing strategies, session affinity, automatic Provider sync, plugin installation or body logging unless the runtime supports them.
 - External Anthropic clients may omit `anthropic-version` for `GET /v1/models`; if present, it must be `2023-06-01`. `POST /v1/messages` still requires that exact version. A client key grants a route when it matches either the route slug or an enabled candidate model. The local gateway and Vite proxy default to `127.0.0.1:5000`; existing `3425` browser preferences migrate to this default.
+- `backend/src/responses.rs` owns OpenAI Responses text input/output and stateful lifecycle SSE. `POST /v1/responses` accepts string or message-array input, `input_text`, assistant `output_text` history, `instructions` and `max_output_tokens`, and reuses the normal inference pipeline. It rejects tools, media/files, conversation chaining and background execution; do not add SDK convenience `output_text` to JSON and claim it is a wire field.
 - The route editor uses a compact searchable Provider/model catalog and ordered selected-model cards. Only enabled candidates are persisted and exposed; the editor supports accessible up/down controls and drag reordering. Key creation lists enabled smart route slugs separately from Provider models. Model authorization reuses route selection: a candidate-scoped key may call its route slug, and an exact candidate request selects its owning route before pattern/default fallback.
 
 ## Key Directories
@@ -76,7 +77,7 @@ On Windows, use Rust stable with Visual Studio C++ Build Tools and an MSVC Devel
 - `frontend/src/components/Onboarding.tsx` + `frontend/src/onboarding.ts`: workspace preferences and first-run flow.
 - `frontend/src/App.tsx`: shell, Overview and global dialogs.
 - `frontend/vite.config.ts`: dev proxy, watcher exclusions and production chunks.
-- `backend/src/admin.rs`, `server.rs`, `snapshot.rs`, `settings.rs`: management, inference and live runtime configuration.
+- `backend/src/admin.rs`, `server.rs`, `responses.rs`, `snapshot.rs`, `settings.rs`: management, inference, Responses text conversion and live runtime configuration.
 
 ## Runtime/Tooling Preferences
 
