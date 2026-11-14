@@ -120,13 +120,12 @@ async fn bootstrap(State(state): State<AppState>, Json(input): Json<Bootstrap>) 
         )
         .await
     {
-        Ok(()) => match crate::bootstrap::remove_token(&state.data_directory).await {
-            Ok(()) => Json(json!({"initialized":true})).into_response(),
-            Err(_) => error(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "failed to revoke bootstrap token",
-            ),
-        },
+        Ok(()) => {
+            if let Err(error) = crate::bootstrap::remove_token(&state.data_directory).await {
+                eprintln!("failed to remove bootstrap token file after initialization: {error}");
+            }
+            Json(json!({"initialized":true})).into_response()
+        }
         Err(message) => error(StatusCode::BAD_REQUEST, message),
     }
 }

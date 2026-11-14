@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { apiClient, keyInput, policyInput, mapProvider, mapRequest, mapRoute, providerInput, routeInput } from './api.ts'
+import { ApiError, apiClient, keyInput, policyInput, mapProvider, mapRequest, mapRoute, providerInput, routeInput } from './api.ts'
 import { scopedModels } from './key-models.ts'
 
 const remoteProvider = { id: 7, name: 'Local OpenAI', protocol: 'openai', endpoint: 'http://127.0.0.1:9000/v1', models: ['local-model'], key_count: 2, enabled: true, group_id: 'official' }
@@ -58,5 +58,10 @@ test('loads workspace only through real API and surfaces failures', async () => 
   await client('/api/v1/providers')
   assert.equal(calls[0].url, '/api/v1/providers')
   assert.equal(calls[0].options.credentials, 'same-origin')
-  await assert.rejects(apiClient(async () => ({ ok: false, status: 503, json: async () => ({ error: { message: 'offline' } }) }))('/api/v1/providers'), /offline/)
+  await assert.rejects(apiClient(async () => ({ ok: false, status: 503, json: async () => ({ error: { message: 'offline' } }) }))('/api/v1/providers'), (error) => {
+    assert.ok(error instanceof ApiError)
+    assert.equal(error.status, 503)
+    assert.equal(error.message, 'offline')
+    return true
+  })
 })

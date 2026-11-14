@@ -10,11 +10,21 @@ export type ApiGroup = { id: string; name: string; description: string }
 export type ApiSettings = Partial<{ connect_timeout_seconds: number; first_byte_timeout_seconds: number; stream_idle_timeout_seconds: number; max_attempts: number; retry_after_cap_seconds: number; log_bodies: boolean; body_retention_days: number }>
 export type ApiAnalytics = { requests: number; successful: number; input_tokens: number; output_tokens: number; cost_micros: number; latency_ms?: number; series?: { time: string; requests: number; successful: number; cost_micros: number; latency_ms: number }[]; by_model?: { model: string; requests: number }[]; by_provider?: { provider_id: number; requests: number; successful: number; latency_ms: number }[] }
 
+export class ApiError extends Error {
+  readonly status: number
+
+  constructor(message: string, status: number) {
+    super(message)
+    this.name = 'ApiError'
+    this.status = status
+  }
+}
+
 export function apiClient(fetcher: typeof fetch = fetch) {
   return async <T>(url: string, options: RequestInit = {}): Promise<T> => {
     const response = await fetcher(url, { credentials: 'same-origin', ...options, headers: { ...(options.body ? { 'content-type': 'application/json' } : {}), ...options.headers } })
     const body = await response.json().catch(() => ({}))
-    if (!response.ok) throw new Error(body.error?.message || `Request failed (${response.status})`)
+    if (!response.ok) throw new ApiError(body.error?.message || `Request failed (${response.status})`, response.status)
     return body as T
   }
 }

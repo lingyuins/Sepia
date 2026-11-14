@@ -53,6 +53,15 @@ async fn management_requires_session_and_client_secret_is_returned_once() {
         .await
         .unwrap();
     assert_eq!(status["initialized"], false);
+    let invalid_token = client
+        .post(url("/api/v1/auth/bootstrap"))
+        .json(&json!({"username":"admin","password":"correct horse","token":"invalid"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(invalid_token.status(), 400);
+    let invalid_body: Value = invalid_token.json().await.unwrap();
+    assert_eq!(invalid_body["error"]["message"], "invalid bootstrap token");
     let initialized = client
         .post(url("/api/v1/auth/bootstrap"))
         .json(&json!({"username":"admin","password":"correct horse","token":"bootstrap"}))
@@ -60,6 +69,22 @@ async fn management_requires_session_and_client_secret_is_returned_once() {
         .await
         .unwrap();
     assert_eq!(initialized.status(), 200);
+    let repeated = client
+        .post(url("/api/v1/auth/bootstrap"))
+        .json(&json!({"username":"replacement","password":"replacement password","token":"invalid after initialization"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(repeated.status(), 200);
+    let repeated_body: Value = repeated.json().await.unwrap();
+    assert_eq!(repeated_body["initialized"], true);
+    let replaced_login = client
+        .post(url("/api/v1/auth/login"))
+        .json(&json!({"username":"replacement","password":"replacement password"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(replaced_login.status(), 401);
     let login = client
         .post(url("/api/v1/auth/login"))
         .json(&json!({"username":"admin","password":"correct horse"}))

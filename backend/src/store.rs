@@ -139,11 +139,23 @@ impl Store {
         supplied_token: &str,
         expected_token: &str,
     ) -> Result<(), String> {
+        if self.initialized().await? {
+            return Ok(());
+        }
         if supplied_token != expected_token {
             return Err("invalid bootstrap token".into());
         }
         if username.trim().is_empty() || password.len() < 12 {
             return Err("username and a password of at least 12 characters required".into());
+        }
+        let mut transaction = self.pool.begin().await.map_err(|e| e.to_string())?;
+        if sqlx::query("SELECT 1 FROM admins LIMIT 1")
+            .fetch_optional(&mut *transaction)
+            .await
+            .map_err(|e| e.to_string())?
+            .is_some()
+        {
+            return Ok(());
         }
         sqlx::query(
             "INSERT INTO admins (id, username, password_hash, created_at) VALUES (1, ?, ?, ?)",
@@ -151,10 +163,10 @@ impl Store {
         .bind(username)
         .bind(password_hash(password)?)
         .bind(Utc::now().to_rfc3339())
-        .execute(&self.pool)
+        .execute(&mut *transaction)
         .await
         .map_err(|e| e.to_string())?;
-        Ok(())
+        transaction.commit().await.map_err(|e| e.to_string())
     }
     pub async fn login(&self, username: &str, password: &str) -> Result<String, String> {
         let row = sqlx::query("SELECT password_hash FROM admins WHERE username = ?")

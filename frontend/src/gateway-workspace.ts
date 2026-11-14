@@ -1,12 +1,14 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { api, mapProvider, mapRequest, mapRoute, type ApiAnalytics, type ApiProvider, type ApiRequest, type ApiRoute, type ApiClientKey, type ApiGroup, type ApiSettings } from './api'
+import { ApiError, api, mapProvider, mapRequest, mapRoute, type ApiAnalytics, type ApiProvider, type ApiRequest, type ApiRoute, type ApiClientKey, type ApiGroup, type ApiSettings } from './api'
 import { defaultSettings } from './settings'
 import { applyTheme } from './theme'
 import { type ChannelGroup, type Plugin, type Provider, type RequestRecord, type RouteRule, type Settings } from './workspace'
 
 export type ConnectionState = 'loading' | 'ready' | 'login' | 'error'
+export type GatewayStatus = { session: boolean; initialized: boolean }
 export function useGatewayWorkspace(): GatewayWorkspace {
   const [status, setStatus] = useState<ConnectionState>('loading')
+  const [initialization, setInitialization] = useState<boolean | null>(null)
   const [error, setError] = useState('')
   const [providers, setProviders] = useState<Provider[]>([])
   const [routes, setRoutes] = useState<RouteRule[]>([])
@@ -40,20 +42,48 @@ export function useGatewayWorkspace(): GatewayWorkspace {
       throw cause
     }
   }, [applyServerSettings])
-  const run = useCallback(async <T,>(operation: () => Promise<T>) => { const result = await operation(); await refresh(periodRef.current); return result }, [refresh])
-  const login = useCallback(async (username: string, password: string) => { await api('/api/v1/auth/login', { method: 'POST', body: JSON.stringify({ username, password }) }); await refresh() }, [refresh])
-  const logout = useCallback(async () => { await api('/api/v1/auth/logout', { method: 'POST' }); setStatus('login') }, [])
-  useEffect(() => {
-    api<{ username: string }>('/api/v1/auth/session').then(() => refresh()).catch((cause) => { setError(cause instanceof Error ? cause.message : 'Gateway unavailable'); setStatus('login') })
+  const checkGateway = useCallback(async (): Promise<GatewayStatus> => {
+    const current = ++sequence.current
+    setError('')
+    try {
+      const [session, gatewayStatus] = await Promise.all([
+        api<{ username: string }>('/api/v1/auth/session').then(() => true).catch((cause) => {
+          if (cause instanceof ApiError && cause.status === 401) return false
+          throw cause
+        }),
+        api<{ initialized: boolean }>('/api/v1/auth/status'),
+      ])
+      const result = { session, initialized: gatewayStatus.initialized }
+      if (current !== sequence.current) return result
+      setInitialization(result.initialized)
+      if (result.session) await refresh()
+      else setStatus('login')
+      return result
+    } catch (cause) {
+      if (current === sequence.current) {
+        setError(cause instanceof Error ? cause.message : 'Gateway unavailable')
+        setStatus('error')
+      }
+      throw cause
+    }
   }, [refresh])
+  const run = useCallback(async <T,>(operation: () => Promise<T>) => { const result = await operation(); await refresh(periodRef.current); return result }, [refresh])
+  const login = useCallback(async (username: string, password: string) => {
+    ++sequence.current
+    await api('/api/v1/auth/login', { method: 'POST', body: JSON.stringify({ username, password }) })
+    setInitialization(true)
+    await refresh()
+  }, [refresh])
+  const logout = useCallback(async () => { await api('/api/v1/auth/logout', { method: 'POST' }); ++sequence.current; setStatus('login') }, [])
+  useEffect(() => { void checkGateway().catch(() => {}) }, [checkGateway])
   useEffect(() => { try { const previous = JSON.parse(localStorage.getItem('sepia.workspace.v1') || '{}'); localStorage.setItem('sepia.workspace.v1', JSON.stringify({ settings: { ...defaultSettings, ...previous.settings, ...settings } })) } catch { /* Browser storage may be disabled. */ } }, [settings])
   useEffect(() => { applyTheme(document.documentElement, settings, window.matchMedia('(prefers-color-scheme: light)').matches) }, [settings])
   useEffect(() => { if (!toast) return; const timer = setTimeout(() => setToast(''), 3500); return () => clearTimeout(timer) }, [toast])
-  return { status, error, providers, routes, requests, analytics, clientKeys, settings, setSettings, channelGroups, setChannelGroups, plugins, toast, notify: setToast, clearToast: () => setToast(''), refresh, run, login, logout }
+  return { status, initialization, error, providers, routes, requests, analytics, clientKeys, settings, setSettings, channelGroups, setChannelGroups, plugins, toast, notify: setToast, clearToast: () => setToast(''), refresh, checkGateway, run, login, logout }
 }
 export interface GatewayWorkspace {
-  status: ConnectionState; error: string; providers: Provider[]; routes: RouteRule[]; requests: RequestRecord[]; analytics: ApiAnalytics; clientKeys: ApiClientKey[]
+  status: ConnectionState; initialization: boolean | null; error: string; providers: Provider[]; routes: RouteRule[]; requests: RequestRecord[]; analytics: ApiAnalytics; clientKeys: ApiClientKey[]
   settings: Settings; setSettings: React.Dispatch<React.SetStateAction<Settings>>; channelGroups: ChannelGroup[]; setChannelGroups: React.Dispatch<React.SetStateAction<ChannelGroup[]>>
   plugins: Plugin[]; toast: string; notify: (message: string) => void; clearToast: () => void
-  refresh: (period?: string) => Promise<void>; run: <T>(operation: () => Promise<T>) => Promise<T>; login: (username: string, password: string) => Promise<void>; logout: () => Promise<void>
+  refresh: (period?: string) => Promise<void>; checkGateway: () => Promise<GatewayStatus>; run: <T>(operation: () => Promise<T>) => Promise<T>; login: (username: string, password: string) => Promise<void>; logout: () => Promise<void>
 }
