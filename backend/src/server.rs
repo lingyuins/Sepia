@@ -57,6 +57,7 @@ pub fn app(state: AppState) -> Router {
         .route("/v1beta/models", get(gemini_models))
         .route("/v1/messages", post(anthropic))
         .route("/v1beta/models/{*path}", post(gemini))
+        .route("/v1/models/{*path}", post(gemini))
         .nest("/api/v1", crate::admin::router(state.clone()))
         .fallback_service(
             tower_http::services::ServeDir::new("frontend/dist").fallback(
@@ -198,8 +199,11 @@ fn public_model_ids(
     models
 }
 async fn models(State(state): State<AppState>, headers: HeaderMap) -> Response {
-    let anthropic = headers.contains_key("x-api-key");
-    let protocol = if anthropic {
+    let gemini = headers.contains_key("x-goog-api-key");
+    let anthropic = !gemini && headers.contains_key("x-api-key");
+    let protocol = if gemini {
+        Protocol::Gemini
+    } else if anthropic {
         Protocol::Anthropic
     } else {
         Protocol::OpenAI
@@ -219,14 +223,18 @@ async fn models(State(state): State<AppState>, headers: HeaderMap) -> Response {
     let data = public_model_ids(&client, &state.snapshots.get())
         .into_iter()
         .map(|model| {
-            if anthropic {
+            if gemini {
+                json!({"name":format!("models/{model}"),"displayName":model,"supportedGenerationMethods":["generateContent","streamGenerateContent"]})
+            } else if anthropic {
                 json!({"id":model,"type":"model","display_name":model})
             } else {
                 json!({"id":model,"object":"model","owned_by":"sepia"})
             }
         })
         .collect::<Vec<_>>();
-    Json(if anthropic {
+    Json(if gemini {
+        json!({"models":data})
+    } else if anthropic {
         json!({"data":data,"has_more":false})
     } else {
         json!({"object":"list","data":data})

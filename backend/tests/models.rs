@@ -166,6 +166,27 @@ async fn a_candidate_permission_exposes_its_route_slug() {
     let logged = serde_json::to_value(&store.requests().await.unwrap()[0]).unwrap();
     assert_eq!(logged["model"], "GLM-5.3-Premium");
     assert_eq!(logged["route"], "hbhh");
+    let stable_gemini = app(AppState::for_testing(store.clone()).await)
+        .oneshot(
+            Request::get("/v1/models")
+                .header("x-goog-api-key", &key.plaintext)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(stable_gemini.status(), 200);
+    let body = axum::body::to_bytes(stable_gemini.into_body(), 1024 * 1024)
+        .await
+        .unwrap();
+    let models: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(
+        models["models"],
+        serde_json::json!([
+            {"name":"models/GLM-5.3-Premium","displayName":"GLM-5.3-Premium","supportedGenerationMethods":["generateContent","streamGenerateContent"]},
+            {"name":"models/hbhh","displayName":"hbhh","supportedGenerationMethods":["generateContent","streamGenerateContent"]}
+        ])
+    );
     let response = app(AppState::for_testing(store).await)
         .oneshot(
             Request::get("/v1/models")

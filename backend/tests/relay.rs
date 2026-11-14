@@ -64,7 +64,7 @@ fn body(protocol: &str, model: &str, stream: bool) -> Value {
         "anthropic" => {
             json!({"model":model,"messages":[{"role":"user","content":"Hello"}],"max_tokens":32,"stream":stream})
         }
-        "gemini" => {
+        "gemini" | "gemini-stable" => {
             json!({"contents":[{"role":"user","parts":[{"text":"Hello"}]}],"generationConfig":{"maxOutputTokens":32}})
         }
         _ => {
@@ -75,8 +75,15 @@ fn body(protocol: &str, model: &str, stream: bool) -> Value {
 async fn request(address: SocketAddr, protocol: &str, model: &str, key: &str) -> Value {
     let (path, auth) = match protocol {
         "anthropic" => ("/v1/messages".into(), ("x-api-key", key.to_string())),
-        "gemini" => (
-            format!("/v1beta/models/{model}:generateContent"),
+        "gemini" | "gemini-stable" => (
+            format!(
+                "/{}/models/{model}:generateContent",
+                if protocol == "gemini-stable" {
+                    "v1"
+                } else {
+                    "v1beta"
+                }
+            ),
             ("x-goog-api-key", key.to_string()),
         ),
         _ => (
@@ -173,12 +180,12 @@ async fn all_native_protocols_relay_to_all_provider_protocols() {
         )
         .into_future(),
     );
-    for inbound in ["openai", "anthropic", "gemini"] {
+    for inbound in ["openai", "anthropic", "gemini", "gemini-stable"] {
         for outbound in 0..3 {
             let response = request(address, inbound, &format!("example-{outbound}"), &key).await;
             match inbound {
                 "anthropic" => assert_eq!(response["content"][0]["text"], "Hello from Sepia"),
-                "gemini" => assert_eq!(
+                "gemini" | "gemini-stable" => assert_eq!(
                     response["candidates"][0]["content"]["parts"][0]["text"],
                     "Hello from Sepia"
                 ),
@@ -190,7 +197,7 @@ async fn all_native_protocols_relay_to_all_provider_protocols() {
         }
     }
     let calls = captured.0.lock().unwrap();
-    assert_eq!(calls.len(), 9);
+    assert_eq!(calls.len(), 12);
     assert!(
         calls
             .iter()
