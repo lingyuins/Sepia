@@ -20,7 +20,7 @@ async fn serve(router: Router) -> SocketAddr {
     address
 }
 
-async fn gateway(upstream: Router) -> (SocketAddr, Store, String) {
+async fn gateway(upstream: Router) -> (SocketAddr, Store, String, tempfile::TempDir) {
     let upstream = serve(upstream).await;
     let directory = tempfile::tempdir().unwrap();
     let store = Store::connect(&directory.path().join("responses.db"))
@@ -68,8 +68,7 @@ async fn gateway(upstream: Router) -> (SocketAddr, Store, String) {
         .unwrap()
         .plaintext;
     let address = serve(app(AppState::for_testing(store.clone()).await)).await;
-    std::mem::forget(directory);
-    (address, store, key)
+    (address, store, key, directory)
 }
 
 #[tokio::test]
@@ -83,7 +82,7 @@ async fn response_string_input_becomes_an_upstream_user_message() {
             Json(json!({"id":"chat_1","model":"upstream-model","choices":[{"index":0,"message":{"role":"assistant","content":"Response text"},"finish_reason":"stop"}],"usage":{"prompt_tokens":4,"completion_tokens":2}}))
         }),
     );
-    let (address, _, key) = gateway(upstream).await;
+    let (address, _, key, _directory) = gateway(upstream).await;
     let response = reqwest::Client::new()
         .post(format!("http://{address}/v1/responses"))
         .bearer_auth(key)
@@ -118,7 +117,7 @@ async fn response_structured_input_preserves_roles_instructions_and_text_parts()
             Json(json!({"id":"chat_2","model":"upstream-model","choices":[{"index":0,"message":{"role":"assistant","content":"Next reply"},"finish_reason":"stop"}],"usage":{"prompt_tokens":5,"completion_tokens":3}}))
         }),
     );
-    let (address, _, key) = gateway(upstream).await;
+    let (address, _, key, _directory) = gateway(upstream).await;
     let response = reqwest::Client::new()
         .post(format!("http://{address}/v1/responses"))
         .bearer_auth(key)
@@ -158,7 +157,7 @@ async fn response_input_stream_emits_response_events_with_usage() {
                 .into_response()
         }),
     );
-    let (address, store, key) = gateway(upstream).await;
+    let (address, store, key, _directory) = gateway(upstream).await;
     let response = reqwest::Client::new()
         .post(format!("http://{address}/v1/responses"))
         .bearer_auth(key)
@@ -191,7 +190,7 @@ async fn response_input_stream_emits_response_events_with_usage() {
             serde_json::from_str::<Value>(data).ok()
         })
         .expect("response.completed must contain JSON");
-    assert_eq!(completed["sequence_number"], 7);
+    assert_eq!(completed["sequence_number"], 8);
     assert_eq!(completed["response"]["status"], "completed");
     assert_eq!(
         completed["response"]["output"][0]["content"][0]["text"],
@@ -205,12 +204,15 @@ async fn response_input_stream_emits_response_events_with_usage() {
 }
 
 #[tokio::test]
-async fn response_input_rejects_unsupported_content_without_calling_upstream() {
-    async fn should_not_be_called() -> Json<Value> {
-        unreachable!("unsupported input must not reach upstream")
-    }
-    let upstream = Router::new().route("/chat/completions", post(should_not_be_called));
-    let (address, _, key) = gateway(upstream).await;
+async fn response_input_image_is_forwarded_to_the_upstream() {
+    let upstream = Router::new().route(
+        "/chat/completions",
+        post(|Json(body): Json<Value>| async move {
+            assert!(body["messages"][0]["content"].as_array().unwrap().iter().any(|part| part["type"] == "image_url" && part["image_url"]["url"] == "https://example.test/cat.png"));
+            Json(json!({"id":"chat_image","model":"upstream-model","choices":[{"index":0,"message":{"role":"assistant","content":"A cat"},"finish_reason":"stop"}],"usage":{"prompt_tokens":4,"completion_tokens":2}}))
+        }),
+    );
+    let (address, _, key, _directory) = gateway(upstream).await;
     let response = reqwest::Client::new()
         .post(format!("http://{address}/v1/responses"))
         .bearer_auth(key)
@@ -218,5 +220,7 @@ async fn response_input_rejects_unsupported_content_without_calling_upstream() {
         .send()
         .await
         .unwrap();
-    assert_eq!(response.status(), 400);
+    assert_eq!(response.status(), 200);
+    let body: Value = response.json().await.unwrap();
+    assert_eq!(body["output"][0]["content"][0]["text"], "A cat");
 }

@@ -45,6 +45,16 @@ pub struct NewAttempt<'a> {
     pub latency_ms: i64,
 }
 impl Store {
+    pub async fn begin_request_with_id(
+        &self,
+        id: &str,
+        client_key_id: i64,
+        protocol: ProviderProtocol,
+        model: &str,
+    ) -> Result<String, String> {
+        sqlx::query("INSERT INTO requests (id, client_key_id, protocol, model, status, created_at) VALUES (?, ?, ?, ?, 'pending', ?)").bind(id).bind(client_key_id).bind(protocol.as_str()).bind(model).bind(Utc::now().to_rfc3339()).execute(&self.pool).await.map_err(|e| e.to_string())?;
+        Ok(id.to_string())
+    }
     pub async fn begin_request(
         &self,
         client_key_id: i64,

@@ -37,13 +37,7 @@ fn native_and_cross_protocol_json_preserves_supported_text_semantics() {
     for inbound in [Protocol::OpenAI, Protocol::Anthropic, Protocol::Gemini] {
         let decoded = decode_request(inbound, request(inbound), Some("alias")).unwrap();
         assert_eq!(decoded.system.as_deref(), Some("Be concise"));
-        assert_eq!(
-            decoded.messages,
-            vec![Message {
-                role: Role::User,
-                text: "Hello".into()
-            }]
-        );
+        assert_eq!(decoded.messages, vec![Message::new(Role::User, "Hello")]);
         assert_eq!(decoded.max_tokens, Some(64));
         for outbound in [Protocol::OpenAI, Protocol::Anthropic, Protocol::Gemini] {
             let wire = encode_request(outbound, &decoded, "example").unwrap();
@@ -107,13 +101,13 @@ fn stream_events_round_trip_with_native_event_names_and_done_markers() {
 }
 
 #[test]
-fn rejects_semantic_loss_and_transport_inconsistencies() {
+fn accepts_tools_and_media_but_rejects_unsupported_multiplicity() {
     let tools = json!({"model":"x","messages":[{"role":"user","content":"hello"}],"tools":[{"type":"function","function":{"name":"weather"}}]});
-    assert!(decode_request(Protocol::OpenAI, tools, None).is_err());
+    assert!(decode_request(Protocol::OpenAI, tools, None).is_ok());
     let multiple = json!({"model":"x","messages":[{"role":"user","content":"hello"}],"n":2});
     assert!(decode_request(Protocol::OpenAI, multiple, None).is_err());
     let media = json!({"model":"x","messages":[{"role":"user","content":[{"type":"image_url","image_url":{"url":"https://example.test/x"}}]}]});
-    assert!(decode_request(Protocol::OpenAI, media, None).is_err());
+    assert!(decode_request(Protocol::OpenAI, media, None).is_ok());
     assert!(decode_request(Protocol::OpenAI, json!({"model":"x","messages":[]}), None).is_err());
     assert_eq!(
         ChatRequest {

@@ -43,9 +43,14 @@ impl AppState {
         }
     }
 }
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub enum InboundProtocol {
     Provider(Protocol),
+    Gemini {
+        model: String,
+        stream: bool,
+        credential: Option<String>,
+    },
     OpenAIResponses,
 }
 
@@ -54,6 +59,7 @@ pub fn app(state: AppState) -> Router {
         .route("/v1/models", get(models))
         .route("/v1/chat/completions", post(openai))
         .route("/v1/responses", post(openai_responses))
+        .merge(crate::response_api::router())
         .route("/v1beta/models", get(gemini_models))
         .route("/v1/messages", post(anthropic))
         .route("/v1beta/models/{*path}", post(gemini))
@@ -66,7 +72,7 @@ pub fn app(state: AppState) -> Router {
         )
         .with_state(state)
 }
-fn error(status: StatusCode, message: impl Into<String>) -> Response {
+pub fn error(status: StatusCode, message: impl Into<String>) -> Response {
     (status, Json(json!({"error":{"message":message.into()}}))).into_response()
 }
 #[derive(Clone, Copy)]
@@ -271,10 +277,9 @@ async fn openai(
         state,
         headers,
         InboundProtocol::Provider(Protocol::OpenAI),
-        None,
-        None,
         peer.ip(),
         body,
+        None,
     )
     .await
 }
@@ -284,16 +289,7 @@ async fn openai_responses(
     axum::extract::connect_info::ConnectInfo(peer): axum::extract::ConnectInfo<SocketAddr>,
     Json(body): Json<Value>,
 ) -> Response {
-    relay(
-        state,
-        headers,
-        InboundProtocol::OpenAIResponses,
-        None,
-        None,
-        peer.ip(),
-        body,
-    )
-    .await
+    crate::response_api::create_response(State(state), headers, peer.ip(), body).await
 }
 async fn anthropic(
     State(state): State<AppState>,
@@ -305,10 +301,9 @@ async fn anthropic(
         state,
         headers,
         InboundProtocol::Provider(Protocol::Anthropic),
-        None,
-        None,
         peer.ip(),
         body,
+        None,
     )
     .await
 }
@@ -330,25 +325,40 @@ async fn gemini(
     relay(
         state,
         headers,
-        InboundProtocol::Provider(Protocol::Gemini),
-        Some((model, action == "streamGenerateContent")),
-        credential_query.as_deref(),
+        InboundProtocol::Gemini {
+            model: model.to_string(),
+            stream: action == "streamGenerateContent",
+            credential: credential_query,
+        },
         peer.ip(),
         body,
+        None,
     )
     .await
 }
-async fn relay(
+pub struct ResponseLifecycle {
+    pub client_key: i64,
+    pub id: String,
+}
+pub async fn relay(
     state: AppState,
     headers: HeaderMap,
     inbound: InboundProtocol,
-    path: Option<(&str, bool)>,
-    query: Option<&str>,
     peer: std::net::IpAddr,
     body: Value,
+    response_state: Option<ResponseLifecycle>,
 ) -> Response {
-    let protocol = match inbound {
-        InboundProtocol::Provider(protocol) => protocol,
+    let path = match &inbound {
+        InboundProtocol::Gemini { model, stream, .. } => Some((model.as_str(), *stream)),
+        _ => None,
+    };
+    let query = match &inbound {
+        InboundProtocol::Gemini { credential, .. } => credential.as_deref(),
+        _ => None,
+    };
+    let protocol = match &inbound {
+        InboundProtocol::Provider(protocol) => *protocol,
+        InboundProtocol::Gemini { .. } => Protocol::Gemini,
         InboundProtocol::OpenAIResponses => Protocol::OpenAI,
     };
     let protocol_credential = match protocol {
@@ -377,19 +387,34 @@ async fn relay(
         return error(StatusCode::FORBIDDEN, "client IP is not allowed");
     }
     let initial_model = path.map(|path| path.0).unwrap_or("").to_string();
-    let request_id = match state
-        .store
-        .begin_request(
-            client.id,
-            match protocol {
-                Protocol::OpenAI => ProviderProtocol::OpenAI,
-                Protocol::Anthropic => ProviderProtocol::Anthropic,
-                Protocol::Gemini => ProviderProtocol::Gemini,
-            },
-            &initial_model,
-        )
-        .await
-    {
+    let request_id = match if let Some(lifecycle) = &response_state {
+        state
+            .store
+            .begin_request_with_id(
+                &lifecycle.id,
+                client.id,
+                match protocol {
+                    Protocol::OpenAI => ProviderProtocol::OpenAI,
+                    Protocol::Anthropic => ProviderProtocol::Anthropic,
+                    Protocol::Gemini => ProviderProtocol::Gemini,
+                },
+                &initial_model,
+            )
+            .await
+    } else {
+        state
+            .store
+            .begin_request(
+                client.id,
+                match protocol {
+                    Protocol::OpenAI => ProviderProtocol::OpenAI,
+                    Protocol::Anthropic => ProviderProtocol::Anthropic,
+                    Protocol::Gemini => ProviderProtocol::Gemini,
+                },
+                &initial_model,
+            )
+            .await
+    } {
         Ok(id) => id,
         Err(_) => {
             return error(
@@ -398,9 +423,17 @@ async fn relay(
             );
         }
     };
-    let decoded_request = match inbound {
-        InboundProtocol::OpenAIResponses => crate::responses::decode_request(body),
-        InboundProtocol::Provider(protocol) => decode_request(protocol, body, path.map(|p| p.0)),
+    let mut response_context = None;
+    let decoded_request = match &inbound {
+        InboundProtocol::OpenAIResponses => crate::responses::decode_request_with_context(body)
+            .map(|(request, context)| {
+                response_context = Some(context);
+                request
+            }),
+        InboundProtocol::Provider(protocol) => decode_request(*protocol, body, None),
+        InboundProtocol::Gemini { model, .. } => {
+            decode_request(Protocol::Gemini, body, Some(model))
+        }
     };
     let mut request = match decoded_request {
         Ok(request) => request,
@@ -500,6 +533,18 @@ async fn relay(
             continue;
         }
         loop {
+            if let Some(lifecycle) = &response_state
+                && state
+                    .store
+                    .response(lifecycle.client_key, &lifecycle.id)
+                    .await
+                    .ok()
+                    .flatten()
+                    .is_some_and(|response| response.cancel_requested)
+            {
+                let _ = guard.complete("cancelled", 0, 0, 0).await;
+                return error(StatusCode::CONFLICT, "response was cancelled");
+            }
             if attempts_used >= snapshot.max_attempts {
                 break 'candidates;
             }
@@ -627,6 +672,9 @@ async fn relay(
                         model: model.clone(),
                         guard,
                         started,
+                        response_context,
+                        response_state: response_state
+                            .map(|lifecycle| (lifecycle.client_key, lifecycle.id)),
                     },
                 );
                 return stream;
@@ -692,7 +740,19 @@ async fn relay(
                     "request settlement unavailable",
                 );
             }
-            return json_response(inbound, decoded);
+            return json_response(
+                inbound,
+                ChatResponse {
+                    id: request_id.clone(),
+                    ..decoded
+                },
+                response_context.as_ref(),
+                response_state
+                    .as_ref()
+                    .map(|lifecycle| (lifecycle.client_key, lifecycle.id.clone())),
+                &state,
+            )
+            .await;
         }
     }
     let _ = guard.complete("failed", 0, 0, 0).await;

@@ -297,21 +297,21 @@ fn gemini_accepts_usage_only_and_prompt_feedback_without_fabricated_text() {
 }
 
 #[test]
-fn rejects_non_text_tool_media_and_multiple_upstream_results() {
+fn accepts_tool_media_and_rejects_multiple_upstream_results() {
     assert!(decode_response(Protocol::OpenAI, value(r#"{"choices":[{},{}]}"#),).is_err());
     assert!(
         decode_response(
             Protocol::OpenAI,
             value(r#"{"choices":[{"index":0,"message":{"role":"assistant","content":null,"tool_calls":[{"id":"call_1","type":"function","function":{"name":"weather","arguments":"{}"}}]},"finish_reason":"tool_calls"}]}"#),
         )
-        .is_err()
+        .is_ok()
     );
     assert!(
         decode_response(
             Protocol::OpenAI,
             value(r#"{"choices":[{"index":0,"message":{"role":"assistant","content":[{"type":"image_url","image_url":{"url":"https://example.test/a.png"}}]},"finish_reason":"stop"}]}"#),
         )
-        .is_err()
+        .is_ok()
     );
     assert!(decode_sse(Protocol::OpenAI, "data: {\"choices\":[{},{}]}\n\n",).is_err());
     assert!(
@@ -319,7 +319,7 @@ fn rejects_non_text_tool_media_and_multiple_upstream_results() {
             Protocol::OpenAI,
             "data: {\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_1\",\"type\":\"function\",\"function\":{\"name\":\"weather\",\"arguments\":\"{}\"}}]}}]}\n\n",
         )
-        .is_err()
+        .is_ok()
     );
 
     assert!(
@@ -327,21 +327,21 @@ fn rejects_non_text_tool_media_and_multiple_upstream_results() {
             Protocol::Anthropic,
             value(r#"{"id":"msg_1","content":[{"type":"tool_use","id":"toolu_1","name":"weather","input":{}}],"stop_reason":"tool_use","usage":{"input_tokens":3,"output_tokens":1}}"#),
         )
-        .is_err()
+        .is_ok()
     );
     assert!(
         decode_sse(
             Protocol::Anthropic,
             "data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"tool_use\",\"id\":\"toolu_1\",\"name\":\"weather\",\"input\":{}}}\n\n",
         )
-        .is_err()
+        .is_ok()
     );
     assert!(
         decode_sse(
             Protocol::Anthropic,
             "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"{}\"}}\n\n",
         )
-        .is_err()
+        .is_ok()
     );
 
     assert!(
@@ -349,14 +349,14 @@ fn rejects_non_text_tool_media_and_multiple_upstream_results() {
             Protocol::Gemini,
             value(r#"{"candidates":[{"content":{"role":"model","parts":[{"functionCall":{"name":"weather","args":{}}}]},"finishReason":"STOP"}]}"#),
         )
-        .is_err()
+        .is_ok()
     );
     assert!(
         decode_response(
             Protocol::Gemini,
             value(r#"{"candidates":[{"content":{"role":"model","parts":[{"inlineData":{"mimeType":"image/png","data":"AAAA"}}]},"finishReason":"STOP"}]}"#),
         )
-        .is_err()
+        .is_ok()
     );
     assert!(
         decode_response(
@@ -370,7 +370,7 @@ fn rejects_non_text_tool_media_and_multiple_upstream_results() {
             Protocol::Gemini,
             "data: {\"candidates\":[{\"content\":{\"role\":\"model\",\"parts\":[{\"functionCall\":{\"name\":\"weather\",\"args\":{}}}]},\"finishReason\":\"STOP\"}]}\n\n",
         )
-        .is_err()
+        .is_ok()
     );
 }
 
