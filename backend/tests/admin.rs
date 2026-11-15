@@ -18,6 +18,7 @@ async fn management_requires_session_and_client_secret_is_returned_once() {
         http: reqwest::Client::new(),
         bootstrap_token: "bootstrap".into(),
         data_directory: directory.path().to_path_buf(),
+        frontend_directory: "frontend/dist".into(),
         snapshots: std::sync::Arc::new(
             sepia_gateway::snapshot::Snapshots::load(&store)
                 .await
@@ -91,16 +92,10 @@ async fn management_requires_session_and_client_secret_is_returned_once() {
         .send()
         .await
         .unwrap();
-    let cookie = login
-        .headers()
-        .get("set-cookie")
-        .unwrap()
-        .to_str()
-        .unwrap()
-        .split(';')
-        .next()
-        .unwrap()
-        .to_string();
+    assert_eq!(login.status(), 200);
+    let login_cookie = login.headers().get("set-cookie").unwrap().to_str().unwrap();
+    assert!(!login_cookie.split(';').any(|part| part.trim() == "Secure"));
+    let cookie = login_cookie.split(';').next().unwrap().to_string();
     let created_provider = client
         .post(url("/api/v1/providers"))
         .header("cookie", &cookie)
@@ -184,6 +179,44 @@ async fn management_requires_session_and_client_secret_is_returned_once() {
 }
 
 #[tokio::test]
+async fn secure_cookie_mode_marks_session_cookie_secure() {
+    let directory = tempfile::tempdir().unwrap();
+    let store = Store::connect(&directory.path().join("secure-cookie.db"))
+        .await
+        .unwrap();
+    let mut state = AppState::for_testing(store).await;
+    state.bootstrap_token = "bootstrap".into();
+    state.secure_cookie = true;
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    tokio::spawn(
+        axum::serve(
+            listener,
+            app(state).into_make_service_with_connect_info::<std::net::SocketAddr>(),
+        )
+        .into_future(),
+    );
+    let client = reqwest::Client::new();
+    let url = |path: &str| format!("http://{address}{path}");
+    let initialized = client
+        .post(url("/api/v1/auth/bootstrap"))
+        .json(&json!({"username":"admin","password":"correct horse","token":"bootstrap"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(initialized.status(), 200);
+    let login = client
+        .post(url("/api/v1/auth/login"))
+        .json(&json!({"username":"admin","password":"correct horse"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(login.status(), 200);
+    let cookie = login.headers().get("set-cookie").unwrap().to_str().unwrap();
+    assert!(cookie.split(';').any(|part| part.trim() == "Secure"));
+}
+
+#[tokio::test]
 async fn provider_creation_discovers_models_before_persisting() {
     let directory = tempfile::tempdir().unwrap();
     let store = Store::connect(&directory.path().join("discovery-create.db"))
@@ -238,6 +271,7 @@ async fn provider_creation_discovers_models_before_persisting() {
         http: reqwest::Client::new(),
         bootstrap_token: "bootstrap".into(),
         data_directory: directory.path().to_path_buf(),
+        frontend_directory: "frontend/dist".into(),
         snapshots: std::sync::Arc::new(
             sepia_gateway::snapshot::Snapshots::load(&store)
                 .await

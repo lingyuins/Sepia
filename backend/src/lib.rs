@@ -19,6 +19,8 @@ pub mod snapshot;
 pub mod store;
 pub mod updates;
 
+pub static MIGRATIONS: sqlx::migrate::Migrator = sqlx::migrate!("./migrations");
+
 pub use crypto::{KeyStore, default_data_directory};
 pub use store::{NewProvider, NewRoute, Provider, ProviderProtocol, Route, Store, UpsertClientKey};
 

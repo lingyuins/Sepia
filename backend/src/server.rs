@@ -25,6 +25,7 @@ pub struct AppState {
     pub http: reqwest::Client,
     pub bootstrap_token: String,
     pub data_directory: std::path::PathBuf,
+    pub frontend_directory: std::path::PathBuf,
     pub snapshots: std::sync::Arc<crate::snapshot::Snapshots>,
     pub key_health: std::sync::Arc<tokio::sync::Mutex<KeyHealth>>,
     pub secure_cookie: bool,
@@ -37,6 +38,7 @@ impl AppState {
             http: crate::relay::protected_http_client().unwrap(),
             bootstrap_token: "test".into(),
             data_directory: std::env::temp_dir(),
+            frontend_directory: "frontend/dist".into(),
             snapshots: std::sync::Arc::new(crate::snapshot::Snapshots::load(&store).await.unwrap()),
             key_health: Default::default(),
             secure_cookie: false,
@@ -66,8 +68,8 @@ pub fn app(state: AppState) -> Router {
         .route("/v1/models/{*path}", post(gemini))
         .nest("/api/v1", crate::admin::router(state.clone()))
         .fallback_service(
-            tower_http::services::ServeDir::new("frontend/dist").fallback(
-                tower_http::services::ServeFile::new("frontend/dist/index.html"),
+            tower_http::services::ServeDir::new(&state.frontend_directory).fallback(
+                tower_http::services::ServeFile::new(state.frontend_directory.join("index.html")),
             ),
         )
         .with_state(state)

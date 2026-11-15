@@ -65,6 +65,19 @@ impl KeyStore {
             Err(error) => Err(format!("OS keyring unavailable: {error}")),
         }
     }
+    pub fn production_with_override(encoded: Option<&str>) -> Result<Self, String> {
+        let Some(encoded) = encoded else {
+            return Self::production();
+        };
+        let bytes = BASE64
+            .decode(encoded)
+            .map_err(|_| "invalid master key".to_string())?;
+        Ok(Self::from_master(
+            bytes
+                .try_into()
+                .map_err(|_| "invalid master key".to_string())?,
+        ))
+    }
     fn cipher(&self) -> Aes256Gcm {
         Aes256Gcm::new_from_slice(&*self.master).expect("32 byte key")
     }

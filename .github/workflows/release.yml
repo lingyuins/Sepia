@@ -1,0 +1,293 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy,rustfmt
+      - run: npm ci --prefix frontend
+      - run: npm run typecheck --prefix frontend
+      - run: npm test --prefix frontend
+      - run: npm run build --prefix frontend
+      - run: cargo fmt --manifest-path backend/Cargo.toml --check
+      - run: cargo clippy --manifest-path backend/Cargo.toml --all-targets -- -D warnings
+      - run: cargo test --manifest-path backend/Cargo.toml
+      - name: Require tag to match Cargo package version
+        if: github.ref_type == 'tag'
+        shell: bash
+        run: |
+          cargo_version=$(sed -n 's/^version = "\([^"]*\)"$/\1/p' backend/Cargo.toml | head -n 1)
+          tag_version=${GITHUB_REF_NAME#v}
+          if [[ -z "$cargo_version" || "$cargo_version" != "$tag_version" ]]; then
+            echo "Tag $GITHUB_REF_NAME does not match Cargo version $cargo_version" >&2
+            exit 1
+          fi
+
+  native:
+    needs: verify
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-2025
+            target: x86_64-pc-windows-msvc
+            artifact: windows-x64
+            executable: sepia-gateway.exe
+          - os: macos-15-intel
+            target: x86_64-apple-darwin
+            artifact: macos-x64
+            executable: sepia-gateway
+          - os: macos-15
+            target: aarch64-apple-darwin
+            artifact: macos-arm64
+            executable: sepia-gateway
+          - os: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+            artifact: linux-x64
+            executable: sepia-gateway
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            artifact: linux-arm64
+            executable: sepia-gateway
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - run: npm ci --prefix frontend
+      - run: npm run build --prefix frontend
+      - run: cargo build --release --locked --target ${{ matrix.target }} --manifest-path backend/Cargo.toml
+      - name: Resolve release version
+        shell: bash
+        run: |
+          if [[ "$GITHUB_REF_TYPE" == tag ]]; then
+            version=${GITHUB_REF_NAME#v}
+          else
+            version=$(sed -n 's/^version = "\([^"]*\)"$/\1/p' backend/Cargo.toml | head -n 1)
+          fi
+          echo "PACKAGE_VERSION=$version" >>"$GITHUB_ENV"
+      - name: Package native release
+        shell: bash
+        run: bash scripts/package-release.sh "$PACKAGE_VERSION" "${{ matrix.artifact }}" "backend/target/${{ matrix.target }}/release/${{ matrix.executable }}" "dist/sepia-$PACKAGE_VERSION-${{ matrix.artifact }}.tar.gz"
+      - name: Start unpacked native release
+        shell: bash
+        run: |
+          mkdir -p smoke
+          tar -xzf "dist/sepia-$PACKAGE_VERSION-${{ matrix.artifact }}.tar.gz" -C smoke
+          bash scripts/smoke-release.sh "smoke/sepia-$PACKAGE_VERSION-${{ matrix.artifact }}" ${{ matrix.artifact == 'windows-x64' && '15100' || '15000' }}
+      - name: Create SHA-256 checksum
+        shell: bash
+        working-directory: dist
+        run: |
+          archive=sepia-$PACKAGE_VERSION-${{ matrix.artifact }}.tar.gz
+          if [[ "${{ matrix.artifact }}" == windows-* ]]; then
+            output=$(certutil -hashfile "$archive" SHA256)
+            hash=$(printf '%s\n' "$output" | sed -n '2p' | tr -d ' \r')
+            if [[ ! "$hash" =~ ^[0-9A-Fa-f]{64}$ ]]; then
+              echo "Unable to parse certutil SHA-256 output" >&2
+              exit 1
+            fi
+            printf '%s  %s\n' "${hash,,}" "$archive" >"$archive.sha256"
+          else
+            sha256sum "$archive" >"$archive.sha256"
+          fi
+      - uses: actions/upload-artifact@v7
+        with:
+          name: native-${{ matrix.artifact }}
+          path: |
+            dist/*.tar.gz
+            dist/*.sha256
+          if-no-files-found: error
+
+  docker:
+    needs: verify
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v6
+      - uses: docker/setup-qemu-action@v4
+      - uses: docker/setup-buildx-action@v4
+      - name: Build both container architectures without publishing
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          outputs: type=image,push=false
+          cache-from: type=gha,scope=sepia
+          cache-to: type=gha,scope=sepia,mode=max
+          provenance: false
+          sbom: false
+      - name: Load AMD64 container for smoke testing
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          platforms: linux/amd64
+          tags: sepia:smoke
+          load: true
+          cache-from: type=gha,scope=sepia
+      - name: Verify container persistence and wrong-key rejection
+        shell: bash
+        run: |
+          set -euo pipefail
+          master=MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDA=
+          volume=$(docker volume create)
+          container=
+          cleanup() {
+            if [[ -n "$container" ]]; then
+              docker rm -f "$container" >/dev/null 2>&1 || true
+            fi
+            docker volume rm "$volume" >/dev/null 2>&1 || true
+          }
+          trap cleanup EXIT
+          container=$(docker run -d --name sepia-release-smoke -e SEPIA_MASTER_KEY="$master" -e SEPIA_BOOTSTRAP_TOKEN=release-smoke -p 127.0.0.1:15000:5000 -v "$volume:/data" sepia:smoke)
+          ready=false
+          for _ in {1..60}; do
+            if [[ "$(curl -fsS http://127.0.0.1:15000/api/v1/auth/status 2>/dev/null || true)" == '{"initialized":false}' ]]; then
+              ready=true
+              break
+            fi
+            if [[ "$(docker inspect -f '{{.State.Running}}' "$container")" != true ]]; then
+              break
+            fi
+            sleep 1
+          done
+          if [[ "$ready" != true ]]; then
+            docker logs "$container"
+            exit 1
+          fi
+          curl -fsS http://127.0.0.1:15000/ | grep -F '<div id="root"></div>' >/dev/null
+          curl -fsS -X POST http://127.0.0.1:15000/api/v1/auth/bootstrap -H 'Content-Type: application/json' -d '{"username":"admin","password":"release-smoke-password","token":"release-smoke"}' | grep -F '"initialized":true' >/dev/null
+          curl -fsS -X POST http://127.0.0.1:15000/api/v1/auth/login -H 'Content-Type: application/json' -d '{"username":"admin","password":"release-smoke-password"}' | grep -F '"authenticated":true' >/dev/null
+          docker logs "$container" >"$RUNNER_TEMP/container.log" 2>&1
+          docker rm -f "$container" >/dev/null
+          container=$(docker run -d --name sepia-release-smoke -e SEPIA_MASTER_KEY="$master" -e SEPIA_BOOTSTRAP_TOKEN=release-smoke -p 127.0.0.1:15000:5000 -v "$volume:/data" sepia:smoke)
+          for _ in {1..60}; do
+            if [[ "$(curl -fsS http://127.0.0.1:15000/api/v1/auth/status 2>/dev/null || true)" == '{"initialized":true}' ]]; then
+              break
+            fi
+            sleep 1
+          done
+          [[ "$(curl -fsS http://127.0.0.1:15000/api/v1/auth/status)" == '{"initialized":true}' ]]
+          curl -fsS -X POST http://127.0.0.1:15000/api/v1/auth/login -H 'Content-Type: application/json' -d '{"username":"admin","password":"release-smoke-password"}' | grep -F '"authenticated":true' >/dev/null
+          docker rm -f "$container" >/dev/null
+          if docker run -d --name sepia-release-smoke -e SEPIA_MASTER_KEY=MTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTE= -e SEPIA_BOOTSTRAP_TOKEN=release-smoke -v "$volume:/data" sepia:smoke >"$RUNNER_TEMP/wrong-key-id"; then
+            container=$(cat "$RUNNER_TEMP/wrong-key-id")
+            for _ in {1..30}; do
+              [[ "$(docker inspect -f '{{.State.Running}}' "$container")" == false ]] && break
+              sleep 1
+            done
+            if [[ "$(docker inspect -f '{{.State.Running}}' "$container")" == true ]]; then
+              echo 'Container accepted a changed master key' >&2
+              exit 1
+            fi
+            docker logs "$container" 2>&1 | grep -F 'master key cannot decrypt existing credentials' >/dev/null
+            docker rm "$container" >/dev/null
+            container=
+          else
+            echo 'Unable to start wrong-key smoke container' >&2
+            exit 1
+          fi
+          if grep -F "$master" "$RUNNER_TEMP/container.log"; then
+            echo 'Container log exposed the master key' >&2
+            exit 1
+          fi
+      - name: Log in to GitHub Container Registry
+        if: github.ref_type == 'tag'
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Require Docker Hub configuration
+        if: github.ref_type == 'tag'
+        env:
+          DOCKERHUB_USERNAME: ${{ vars.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+        run: |
+          if [[ -z "$DOCKERHUB_USERNAME" || -z "$DOCKERHUB_TOKEN" ]]; then
+            echo 'Set Actions variable DOCKERHUB_USERNAME and secret DOCKERHUB_TOKEN before tagging a release' >&2
+            exit 1
+          fi
+      - name: Log in to Docker Hub
+        if: github.ref_type == 'tag'
+        uses: docker/login-action@v4
+        with:
+          username: ${{ vars.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      - name: Resolve both registry image tags
+        if: github.ref_type == 'tag'
+        id: metadata
+        uses: docker/metadata-action@v6
+        with:
+          images: |
+            ghcr.io/${{ github.repository }}
+            ${{ vars.DOCKERHUB_USERNAME }}/sepia
+          tags: |
+            type=raw,value=${{ github.ref_name }}
+            type=semver,pattern={{version}},value=${{ github.ref_name }}
+            type=raw,value=latest
+      - name: Publish both architectures to both registries
+        if: github.ref_type == 'tag'
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.metadata.outputs.tags }}
+          labels: ${{ steps.metadata.outputs.labels }}
+          cache-from: type=gha,scope=sepia
+          cache-to: type=gha,scope=sepia,mode=max
+          provenance: true
+          sbom: true
+
+  release:
+    if: github.ref_type == 'tag'
+    needs: [native, docker]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: native-*
+          path: dist/
+          merge-multiple: true
+      - name: Verify all native archive checksums
+        working-directory: dist
+        run: |
+          [[ $(find . -maxdepth 1 -name '*.tar.gz' | wc -l) -eq 5 ]]
+          sha256sum -c ./*.sha256
+      - uses: softprops/action-gh-release@v3
+        with:
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+          files: dist/*

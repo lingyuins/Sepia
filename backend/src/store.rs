@@ -119,11 +119,51 @@ impl Store {
             .connect_with(options)
             .await
             .map_err(|e| e.to_string())?;
-        sqlx::migrate!("./migrations")
+        crate::MIGRATIONS
             .run(&pool)
             .await
             .map_err(|e| e.to_string())?;
         Ok(Self { pool })
+    }
+    pub async fn verify_keystore(&self, keys: &KeyStore) -> Result<(), String> {
+        let marker_table = sqlx::query(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'keystore_metadata'",
+        )
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|error| error.to_string())?;
+        if marker_table.is_none() {
+            crate::MIGRATIONS
+                .run(&self.pool)
+                .await
+                .map_err(|error| error.to_string())?;
+        }
+        let marker = sqlx::query("SELECT nonce, ciphertext FROM keystore_metadata WHERE id = 1")
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(|error| error.to_string())?;
+        match marker {
+            Some(marker) => {
+                let nonce: String = sqlx::Row::get(&marker, "nonce");
+                let ciphertext: String = sqlx::Row::get(&marker, "ciphertext");
+                match keys.decrypt(&nonce, &ciphertext) {
+                    Ok(value) if &*value == "sepia-key-check-v1" => Ok(()),
+                    _ => Err("master key cannot decrypt existing credentials".into()),
+                }
+            }
+            None => {
+                let (nonce, ciphertext) = keys.encrypt("sepia-key-check-v1")?;
+                sqlx::query(
+                    "INSERT INTO keystore_metadata (id, nonce, ciphertext) VALUES (1, ?, ?)",
+                )
+                .bind(nonce)
+                .bind(ciphertext)
+                .execute(&self.pool)
+                .await
+                .map_err(|error| error.to_string())?;
+                Ok(())
+            }
+        }
     }
     pub async fn initialized(&self) -> Result<bool, String> {
         Ok(sqlx::query("SELECT 1 FROM admins LIMIT 1")

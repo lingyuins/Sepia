@@ -21,10 +21,15 @@ Useful environment variables:
 - `SEPIA_DATA_DIR`: database and bootstrap-token directory
 - `SEPIA_LISTEN`: listen address
 - `SEPIA_BOOTSTRAP_TOKEN`: explicit token for automation
+- `SEPIA_MASTER_KEY`: optional Base64-encoded 32-byte master key; takes precedence over the OS keyring and cannot be rotated
+- `SEPIA_FRONTEND_DIR`: optional absolute console build directory; containers use `/opt/sepia/frontend/dist`
+- `SEPIA_HTTP_LOOPBACK_COOKIE=true`: only for local HTTP access to a container published on loopback at `0.0.0.0:5000`; remove for remote/LAN deployment
 - `SEPIA_TRUSTED_PROXY=true`: required for non-loopback listening; TLS is terminated by a trusted proxy
 - `SEPIA_DEV_INSECURE_KEYSTORE=1`: debug builds only; uses a file test key and must not protect production secrets
 
-The service serves `frontend/dist/` as a same-origin SPA when built. Run `npm run build --prefix frontend` and start the gateway from the repository root before using the production UI.
+The service serves `frontend/dist/` as a same-origin SPA when built. Run `npm run build --prefix frontend` and start the gateway from the repository root before using the production UI. At startup the console path is resolved before the process changes to `SEPIA_DATA_DIR`: an existing working-directory `frontend/dist` wins, otherwise packaged `bin/sepia-gateway` resolves the sibling package-root `frontend/dist`. `SEPIA_FRONTEND_DIR` overrides both. The root `Dockerfile` embeds migrations in the release binary, serves `/opt/sepia/frontend/dist`, and stores runtime state in `/data`.
+
+Provider keys are AES-GCM encrypted with an OS-keyring master key, or with explicit `SEPIA_MASTER_KEY` when supplied. Migration `0008_keystore_metadata.sql` stores an encrypted check value on first startup; later startups reject a different master key before listening rather than failing later during upstream-key decryption. Invalid Base64 and non-32-byte keys fail immediately.
 
 ## API surfaces
 
@@ -33,7 +38,7 @@ The service serves `frontend/dist/` as a same-origin SPA when built. Run `npm ru
 - Gemini: `GET /v1/models` or `/v1beta/models`, `POST /v1/models/{model}:generateContent` or `/v1beta/models/{model}:generateContent`, and `:streamGenerateContent` with `x-goog-api-key` or `?key=`. Both stable and beta paths share protocol conversion; `/v1/models` selects Gemini listing when `x-goog-api-key` is supplied. Current `@google/genai` default stable-v1 listing, JSON and streaming are covered by local SDK verification.
 - Management: `/api/v1/auth/*`, `/providers`, `/routes`, `/keys`, `/groups`, `/settings`, `/requests`, `/analytics`; session cookie required except bootstrap/login
 
-Provider keys are AES-GCM encrypted with an OS-keyring master key. Redirects are not followed. Client keys are returned only once at creation and stored as SHA-256 hashes. Routing is ordered failover, with bounded attempts, key cooldowns and no retry after client output.
+Redirects are not followed. Client keys are returned only once at creation and stored as SHA-256 hashes. Routing is ordered failover, with bounded attempts, key cooldowns and no retry after client output.
 
 ## Verification
 
