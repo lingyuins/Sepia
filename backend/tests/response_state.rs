@@ -180,11 +180,11 @@ async fn running_background_response_can_be_cancelled() {
     let upstream = Router::new().route(
         "/chat/completions",
         post(|| async {
-            tokio::time::sleep(Duration::from_millis(400)).await;
+            tokio::time::sleep(Duration::from_secs(10)).await;
             reply("too late")
         }),
     );
-    let (address, _, key, _directory) = gateway(upstream).await;
+    let (address, store, key, _directory) = gateway(upstream).await;
     let client = reqwest::Client::new();
     let created: Value = client
         .post(format!("http://{address}/v1/responses"))
@@ -197,6 +197,23 @@ async fn running_background_response_can_be_cancelled() {
         .await
         .unwrap();
     let id = created["id"].as_str().unwrap();
+    let internal_id = id.strip_prefix("resp_").unwrap();
+    for _ in 0..50 {
+        let current = store.response(1, internal_id).await.unwrap().unwrap();
+        if current.status == "in_progress" {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert_eq!(
+        store
+            .response(1, internal_id)
+            .await
+            .unwrap()
+            .unwrap()
+            .status,
+        "in_progress"
+    );
     let cancelled = client
         .post(format!("http://{address}/v1/responses/{id}/cancel"))
         .bearer_auth(&key)
