@@ -33,6 +33,7 @@ async fn upstream_redirects_do_not_forward_provider_credentials() {
         "secret",
         &request,
         "x",
+        sepia_gateway::protocol::Protocol::Anthropic,
     )
     .await
     .unwrap();

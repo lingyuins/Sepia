@@ -28,8 +28,8 @@ pub fn outbound_protocol(provider: &Provider) -> Protocol {
         crate::ProviderProtocol::OpenAIResponses => Protocol::OpenAIResponses,
     }
 }
-pub fn upstream_url(provider: &Provider, model: &str, stream: bool) -> String {
-    let path = match outbound_protocol(provider) {
+pub fn upstream_url(protocol: Protocol, provider: &Provider, model: &str, stream: bool) -> String {
+    let path = match protocol {
         Protocol::OpenAI => "chat/completions".into(),
         Protocol::Anthropic => "v1/messages".into(),
         Protocol::Gemini => format!(
@@ -45,17 +45,25 @@ pub fn upstream_url(provider: &Provider, model: &str, stream: bool) -> String {
     };
     format!("{}/{path}", provider.endpoint.trim_end_matches('/'))
 }
+pub fn endpoint_label(protocol: Protocol) -> &'static str {
+    match protocol {
+        Protocol::OpenAI => "chat/completions",
+        Protocol::Anthropic => "messages",
+        Protocol::Gemini => "generateContent",
+        Protocol::OpenAIResponses => "responses",
+    }
+}
 pub async fn call(
     client: &reqwest::Client,
     provider: &Provider,
     secret: &str,
     request: &ChatRequest,
     model: &str,
+    protocol: Protocol,
 ) -> Result<reqwest::Response, String> {
-    let protocol = outbound_protocol(provider);
     let body = encode_request(protocol, request, model)?;
     let outgoing = client
-        .post(upstream_url(provider, model, request.stream))
+        .post(upstream_url(protocol, provider, model, request.stream))
         .json(&body);
     let outgoing = match protocol {
         Protocol::OpenAI | Protocol::OpenAIResponses => outgoing.bearer_auth(secret),

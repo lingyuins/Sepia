@@ -1,7 +1,7 @@
 use crate::{
     KeyStore, ProviderProtocol, Store,
     protocol::{ChatResponse, Protocol, StreamEvent, decode_request, decode_response},
-    relay::{call, json_response, outbound_protocol, stream_response},
+    relay::{call, json_response, stream_response},
 };
 use axum::{
     Router,
@@ -15,7 +15,6 @@ use std::{net::SocketAddr, time::Instant};
 
 #[derive(Default)]
 pub struct KeyHealth {
-    pub next: std::collections::HashMap<i64, usize>,
     pub cooldowns: std::collections::HashMap<i64, chrono::DateTime<chrono::Utc>>,
 }
 #[derive(Clone)]
@@ -54,6 +53,21 @@ pub enum InboundProtocol {
         credential: Option<String>,
     },
     OpenAIResponses,
+}
+
+fn candidate_protocols(provider: &crate::Provider, inbound: &InboundProtocol) -> Vec<Protocol> {
+    match provider.protocol {
+        ProviderProtocol::OpenAI => {
+            if matches!(inbound, InboundProtocol::OpenAIResponses) {
+                vec![Protocol::OpenAIResponses, Protocol::OpenAI]
+            } else {
+                vec![Protocol::OpenAI, Protocol::OpenAIResponses]
+            }
+        }
+        ProviderProtocol::OpenAIResponses => vec![Protocol::OpenAIResponses, Protocol::OpenAI],
+        ProviderProtocol::Anthropic => vec![Protocol::Anthropic],
+        ProviderProtocol::Gemini => vec![Protocol::Gemini],
+    }
 }
 
 pub fn app(state: AppState) -> Router {
@@ -536,55 +550,92 @@ pub async fn relay(
         {
             continue;
         }
-        loop {
-            if let Some(lifecycle) = &response_state
-                && state
-                    .store
-                    .response(lifecycle.client_key, &lifecycle.id)
-                    .await
-                    .ok()
-                    .flatten()
-                    .is_some_and(|response| response.cancel_requested)
-            {
-                let _ = guard.complete("cancelled", 0, 0, 0).await;
-                return error(StatusCode::CONFLICT, "response was cancelled");
-            }
-            if attempts_used >= snapshot.max_attempts {
-                break 'candidates;
-            }
-            let (key_id, secret) = {
-                let health = state.key_health.lock().await;
-                match state
-                    .store
-                    .upstream_key_for_attempt(
-                        provider.id,
-                        health.next.get(&provider.id).copied().unwrap_or(0),
-                        &health.cooldowns,
-                        &state.keys,
-                    )
-                    .await
-                {
-                    Ok(Some(key)) => key,
-                    _ => continue 'candidates,
-                }
-            };
-            attempts_used += 1;
-            state
-                .key_health
-                .lock()
-                .await
-                .next
-                .insert(provider.id, key_id as usize + 1);
-            let attempt_started = Instant::now();
-            let response = match call(&state.http, provider, &secret, &request, model).await {
-                Ok(response) => response,
-                Err(message) => {
-                    state
-                        .key_health
-                        .lock()
+        let protocols = candidate_protocols(provider, &inbound);
+        'legs: for (leg, protocol) in protocols.iter().enumerate() {
+            let last_leg = leg + 1 == protocols.len();
+            let endpoint = crate::relay::endpoint_label(*protocol);
+            // Auth failures rotate keys within this leg only, bounded by the
+            // number of keys so a fully unauthorized provider still reaches
+            // the other endpoint and later candidates. Each leg restarts at
+            // the provider's first key.
+            let mut key_attempts = 0usize;
+            let key_count = provider.key_count.max(0) as usize;
+            loop {
+                if let Some(lifecycle) = &response_state
+                    && state
+                        .store
+                        .response(lifecycle.client_key, &lifecycle.id)
                         .await
-                        .cooldowns
-                        .insert(key_id, chrono::Utc::now() + chrono::Duration::seconds(60));
+                        .ok()
+                        .flatten()
+                        .is_some_and(|response| response.cancel_requested)
+                {
+                    let _ = guard.complete("cancelled", 0, 0, 0).await;
+                    return error(StatusCode::CONFLICT, "response was cancelled");
+                }
+                if attempts_used >= snapshot.max_attempts {
+                    break 'candidates;
+                }
+                let (key_id, secret) = {
+                    let health = state.key_health.lock().await;
+                    match state
+                        .store
+                        .upstream_key_for_attempt(
+                            provider.id,
+                            key_attempts,
+                            &health.cooldowns,
+                            &state.keys,
+                        )
+                        .await
+                    {
+                        Ok(Some(key)) => key,
+                        _ => continue 'candidates,
+                    }
+                };
+                attempts_used += 1;
+                let attempt_started = Instant::now();
+                let response =
+                    match call(&state.http, provider, &secret, &request, model, *protocol).await {
+                        Ok(response) => response,
+                        Err(message) => {
+                            state
+                                .key_health
+                                .lock()
+                                .await
+                                .cooldowns
+                                .insert(key_id, chrono::Utc::now() + chrono::Duration::seconds(60));
+                            if let Some(response) = record_attempt(
+                                &state,
+                                crate::observability::NewAttempt {
+                                    request_id: &request_id,
+                                    provider_id: Some(provider.id),
+                                    provider_key_id: Some(key_id),
+                                    model,
+                                    status: "retry",
+                                    error: Some(&format!("{message} ({endpoint})")),
+                                    input_tokens: 0,
+                                    output_tokens: 0,
+                                    latency_ms: attempt_started.elapsed().as_millis() as i64,
+                                },
+                            )
+                            .await
+                            {
+                                return response;
+                            }
+                            if last_leg {
+                                continue 'candidates;
+                            }
+                            continue 'legs;
+                        }
+                    };
+                if !response.status().is_success() {
+                    let status = response.status();
+                    let retry = status == StatusCode::TOO_MANY_REQUESTS
+                        || status == StatusCode::REQUEST_TIMEOUT
+                        || matches!(status.as_u16(), 500 | 502 | 503 | 504)
+                        || status == StatusCode::UNAUTHORIZED
+                        || status == StatusCode::FORBIDDEN;
+                    let endpoint_unsupported = matches!(status.as_u16(), 404 | 405 | 501);
                     if let Some(response) = record_attempt(
                         &state,
                         crate::observability::NewAttempt {
@@ -592,8 +643,12 @@ pub async fn relay(
                             provider_id: Some(provider.id),
                             provider_key_id: Some(key_id),
                             model,
-                            status: "retry",
-                            error: Some(&message),
+                            status: if retry || !last_leg || endpoint_unsupported {
+                                "retry"
+                            } else {
+                                "failed"
+                            },
+                            error: Some(&format!("upstream HTTP {status} ({endpoint})")),
                             input_tokens: 0,
                             output_tokens: 0,
                             latency_ms: attempt_started.elapsed().as_millis() as i64,
@@ -603,16 +658,112 @@ pub async fn relay(
                     {
                         return response;
                     }
-                    continue 'candidates;
+                    if retry {
+                        if status == StatusCode::TOO_MANY_REQUESTS {
+                            state
+                                .key_health
+                                .lock()
+                                .await
+                                .cooldowns
+                                .insert(key_id, chrono::Utc::now() + chrono::Duration::seconds(60));
+                            let delay = response
+                                .headers()
+                                .get("retry-after")
+                                .and_then(|value| value.to_str().ok())
+                                .and_then(|value| value.parse::<u64>().ok())
+                                .unwrap_or(0)
+                                .min(5);
+                            if delay > 0 {
+                                tokio::time::sleep(std::time::Duration::from_secs(delay)).await;
+                            }
+                        }
+                        if status == StatusCode::UNAUTHORIZED || status == StatusCode::FORBIDDEN {
+                            key_attempts += 1;
+                            if key_count > 0 && key_attempts < key_count {
+                                continue;
+                            }
+                            if !last_leg {
+                                continue 'legs;
+                            }
+                            continue 'candidates;
+                        }
+                        if last_leg {
+                            continue 'candidates;
+                        }
+                        continue 'legs;
+                    }
+                    // An unsupported endpoint often surfaces as 404/405/501; try
+                    // the other leg, then later candidates, before failing terminally.
+                    if !last_leg {
+                        continue 'legs;
+                    }
+                    if endpoint_unsupported {
+                        continue 'candidates;
+                    }
+                    let _ = guard.complete("failed", 0, 0, 0).await;
+                    return error(StatusCode::BAD_GATEWAY, "upstream request failed");
                 }
-            };
-            if !response.status().is_success() {
-                let status = response.status();
-                let retry = status == StatusCode::TOO_MANY_REQUESTS
-                    || status == StatusCode::REQUEST_TIMEOUT
-                    || matches!(status.as_u16(), 500 | 502 | 503 | 504)
-                    || status == StatusCode::UNAUTHORIZED
-                    || status == StatusCode::FORBIDDEN;
+                if request.stream {
+                    let start = StreamEvent::Start {
+                        id: request_id.clone(),
+                        model: request.model.clone(),
+                    };
+                    let stream = stream_response(
+                        inbound,
+                        *protocol,
+                        response,
+                        start,
+                        crate::relay::StreamContext {
+                            store: state.store.clone(),
+                            request_id,
+                            provider_id: provider.id,
+                            provider_key_id: key_id,
+                            model: model.clone(),
+                            guard,
+                            started,
+                            response_context,
+                            response_state: response_state
+                                .map(|lifecycle| (lifecycle.client_key, lifecycle.id)),
+                        },
+                    );
+                    return stream;
+                }
+                let value = match response.json().await {
+                    Ok(value) => value,
+                    Err(_) => {
+                        if let Some(response) = record_attempt(
+                            &state,
+                            crate::observability::NewAttempt {
+                                request_id: &request_id,
+                                provider_id: Some(provider.id),
+                                provider_key_id: Some(key_id),
+                                model,
+                                status: "retry",
+                                error: Some(&format!("invalid upstream JSON ({endpoint})")),
+                                input_tokens: 0,
+                                output_tokens: 0,
+                                latency_ms: attempt_started.elapsed().as_millis() as i64,
+                            },
+                        )
+                        .await
+                        {
+                            return response;
+                        }
+                        if !last_leg {
+                            continue 'legs;
+                        }
+                        continue;
+                    }
+                };
+                let decoded: ChatResponse = match decode_response(*protocol, value) {
+                    Ok(response) => response,
+                    Err(_) => {
+                        if !last_leg {
+                            continue 'legs;
+                        }
+                        continue;
+                    }
+                };
                 if let Some(response) = record_attempt(
                     &state,
                     crate::observability::NewAttempt {
@@ -620,10 +771,10 @@ pub async fn relay(
                         provider_id: Some(provider.id),
                         provider_key_id: Some(key_id),
                         model,
-                        status: if retry { "retry" } else { "failed" },
-                        error: Some(&format!("upstream HTTP {status}")),
-                        input_tokens: 0,
-                        output_tokens: 0,
+                        status: "success",
+                        error: None,
+                        input_tokens: decoded.input_tokens,
+                        output_tokens: decoded.output_tokens,
                         latency_ms: attempt_started.elapsed().as_millis() as i64,
                     },
                 )
@@ -631,132 +782,35 @@ pub async fn relay(
                 {
                     return response;
                 }
-                if retry {
-                    if status == StatusCode::TOO_MANY_REQUESTS {
-                        state
-                            .key_health
-                            .lock()
-                            .await
-                            .cooldowns
-                            .insert(key_id, chrono::Utc::now() + chrono::Duration::seconds(60));
-                        let delay = response
-                            .headers()
-                            .get("retry-after")
-                            .and_then(|value| value.to_str().ok())
-                            .and_then(|value| value.parse::<u64>().ok())
-                            .unwrap_or(0)
-                            .min(5);
-                        if delay > 0 {
-                            tokio::time::sleep(std::time::Duration::from_secs(delay)).await;
-                        }
-                    }
-                    if status != StatusCode::UNAUTHORIZED && status != StatusCode::FORBIDDEN {
-                        continue 'candidates;
-                    }
-                    continue;
-                }
-                let _ = guard.complete("failed", 0, 0, 0).await;
-                return error(StatusCode::BAD_GATEWAY, "upstream request failed");
-            }
-            if request.stream {
-                let start = StreamEvent::Start {
-                    id: request_id.clone(),
-                    model: request.model.clone(),
-                };
-                let stream = stream_response(
-                    inbound,
-                    outbound_protocol(provider),
-                    response,
-                    start,
-                    crate::relay::StreamContext {
-                        store: state.store.clone(),
-                        request_id,
-                        provider_id: provider.id,
-                        provider_key_id: key_id,
-                        model: model.clone(),
-                        guard,
-                        started,
-                        response_context,
-                        response_state: response_state
-                            .map(|lifecycle| (lifecycle.client_key, lifecycle.id)),
-                    },
-                );
-                return stream;
-            }
-            let value = match response.json().await {
-                Ok(value) => value,
-                Err(_) => {
-                    if let Some(response) = record_attempt(
-                        &state,
-                        crate::observability::NewAttempt {
-                            request_id: &request_id,
-                            provider_id: Some(provider.id),
-                            provider_key_id: Some(key_id),
-                            model,
-                            status: "retry",
-                            error: Some("invalid upstream JSON"),
-                            input_tokens: 0,
-                            output_tokens: 0,
-                            latency_ms: attempt_started.elapsed().as_millis() as i64,
-                        },
-                    )
+                let cost = state
+                    .store
+                    .model_cost(model, decoded.input_tokens, decoded.output_tokens)
                     .await
-                    {
-                        return response;
-                    }
-                    continue;
+                    .unwrap_or(0);
+                if guard
+                    .complete("success", decoded.input_tokens, decoded.output_tokens, cost)
+                    .await
+                    .is_err()
+                {
+                    return error(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "request settlement unavailable",
+                    );
                 }
-            };
-            let decoded: ChatResponse = match decode_response(outbound_protocol(provider), value) {
-                Ok(response) => response,
-                Err(_) => continue,
-            };
-            if let Some(response) = record_attempt(
-                &state,
-                crate::observability::NewAttempt {
-                    request_id: &request_id,
-                    provider_id: Some(provider.id),
-                    provider_key_id: Some(key_id),
-                    model,
-                    status: "success",
-                    error: None,
-                    input_tokens: decoded.input_tokens,
-                    output_tokens: decoded.output_tokens,
-                    latency_ms: attempt_started.elapsed().as_millis() as i64,
-                },
-            )
-            .await
-            {
-                return response;
+                return json_response(
+                    inbound,
+                    ChatResponse {
+                        id: request_id.clone(),
+                        ..decoded
+                    },
+                    response_context.as_ref(),
+                    response_state
+                        .as_ref()
+                        .map(|lifecycle| (lifecycle.client_key, lifecycle.id.clone())),
+                    &state,
+                )
+                .await;
             }
-            let cost = state
-                .store
-                .model_cost(model, decoded.input_tokens, decoded.output_tokens)
-                .await
-                .unwrap_or(0);
-            if guard
-                .complete("success", decoded.input_tokens, decoded.output_tokens, cost)
-                .await
-                .is_err()
-            {
-                return error(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "request settlement unavailable",
-                );
-            }
-            return json_response(
-                inbound,
-                ChatResponse {
-                    id: request_id.clone(),
-                    ..decoded
-                },
-                response_context.as_ref(),
-                response_state
-                    .as_ref()
-                    .map(|lifecycle| (lifecycle.client_key, lifecycle.id.clone())),
-                &state,
-            )
-            .await;
         }
     }
     let _ = guard.complete("failed", 0, 0, 0).await;

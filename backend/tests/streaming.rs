@@ -106,9 +106,10 @@ async fn failed_first_candidate_fails_over_and_records_attempts() {
     assert_eq!(requests[0].route.as_deref(), Some("chat"));
     assert_eq!(requests[0].model, "upstream-model");
     let attempts = store.attempts(&requests[0].id).await.unwrap();
-    assert_eq!(attempts.len(), 2);
+    assert_eq!(attempts.len(), 3);
     assert_eq!(attempts[0].status, "retry");
-    assert_eq!(attempts[1].status, "success");
+    assert_eq!(attempts[1].status, "retry");
+    assert_eq!(attempts[2].status, "success");
 }
 #[tokio::test]
 async fn anthropic_stream_is_converted_to_openai_sse() {
@@ -340,7 +341,8 @@ async fn failing_chat_candidate_fails_over_to_responses_only_upstream() {
     assert_eq!(requests[0].route.as_deref(), Some("chat"));
     assert_eq!(requests[0].model, "upstream-model");
     let attempts = store.attempts(&requests[0].id).await.unwrap();
-    assert_eq!(attempts.len(), 2);
+    assert_eq!(attempts.len(), 3);
     assert_eq!(attempts[0].status, "retry");
-    assert_eq!(attempts[1].status, "success");
+    assert_eq!(attempts[1].status, "retry");
+    assert_eq!(attempts[2].status, "success");
 }
