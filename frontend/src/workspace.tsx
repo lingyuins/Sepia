@@ -129,12 +129,13 @@ export const providerModels: Record<string, string[]> = {
   'OpenAI Compatible': ['default'],
 }
 
-export const protocolTypes = ['openai', 'anthropic', 'gemini'] as const
+export const protocolTypes = ['openai', 'anthropic', 'gemini', 'openai-responses'] as const
 export type ProtocolType = typeof protocolTypes[number]
-export const protocolLabels: Record<ProtocolType, string> = { openai: 'OpenAI 兼容', anthropic: 'Anthropic 兼容', gemini: 'Gemini 兼容' }
+export const protocolLabels: Record<ProtocolType, string> = { openai: 'OpenAI 兼容', anthropic: 'Anthropic 兼容', gemini: 'Gemini 兼容', 'openai-responses': 'OpenAI Responses' }
 export function protocolOf(provider: Pick<Provider, 'type'>): ProtocolType {
   if (provider.type === 'anthropic' || provider.type === 'Anthropic') return 'anthropic'
   if (provider.type === 'gemini' || provider.type === 'Google AI') return 'gemini'
+  if (provider.type === 'openai-responses') return 'openai-responses'
   return 'openai'
 }
 export function protocolModels(type: ProtocolType) {

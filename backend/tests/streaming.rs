@@ -186,3 +186,161 @@ async fn assert_anthropic_stream_is_converted_to_openai_sse(line_ending: &str) {
     assert_eq!(requests[0].model, "upstream-model");
     assert_eq!(requests[0].route.as_deref(), Some("chat"));
 }
+
+#[tokio::test]
+async fn responses_stream_is_converted_to_openai_sse() {
+    let wire = concat!(
+        "event: response.created\ndata: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_1\",\"model\":\"upstream-model\",\"status\":\"in_progress\"}}\n\n",
+        "event: response.output_text.delta\ndata: {\"type\":\"response.output_text.delta\",\"output_index\":0,\"delta\":\"stream\"}\n\n",
+        "event: response.output_text.delta\ndata: {\"type\":\"response.output_text.delta\",\"output_index\":0,\"delta\":\"ed\"}\n\n",
+        "event: response.output_text.done\ndata: {\"type\":\"response.output_text.done\",\"output_index\":0,\"text\":\"streamed\"}\n\n",
+        "event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_1\",\"model\":\"upstream-model\",\"status\":\"completed\",\"output\":[],\"usage\":{\"input_tokens\":2,\"output_tokens\":1}}}\n\n"
+    );
+    let upstream = serve(Router::new().fallback(post(move || async move {
+        axum::response::Response::builder()
+            .header("content-type", "text/event-stream")
+            .body(axum::body::Body::from(wire))
+            .unwrap()
+    })))
+    .await;
+    let directory = tempfile::tempdir().unwrap();
+    let store = Store::connect(&directory.path().join("responses-stream.db"))
+        .await
+        .unwrap();
+    let provider = provider(
+        &store,
+        "responses-stream",
+        ProviderProtocol::OpenAIResponses,
+        upstream,
+    )
+    .await;
+    store
+        .create_route(NewRoute {
+            slug: "chat".into(),
+            name: "chat".into(),
+            description: String::new(),
+            patterns: vec!["chat".into()],
+            provider_id: provider,
+            model: "upstream-model".into(),
+            is_default: true,
+            list_members: true,
+            candidates: vec![],
+        })
+        .await
+        .unwrap();
+    let key = store
+        .create_client_key(UpsertClientKey {
+            name: "test".into(),
+            models: vec!["*".into()],
+            token_limit: 0,
+            max_amount_micros: 0,
+            rpm: 0,
+            tpm: 0,
+            expires_at: None,
+        })
+        .await
+        .unwrap()
+        .plaintext;
+    let address = serve(app(AppState::for_testing(store.clone()).await)).await;
+    let response = reqwest::Client::new()
+        .post(format!("http://{address}/v1/chat/completions"))
+        .bearer_auth(&key)
+        .json(&json!({"model":"chat","messages":[{"role":"user","content":"Hello"}],"stream":true}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 200);
+    let text = response.text().await.unwrap();
+    let streamed: String = text
+        .lines()
+        .filter_map(|line| line.strip_prefix("data: "))
+        .filter_map(|data| serde_json::from_str::<serde_json::Value>(data).ok())
+        .filter_map(|value| {
+            value["choices"][0]["delta"]["content"]
+                .as_str()
+                .map(str::to_owned)
+        })
+        .collect();
+    assert_eq!(streamed, "streamed", "{text}");
+    assert!(text.contains("\"prompt_tokens\":2"), "{text}");
+    assert!(text.ends_with("data: [DONE]\n\n"), "{text}");
+    let requests = store.requests().await.unwrap();
+    assert_eq!(requests[0].status, "success");
+    assert_eq!(requests[0].model, "upstream-model");
+    assert_eq!(requests[0].route.as_deref(), Some("chat"));
+}
+
+#[tokio::test]
+async fn failing_chat_candidate_fails_over_to_responses_only_upstream() {
+    let failed = serve(Router::new().fallback(post(|| async {
+        axum::http::StatusCode::SERVICE_UNAVAILABLE
+    })))
+    .await;
+    let success = serve(Router::new().fallback(post(|| async {
+        axum::Json(json!({"id":"resp_1","object":"response","status":"completed","model":"upstream-model","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"recovered"}]}],"usage":{"input_tokens":2,"output_tokens":1}}))
+    })))
+    .await;
+    let directory = tempfile::tempdir().unwrap();
+    let store = Store::connect(&directory.path().join("responses-failover.db"))
+        .await
+        .unwrap();
+    let first = provider(&store, "failing-chat", ProviderProtocol::OpenAI, failed).await;
+    let second = provider(
+        &store,
+        "responses-only",
+        ProviderProtocol::OpenAIResponses,
+        success,
+    )
+    .await;
+    store
+        .create_route(NewRoute {
+            slug: "chat".into(),
+            name: "chat".into(),
+            description: String::new(),
+            patterns: vec!["chat".into()],
+            provider_id: first,
+            model: "upstream-model".into(),
+            is_default: true,
+            list_members: true,
+            candidates: vec![
+                (first, "upstream-model".into()),
+                (second, "upstream-model".into()),
+            ],
+        })
+        .await
+        .unwrap();
+    let key = store
+        .create_client_key(UpsertClientKey {
+            name: "test".into(),
+            models: vec!["*".into()],
+            token_limit: 0,
+            max_amount_micros: 0,
+            rpm: 0,
+            tpm: 0,
+            expires_at: None,
+        })
+        .await
+        .unwrap()
+        .plaintext;
+    let address = serve(app(AppState::for_testing(store.clone()).await)).await;
+    let response = reqwest::Client::new()
+        .post(format!("http://{address}/v1/chat/completions"))
+        .bearer_auth(&key)
+        .json(&json!({"model":"chat","messages":[{"role":"user","content":"Hello"}]}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 200);
+    assert_eq!(
+        response.json::<serde_json::Value>().await.unwrap()["choices"][0]["message"]["content"],
+        "recovered"
+    );
+    let requests = store.requests().await.unwrap();
+    assert_eq!(requests[0].status, "success");
+    assert_eq!(requests[0].route.as_deref(), Some("chat"));
+    assert_eq!(requests[0].model, "upstream-model");
+    let attempts = store.attempts(&requests[0].id).await.unwrap();
+    assert_eq!(attempts.len(), 2);
+    assert_eq!(attempts[0].status, "retry");
+    assert_eq!(attempts[1].status, "success");
+}

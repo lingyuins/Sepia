@@ -1,6 +1,6 @@
 import type { KeyPolicy } from './key-policy'
 import type { Provider, RequestRecord, RouteRule } from './workspace'
-type ProviderProtocol = 'openai' | 'anthropic' | 'gemini'
+type ProviderProtocol = 'openai' | 'anthropic' | 'gemini' | 'openai-responses'
 
 export type ApiProvider = { id: number; name: string; protocol: ProviderProtocol; endpoint: string; models: string[]; key_count: number; enabled: boolean; group_id: string }
 export type ApiRoute = { id: number; slug: string; name: string; description: string; patterns: string[]; is_default: boolean; list_members: boolean; enabled: boolean; candidates: [number, string][] }

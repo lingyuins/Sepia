@@ -1,12 +1,17 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Protocol {
+    #[default]
     OpenAI,
     Anthropic,
     Gemini,
+    /// Outbound-only: relays to an upstream Responses API. Inbound Responses
+    /// requests are normalized by `crate::responses` before entering the relay.
+    #[serde(rename = "openai-responses")]
+    OpenAIResponses,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

@@ -29,6 +29,7 @@ impl Store {
             "openai" => Ok(ProviderProtocol::OpenAI),
             "anthropic" => Ok(ProviderProtocol::Anthropic),
             "gemini" => Ok(ProviderProtocol::Gemini),
+            "openai-responses" => Ok(ProviderProtocol::OpenAIResponses),
             _ => Err("unknown protocol".into()),
         }
     }

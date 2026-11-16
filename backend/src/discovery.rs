@@ -11,14 +11,14 @@ pub async fn discover_models(
         "{}/{}",
         provider.endpoint.trim_end_matches('/'),
         match protocol {
-            Protocol::OpenAI => "models",
+            Protocol::OpenAI | Protocol::OpenAIResponses => "models",
             Protocol::Anthropic => "v1/models",
             Protocol::Gemini => "models",
         }
     );
     let request = client.get(url);
     let request = match protocol {
-        Protocol::OpenAI => request.bearer_auth(secret),
+        Protocol::OpenAI | Protocol::OpenAIResponses => request.bearer_auth(secret),
         Protocol::Anthropic => request
             .header("x-api-key", secret)
             .header("anthropic-version", "2023-06-01"),

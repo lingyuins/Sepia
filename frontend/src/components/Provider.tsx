@@ -132,6 +132,7 @@ export function ProviderDialog({ open, onClose, onSave, onDelete, onTest, provid
     { value: 'openai', label: t('openaiCompatible'), description: t('openaiProtocolHint'), badge: 'OpenAI' },
     { value: 'anthropic', label: t('anthropicCompatible'), description: t('anthropicProtocolHint'), badge: 'Claude' },
     { value: 'gemini', label: t('geminiCompatible'), description: t('geminiProtocolHint'), badge: 'Gemini' },
+    { value: 'openai-responses', label: t('openaiResponsesCompatible'), description: t('openaiResponsesProtocolHint'), badge: 'Responses' },
   ]
   return <>{!groupOpen && !modelSettingsOpen && <Modal open={open} onClose={onClose} title={provider ? t('manageProvider', { name: provider.name }) : t('connectProviderTitle')} description={t('providerDialogSubtitle')} size="channel-dialog">
     <form onSubmit={submit}>

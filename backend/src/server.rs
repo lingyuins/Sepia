@@ -125,7 +125,7 @@ pub fn extract_credential(
 }
 fn credential(headers: &HeaderMap, protocol: Protocol) -> Option<String> {
     match protocol {
-        Protocol::OpenAI => headers
+        Protocol::OpenAI | Protocol::OpenAIResponses => headers
             .get("authorization")?
             .to_str()
             .ok()?
@@ -364,7 +364,7 @@ pub async fn relay(
         InboundProtocol::OpenAIResponses => Protocol::OpenAI,
     };
     let protocol_credential = match protocol {
-        Protocol::OpenAI => ProtocolCredential::OpenAI,
+        Protocol::OpenAI | Protocol::OpenAIResponses => ProtocolCredential::OpenAI,
         Protocol::Anthropic => ProtocolCredential::Anthropic,
         Protocol::Gemini => ProtocolCredential::Gemini,
     };
@@ -397,6 +397,7 @@ pub async fn relay(
                 client.id,
                 match protocol {
                     Protocol::OpenAI => ProviderProtocol::OpenAI,
+                    Protocol::OpenAIResponses => ProviderProtocol::OpenAIResponses,
                     Protocol::Anthropic => ProviderProtocol::Anthropic,
                     Protocol::Gemini => ProviderProtocol::Gemini,
                 },
@@ -410,6 +411,7 @@ pub async fn relay(
                 client.id,
                 match protocol {
                     Protocol::OpenAI => ProviderProtocol::OpenAI,
+                    Protocol::OpenAIResponses => ProviderProtocol::OpenAIResponses,
                     Protocol::Anthropic => ProviderProtocol::Anthropic,
                     Protocol::Gemini => ProviderProtocol::Gemini,
                 },

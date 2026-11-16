@@ -43,6 +43,8 @@ async fn upstream(
         json!({"id":"msg_test","model":model,"role":"assistant","content":[{"type":"text","text":"Hello from Sepia"}],"stop_reason":"end_turn","usage":{"input_tokens":4,"output_tokens":3}})
     } else if path.contains("generateContent") {
         json!({"candidates":[{"content":{"role":"model","parts":[{"text":"Hello from Sepia"}]},"finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":4,"candidatesTokenCount":3}})
+    } else if path.ends_with("/responses") {
+        json!({"id":"resp_test","object":"response","status":"completed","model":model,"output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Hello from Sepia"}]}],"usage":{"input_tokens":4,"output_tokens":3}})
     } else {
         json!({"id":"chat_test","model":model,"choices":[{"index":0,"message":{"role":"assistant","content":"Hello from Sepia"},"finish_reason":"stop"}],"usage":{"prompt_tokens":4,"completion_tokens":3}})
     })
@@ -115,10 +117,11 @@ async fn all_native_protocols_relay_to_all_provider_protocols() {
         .await
         .unwrap();
     let keys = KeyStore::testing();
-    for protocol in ["openai", "anthropic", "gemini"] {
+    for protocol in ["openai", "anthropic", "gemini", "openai-responses"] {
         let protocol = match protocol {
             "anthropic" => sepia_gateway::ProviderProtocol::Anthropic,
             "gemini" => sepia_gateway::ProviderProtocol::Gemini,
+            "openai-responses" => sepia_gateway::ProviderProtocol::OpenAIResponses,
             _ => sepia_gateway::ProviderProtocol::OpenAI,
         };
         let base = if protocol == sepia_gateway::ProviderProtocol::Gemini {
@@ -181,7 +184,7 @@ async fn all_native_protocols_relay_to_all_provider_protocols() {
         .into_future(),
     );
     for inbound in ["openai", "anthropic", "gemini", "gemini-stable"] {
-        for outbound in 0..3 {
+        for outbound in 0..4 {
             let response = request(address, inbound, &format!("example-{outbound}"), &key).await;
             match inbound {
                 "anthropic" => assert_eq!(response["content"][0]["text"], "Hello from Sepia"),
@@ -197,7 +200,7 @@ async fn all_native_protocols_relay_to_all_provider_protocols() {
         }
     }
     let calls = captured.0.lock().unwrap();
-    assert_eq!(calls.len(), 12);
+    assert_eq!(calls.len(), 16);
     assert!(
         calls
             .iter()
@@ -217,5 +220,19 @@ async fn all_native_protocols_relay_to_all_provider_protocols() {
         calls
             .iter()
             .any(|(path, _, _)| path.ends_with(":generateContent"))
+    );
+    assert!(
+        calls
+            .iter()
+            .filter(|(path, _, _)| path.ends_with("/responses"))
+            .count()
+            == 4
+    );
+    assert!(
+        calls
+            .iter()
+            .any(|(path, _, body)| path.ends_with("/responses")
+                && body["store"] == false
+                && body["input"][0]["content"][0]["text"] == "Hello")
     );
 }

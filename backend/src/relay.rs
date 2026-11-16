@@ -1,7 +1,7 @@
 use crate::{
     Provider, Store,
     protocol::{
-        ChatRequest, ChatResponse, Protocol, StreamEvent, decode_sse, encode_request,
+        ChatRequest, ChatResponse, Protocol, SseDecoder, StreamEvent, encode_request,
         encode_response, encode_sse,
     },
 };
@@ -25,6 +25,7 @@ pub fn outbound_protocol(provider: &Provider) -> Protocol {
         crate::ProviderProtocol::OpenAI => Protocol::OpenAI,
         crate::ProviderProtocol::Anthropic => Protocol::Anthropic,
         crate::ProviderProtocol::Gemini => Protocol::Gemini,
+        crate::ProviderProtocol::OpenAIResponses => Protocol::OpenAIResponses,
     }
 }
 pub fn upstream_url(provider: &Provider, model: &str, stream: bool) -> String {
@@ -40,6 +41,7 @@ pub fn upstream_url(provider: &Provider, model: &str, stream: bool) -> String {
                 "generateContent"
             }
         ),
+        Protocol::OpenAIResponses => "responses".into(),
     };
     format!("{}/{path}", provider.endpoint.trim_end_matches('/'))
 }
@@ -56,7 +58,7 @@ pub async fn call(
         .post(upstream_url(provider, model, request.stream))
         .json(&body);
     let outgoing = match protocol {
-        Protocol::OpenAI => outgoing.bearer_auth(secret),
+        Protocol::OpenAI | Protocol::OpenAIResponses => outgoing.bearer_auth(secret),
         Protocol::Anthropic => outgoing
             .header("x-api-key", secret)
             .header("anthropic-version", "2023-06-01"),
@@ -190,6 +192,7 @@ pub fn stream_response(
         let mut terminal = None;
         let mut usage = (0, 0);
         let mut failed = false;
+        let mut decoder = SseDecoder::new(outbound);
         loop {
             let chunk = match tokio::time::timeout(std::time::Duration::from_secs(60), bytes.next()).await {
                 Ok(Some(chunk)) => chunk,
@@ -203,7 +206,7 @@ pub fn stream_response(
                 let end = start + index;
                 let frame = String::from_utf8_lossy(&buffer[start..end]).replace("\r\n", "\n");
                 start = end + separator_length;
-                match decode_sse(outbound, &frame) {
+                match decoder.decode(&frame) {
                     Ok(decoded) => {
                         let events: Vec<_> = decoded.into_iter().filter(|event| !matches!(event, StreamEvent::Start { .. })).collect();
                         let (stops, events): (Vec<_>, Vec<_>) = events.into_iter().partition(|event| matches!(event, StreamEvent::Stop(_)));

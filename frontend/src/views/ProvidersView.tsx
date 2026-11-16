@@ -9,7 +9,7 @@ import { Dropdown } from '../components/Dropdown'
 export function ProvidersView() {
   const { providers, notify, routes, channelGroups, run } = useWorkspace()
   const groupLabel = (id: string) => id === 'official' ? t('officialChannels') : id === 'free' ? t('freeChannels') : id === 'team' ? t('teamChannels') : channelGroups.find((item) => item.id === id)?.name || t('noGroup')
-  const protocolLabel = (type: string) => type === 'anthropic' ? t('anthropicCompatible') : type === 'gemini' ? t('geminiCompatible') : t('openaiCompatible')
+  const protocolLabel = (type: string) => type === 'anthropic' ? t('anthropicCompatible') : type === 'gemini' ? t('geminiCompatible') : type === 'openai-responses' ? t('openaiResponsesCompatible') : t('openaiCompatible')
   const t = useTranslation()
   const [editing, setEditing] = useState<Provider | null>(null)
   const [dialogOpen, setDialogOpen] = useState(false)

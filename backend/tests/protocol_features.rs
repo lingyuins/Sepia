@@ -36,6 +36,7 @@ fn function_tools_and_media_survive_every_provider_mapping() {
                     {"role":"user","parts":[{"functionResponse":{"name":"weather","response":{"result":"sunny"},"id":"call_weather"}}]}
                 ],"tools":[{"functionDeclarations":[{"name":"weather","description":"Read weather","parameters":{"type":"object","properties":{"city":{"type":"string"}},"required":["city"]}}]}],"toolConfig":{"functionCallingConfig":{"mode":"AUTO"}},"generationConfig":{"maxOutputTokens":128}
             }),
+            Protocol::OpenAIResponses => panic!("outbound-only protocol has no inbound request"),
         };
         let request = decode_request(inbound, input, Some("alias")).unwrap();
         assert_eq!(request.messages.len(), 3, "{inbound:?}");
@@ -46,8 +47,33 @@ fn function_tools_and_media_survive_every_provider_mapping() {
             request.messages[0].content[1],
             ContentBlock::Image { .. }
         ));
-        for outbound in [Protocol::OpenAI, Protocol::Anthropic, Protocol::Gemini] {
+        for outbound in [
+            Protocol::OpenAI,
+            Protocol::Anthropic,
+            Protocol::Gemini,
+            Protocol::OpenAIResponses,
+        ] {
             let wire = encode_request(outbound, &request, "upstream").unwrap();
+            if outbound == Protocol::OpenAIResponses {
+                assert_eq!(wire["input"][0]["type"], "message");
+                assert_eq!(wire["input"][0]["content"][0]["type"], "input_text");
+                assert_eq!(wire["input"][0]["content"][1]["type"], "input_image");
+                assert_eq!(
+                    wire["input"][0]["content"][1]["image_url"],
+                    "data:image/png;base64,aGVsbG8="
+                );
+                assert_eq!(wire["input"][1]["type"], "function_call");
+                assert_eq!(wire["input"][1]["call_id"], "call_weather");
+                assert_eq!(wire["input"][1]["arguments"], "{\"city\":\"Paris\"}");
+                assert_eq!(wire["input"][2]["type"], "function_call_output");
+                assert_eq!(wire["input"][2]["call_id"], "call_weather");
+                assert_eq!(wire["input"][2]["output"], "sunny");
+                assert_eq!(wire["tools"][0]["type"], "function");
+                assert_eq!(wire["tools"][0]["name"], "weather");
+                assert_eq!(wire["tools"][0]["parameters"]["required"][0], "city");
+                assert_eq!(wire["max_output_tokens"], 128);
+                continue;
+            }
             let reparsed = decode_request(outbound, wire.clone(), Some("upstream")).unwrap();
             let normalize = |messages: &[sepia_gateway::protocol::Message]| {
                 messages
@@ -87,7 +113,12 @@ fn function_tools_and_media_survive_every_provider_mapping() {
 
 #[test]
 fn function_call_json_and_streaming_preserve_ids_arguments_and_finish_reason() {
-    for protocol in [Protocol::OpenAI, Protocol::Anthropic, Protocol::Gemini] {
+    for protocol in [
+        Protocol::OpenAI,
+        Protocol::Anthropic,
+        Protocol::Gemini,
+        Protocol::OpenAIResponses,
+    ] {
         let response = match protocol {
             Protocol::OpenAI => {
                 json!({"id":"chat_1","model":"upstream","choices":[{"index":0,"message":{"role":"assistant","content":null,"tool_calls":[{"id":"call_weather","type":"function","function":{"name":"weather","arguments":"{\"city\":\"Paris\"}"}}]},"finish_reason":"tool_calls"}],"usage":{"prompt_tokens":4,"completion_tokens":2}})
@@ -97,6 +128,9 @@ fn function_call_json_and_streaming_preserve_ids_arguments_and_finish_reason() {
             }
             Protocol::Gemini => {
                 json!({"candidates":[{"content":{"role":"model","parts":[{"functionCall":{"name":"weather","args":{"city":"Paris"},"id":"call_weather"}}]},"finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":4,"candidatesTokenCount":2}})
+            }
+            Protocol::OpenAIResponses => {
+                json!({"id":"resp_1","object":"response","status":"completed","model":"upstream","output":[{"type":"function_call","call_id":"call_weather","name":"weather","arguments":"{\"city\":\"Paris\"}"}],"usage":{"input_tokens":4,"output_tokens":2}})
             }
         };
         let decoded = decode_response(protocol, response).unwrap();

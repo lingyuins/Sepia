@@ -16,6 +16,8 @@ pub enum ProviderProtocol {
     OpenAI,
     Anthropic,
     Gemini,
+    #[serde(rename = "openai-responses")]
+    OpenAIResponses,
 }
 impl ProviderProtocol {
     pub fn as_str(self) -> &'static str {
@@ -23,6 +25,7 @@ impl ProviderProtocol {
             Self::OpenAI => "openai",
             Self::Anthropic => "anthropic",
             Self::Gemini => "gemini",
+            Self::OpenAIResponses => "openai-responses",
         }
     }
     fn parse(value: &str) -> Result<Self, String> {
@@ -30,6 +33,7 @@ impl ProviderProtocol {
             "openai" => Ok(Self::OpenAI),
             "anthropic" => Ok(Self::Anthropic),
             "gemini" => Ok(Self::Gemini),
+            "openai-responses" => Ok(Self::OpenAIResponses),
             _ => Err("unknown provider protocol".into()),
         }
     }

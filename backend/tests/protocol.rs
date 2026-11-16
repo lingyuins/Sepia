@@ -15,6 +15,7 @@ fn request(protocol: Protocol) -> Value {
         Protocol::Gemini => {
             json!({"systemInstruction":{"parts":[{"text":"Be concise"}]},"contents":[{"role":"user","parts":[{"text":"Hello"}]}],"generationConfig":{"maxOutputTokens":64,"temperature":0.2}})
         }
+        Protocol::OpenAIResponses => panic!("outbound-only protocol has no inbound request"),
     }
 }
 
@@ -28,6 +29,9 @@ fn response(protocol: Protocol) -> Value {
         }
         Protocol::Gemini => {
             json!({"candidates":[{"content":{"role":"model","parts":[{"text":"Hi"}]},"finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":3,"candidatesTokenCount":1}})
+        }
+        Protocol::OpenAIResponses => {
+            json!({"id":"upstream-id","object":"response","status":"completed","model":"example","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Hi"}]}],"usage":{"input_tokens":3,"output_tokens":1}})
         }
     }
 }
@@ -96,8 +100,69 @@ fn stream_events_round_trip_with_native_event_names_and_done_markers() {
             Protocol::OpenAI => assert!(wire.contains("data: [DONE]\n\n")),
             Protocol::Anthropic => assert!(wire.contains("event: message_stop\n")),
             Protocol::Gemini => assert!(wire.contains("\"candidates\"")),
+            Protocol::OpenAIResponses => unreachable!("not part of this loop"),
         }
     }
+}
+
+#[test]
+fn responses_provider_encodes_chat_requests_and_decodes_completed_responses() {
+    let decoded =
+        decode_request(Protocol::OpenAI, request(Protocol::OpenAI), Some("alias")).unwrap();
+    let wire = encode_request(Protocol::OpenAIResponses, &decoded, "example").unwrap();
+    assert_eq!(wire["model"], "example");
+    assert_eq!(wire["instructions"], "Be concise");
+    assert_eq!(wire["max_output_tokens"], 64);
+    assert_eq!(wire["store"], false);
+    assert_eq!(wire["input"][0]["role"], "user");
+    assert_eq!(wire["input"][0]["content"][0]["type"], "input_text");
+    assert_eq!(wire["input"][0]["content"][0]["text"], "Hello");
+    let reply = decode_response(
+        Protocol::OpenAIResponses,
+        response(Protocol::OpenAIResponses),
+    )
+    .unwrap();
+    assert_eq!(reply.text, "Hi");
+    assert_eq!(reply.input_tokens, 3);
+    assert_eq!(reply.output_tokens, 1);
+    assert_eq!(reply.finish_reason, FinishReason::Stop);
+    assert_eq!(
+        encode_response(Protocol::OpenAI, &reply)["choices"][0]["message"]["content"],
+        "Hi"
+    );
+    assert!(decode_request(Protocol::OpenAIResponses, wire.clone(), None).is_err());
+    assert!(
+        decode_response(
+            Protocol::OpenAIResponses,
+            json!({"id":"resp_1","status":"in_progress","output":[]})
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn responses_stream_events_decode_to_shared_events() {
+    let wire = concat!(
+        "event: response.created\ndata: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_1\",\"model\":\"example\",\"status\":\"in_progress\"}}\n\n",
+        "event: response.output_text.delta\ndata: {\"type\":\"response.output_text.delta\",\"output_index\":0,\"delta\":\"Hello\"}\n\n",
+        "event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_1\",\"model\":\"example\",\"status\":\"completed\",\"output\":[],\"usage\":{\"input_tokens\":2,\"output_tokens\":1}}}\n\n"
+    );
+    let decoded = decode_sse(Protocol::OpenAIResponses, wire).unwrap();
+    assert_eq!(
+        decoded,
+        vec![
+            StreamEvent::Start {
+                id: "resp_1".into(),
+                model: "example".into()
+            },
+            StreamEvent::Delta("Hello".into()),
+            StreamEvent::Usage {
+                input_tokens: 2,
+                output_tokens: 1
+            },
+            StreamEvent::Stop(FinishReason::Stop),
+        ]
+    );
 }
 
 #[test]
