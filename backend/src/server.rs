@@ -76,6 +76,7 @@ pub fn app(state: AppState) -> Router {
         .route("/v1/chat/completions", post(openai))
         .route("/v1/responses", post(openai_responses))
         .merge(crate::response_api::router())
+        .merge(crate::auxiliary::router())
         .route("/v1beta/models", get(gemini_models))
         .route("/v1/messages", post(anthropic))
         .route("/v1beta/models/{*path}", post(gemini))
@@ -153,7 +154,10 @@ fn credential(headers: &HeaderMap, protocol: Protocol) -> Option<String> {
             .map(str::to_owned),
     }
 }
-fn route_for_model<'a>(routes: &'a [crate::Route], model: &str) -> Option<&'a crate::Route> {
+pub(crate) fn route_for_model<'a>(
+    routes: &'a [crate::Route],
+    model: &str,
+) -> Option<&'a crate::Route> {
     routes
         .iter()
         .find(|route| route.slug == model)
@@ -172,7 +176,11 @@ fn route_for_model<'a>(routes: &'a [crate::Route], model: &str) -> Option<&'a cr
         })
         .or_else(|| routes.iter().find(|route| route.is_default))
 }
-fn model_allowed(client: &crate::ClientKey, routes: &[crate::Route], model: &str) -> bool {
+pub(crate) fn model_allowed(
+    client: &crate::ClientKey,
+    routes: &[crate::Route],
+    model: &str,
+) -> bool {
     if client.models.iter().any(|pattern| glob(pattern, model)) {
         return true;
     }

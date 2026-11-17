@@ -1,5 +1,6 @@
 pub mod admin;
 pub mod attempts;
+pub mod auxiliary;
 pub mod bootstrap;
 pub mod controls;
 pub mod crypto;

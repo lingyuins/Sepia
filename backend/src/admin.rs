@@ -54,13 +54,6 @@ pub struct ProviderPreviewInput {
     secrets: Vec<String>,
 }
 #[derive(Deserialize)]
-pub struct ProviderProbePreviewInput {
-    protocol: crate::ProviderProtocol,
-    endpoint: String,
-    secret: String,
-    model: String,
-}
-#[derive(Deserialize)]
 pub struct KeyModelsInput {
     secret: String,
     models: Vec<String>,
@@ -90,15 +83,6 @@ pub struct RouteInput {
     list_members: bool,
     #[serde(default = "default_true")]
     enabled: bool,
-}
-#[derive(Deserialize, Default)]
-pub struct ProviderProbeInput {
-    protocol: Option<crate::ProviderProtocol>,
-    endpoint: Option<String>,
-    secret: Option<String>,
-    #[serde(default)]
-    key_index: Option<usize>,
-    model: Option<String>,
 }
 #[derive(Deserialize)]
 pub struct PriceInput {
@@ -624,71 +608,6 @@ async fn resolve_test_secret(
             .map_err(|message| Box::new(error(StatusCode::BAD_REQUEST, message))),
     }
 }
-async fn probe_provider(
-    State(state): State<AppState>,
-    Path(id): Path<i64>,
-    input: Option<Json<ProviderProbeInput>>,
-) -> Response {
-    let mut provider = match state.store.providers().await {
-        Ok(providers) => match providers.into_iter().find(|provider| provider.id == id) {
-            Some(provider) => provider,
-            None => return error(StatusCode::NOT_FOUND, "provider not found"),
-        },
-        Err(message) => return error(StatusCode::INTERNAL_SERVER_ERROR, message),
-    };
-    let input = input.map(|Json(input)| input).unwrap_or_default();
-    if let Some(protocol) = input.protocol {
-        provider.protocol = protocol;
-    }
-    if let Some(endpoint) = input
-        .endpoint
-        .filter(|endpoint| !endpoint.trim().is_empty())
-    {
-        provider.endpoint = endpoint;
-    }
-    let model = match input.model.filter(|model| !model.trim().is_empty()) {
-        Some(model) => model,
-        None => match provider.models.first() {
-            Some(model) => model.clone(),
-            None => return error(StatusCode::BAD_REQUEST, "provider has no models to probe"),
-        },
-    };
-    let secret = match resolve_test_secret(&state, id, input.secret, input.key_index).await {
-        Ok(secret) => secret,
-        Err(response) => return *response,
-    };
-    let legs = crate::server::candidate_protocols(
-        &provider,
-        &crate::server::InboundProtocol::Provider(crate::protocol::Protocol::OpenAI),
-    );
-    let outcome = crate::probe::probe_model(&state.http, &provider, &secret, &model, &legs).await;
-    Json(json!({"model":model,"result":outcome.to_json()})).into_response()
-}
-async fn preview_provider_probe(
-    State(state): State<AppState>,
-    Json(input): Json<ProviderProbePreviewInput>,
-) -> Response {
-    if input.model.trim().is_empty() {
-        return error(StatusCode::BAD_REQUEST, "model required");
-    }
-    let provider = crate::Provider {
-        id: 0,
-        name: String::new(),
-        protocol: input.protocol,
-        endpoint: input.endpoint,
-        models: Vec::new(),
-        key_count: 0,
-        group_id: String::new(),
-        enabled: false,
-    };
-    let legs = crate::server::candidate_protocols(
-        &provider,
-        &crate::server::InboundProtocol::Provider(crate::protocol::Protocol::OpenAI),
-    );
-    let outcome =
-        crate::probe::probe_model(&state.http, &provider, &input.secret, &input.model, &legs).await;
-    Json(json!({"model":input.model,"result":outcome.to_json()})).into_response()
-}
 async fn test_route(State(state): State<AppState>, Path(id): Path<i64>) -> Response {
     let route = match state.store.routes().await {
         Ok(routes) => match routes.into_iter().find(|route| route.id == id) {
@@ -959,8 +878,6 @@ pub fn router(state: AppState) -> Router<AppState> {
         .route("/providers/{id}", axum::routing::put(update_provider))
         .route("/routes/{id}", axum::routing::put(update_route))
         .route("/providers/{id}/test", post(test_provider))
-        .route("/providers/{id}/probe", post(probe_provider))
-        .route("/providers/probe", post(preview_provider_probe))
         .route("/routes/{id}/test", post(test_route))
         .route(
             "/providers/{id}/keys",

@@ -7,10 +7,10 @@ import { protocolOf, useTranslation, useWorkspace, type ProtocolType, type Provi
 export type { Provider } from '../workspace'
 
 export type ProviderKeyDraft = { value: string; models: string[] | null }
-type KeyProbe = { ok: boolean; model: string; latency_ms: number; endpoint: string | null; error: string | null; reply: string | null }
-type KeyDraft = { id: number; value: string; configured: boolean; models: string[] | null; detected: string[] | null; error: string | null; probe: KeyProbe | null }
+type KeyCheck = { ok: boolean; models: string[]; latency_ms: number; error: string | null }
+type KeyDraft = { id: number; value: string; configured: boolean; models: string[] | null; detected: string[] | null; error: string | null; check: KeyCheck | null }
 let keyDraftId = 0
-const createKeyDraft = (configured = false, models: string[] | null = null): KeyDraft => ({ id: ++keyDraftId, value: '', configured, models, detected: null, error: null, probe: null })
+const createKeyDraft = (configured = false, models: string[] | null = null): KeyDraft => ({ id: ++keyDraftId, value: '', configured, models, detected: null, error: null, check: null })
 const keyDraftsFor = (provider?: Provider | null) => {
   const scopes = provider?.keyScopes
   if (scopes?.length) return scopes.map((scope) => createKeyDraft(true, scope.models))
@@ -106,30 +106,27 @@ export function ProviderDialog({ open, onClose, onSave, onDelete, onTest, provid
     }
     return results
   }
-  const probeKey = async (index: number): Promise<KeyProbe> => {
-    const key = keyDrafts[index]
-    const secret = key.value.trim()
-    const model = (key.models && key.models[0]) || key.detected?.[0] || models[0] || ''
-    if (!model) throw new Error(t('keyTestNeedsModel'))
-    const response = provider
-      ? await run(() => api<{ model: string; result: Omit<KeyProbe, 'model'> }>(`/api/v1/providers/${provider.id}/probe`, { method: 'POST', body: JSON.stringify({ protocol: type, endpoint, secret: secret || undefined, key_index: secret ? undefined : index, model }) }))
-      : await run(() => api<{ model: string; result: Omit<KeyProbe, 'model'> }>('/api/v1/providers/probe', { method: 'POST', body: JSON.stringify({ protocol: type, endpoint, secret, model }) }))
-    return { ...response.result, model: response.model }
-  }
   const testKeys = async () => {
     if (!endpoint.trim()) { notify(t('modelsRequired')); return }
     if (!provider && !keyDrafts.some((key) => key.value.trim())) { notify(t('apiKeyRequired')); return }
     setTesting(true)
     try {
       const results = await Promise.all(keyDrafts.map(async (key, index) => {
-        try { return { id: key.id, probe: await probeKey(index), error: null as string | null } } catch (cause) { return { id: key.id, probe: null, error: cause instanceof Error ? cause.message : String(cause) } }
+        const started = Date.now()
+        try {
+          const discovered = await discoverKey(index)
+          const check: KeyCheck = { ok: discovered.length > 0, models: discovered, latency_ms: Date.now() - started, error: discovered.length ? null : t('keyTestNoModels') }
+          return { id: key.id, check }
+        } catch (cause) {
+          return { id: key.id, check: { ok: false, models: [], latency_ms: Date.now() - started, error: cause instanceof Error ? cause.message : String(cause) } }
+        }
       }))
       setKeyDrafts((current) => current.map((key) => {
         const result = results.find((item) => item.id === key.id)
         if (!result) return key
-        return result.probe ? { ...key, probe: result.probe, error: result.probe.ok ? null : result.probe.error } : { ...key, probe: null, error: result.error }
+        return { ...key, check: result.check, error: result.check.error, ...(result.check.ok ? { detected: [...result.check.models] } : {}) }
       }))
-      const ok = results.filter((result) => result.probe?.ok).length
+      const ok = results.filter((result) => result.check.ok).length
       setTested(ok > 0 && ok === results.length)
       notify(t('keyTestSummary', { ok, total: results.length }))
     } catch (cause) { setTested(false); notify(cause instanceof Error ? cause.message : String(cause)) } finally { setTesting(false) }
@@ -139,7 +136,7 @@ export function ProviderDialog({ open, onClose, onSave, onDelete, onTest, provid
     notify(t('modelsCleared'))
   }
   const addKey = () => setKeyDrafts((current) => [...current, createKeyDraft()])
-  const updateKey = (id: number, value: string) => setKeyDrafts((current) => current.map((key) => key.id === id ? { ...key, value, models: null, detected: null, error: null, probe: null } : key))
+  const updateKey = (id: number, value: string) => setKeyDrafts((current) => current.map((key) => key.id === id ? { ...key, value, models: null, detected: null, error: null, check: null } : key))
   const removeKey = (id: number) => setKeyDrafts((current) => current.length > 1 ? current.filter((key) => key.id !== id) : current)
   const toggleKeyModel = (id: number, model: string) => setKeyDrafts((current) => current.map((key) => {
     if (key.id !== id) return key
@@ -179,8 +176,8 @@ export function ProviderDialog({ open, onClose, onSave, onDelete, onTest, provid
     { value: 'openai-responses', label: t('openaiResponsesCompatible'), description: t('openaiResponsesProtocolHint'), badge: 'Responses' },
   ]
   const busy = testing || detectingKey !== null
-  const probeResults = keyDrafts.flatMap((key, index) => key.probe ? [{ key, index, probe: key.probe }] : [])
-  const probePassed = probeResults.length > 0 && probeResults.every((item) => item.probe.ok)
+  const checkResults = keyDrafts.flatMap((key, index) => key.check ? [{ key, index, check: key.check }] : [])
+  const checkPassed = checkResults.length > 0 && checkResults.every((item) => item.check.ok)
   return <>{!groupOpen && !modelSettingsOpen && <Modal open={open} onClose={onClose} title={provider ? t('manageProvider', { name: provider.name }) : t('connectProviderTitle')} description={t('providerDialogSubtitle')} size="channel-dialog">
     <form onSubmit={submit}>
       <div className="channel-section-title"><span className="channel-section-icon"><Check size={14} /></span><h3>{t('basicInformation')}</h3></div>
@@ -197,13 +194,13 @@ export function ProviderDialog({ open, onClose, onSave, onDelete, onTest, provid
             {key.models === null
               ? <small className="field-hint">{key.configured && !key.value.trim() ? t('keyScopeStored') : t('keyScopeAll')}</small>
               : <small className="field-hint">{t('keyScopeCount', { count: key.models.length })} · <button type="button" className="button text-button key-scope-edit" onClick={() => setModelSettingsOpen(true)}>{t('keyModelsEdit')}</button></small>}
-            {key.error && !key.probe && <small className="key-scope-error">{key.error}</small>}
+            {key.error && !key.check && <small className="key-scope-error">{key.error}</small>}
           </div>)}</div>
-          {probeResults.length > 0 && <div className="key-test-panel">
-            <div className={`key-test-panel-head ${probePassed ? 'pass' : 'fail'}`}>{probePassed ? <Check size={14} /> : <X size={14} />}<strong>{probePassed ? t('keyTestPassed') : t('keyTestFailed')}</strong><small>{t('keyTestResultCount', { count: probeResults.length })}</small></div>
-            {probeResults.map(({ key, index, probe }) => <div className="key-test-row" key={key.id}>
-              <div className="key-test-row-top"><code>{`${endpoint.replace(/\/+$/, '')}/${probe.endpoint || ''}`}</code><span className="key-test-badge">{key.value.trim() ? maskKey(key.value.trim()) : t('apiKeyNumber', { number: index + 1 })}</span><span className="key-test-badge">{probe.model}</span><span className={`key-test-status ${probe.ok ? 'pass' : 'fail'}`}>{probe.ok ? <Check size={12} /> : <X size={12} />}{probe.latency_ms} ms · {probe.ok ? t('testPassed') : t('testFailed')}</span></div>
-              <p className={`key-test-row-note ${probe.ok ? '' : 'error'}`}>{probe.ok ? (probe.reply || t('keyTestOk')) : probe.error}</p>
+          {checkResults.length > 0 && <div className="key-test-panel">
+            <div className={`key-test-panel-head ${checkPassed ? 'pass' : 'fail'}`}>{checkPassed ? <Check size={14} /> : <X size={14} />}<strong>{checkPassed ? t('keyTestPassed') : t('keyTestFailed')}</strong><small>{t('keyTestResultCount', { count: checkResults.length })}</small></div>
+            {checkResults.map(({ key, index, check }) => <div className="key-test-row" key={key.id}>
+              <div className="key-test-row-top"><code>{endpoint.replace(/\/+$/, '')}</code><span className="key-test-badge">{key.value.trim() ? maskKey(key.value.trim()) : t('apiKeyNumber', { number: index + 1 })}</span><span className={`key-test-status ${check.ok ? 'pass' : 'fail'}`}>{check.ok ? <Check size={12} /> : <X size={12} />}{check.latency_ms} ms · {check.ok ? t('testPassed') : t('testFailed')}</span></div>
+              <p className={`key-test-row-note ${check.ok ? '' : 'error'}`}>{check.ok ? t('keyTestCatalogOk', { count: check.models.length }) : check.error}</p>
             </div>)}
           </div>}
           <small className="field-hint">{t('multipleKeysHint')} {t('keyScopeHint')}</small>

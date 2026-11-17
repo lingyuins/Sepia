@@ -51,15 +51,15 @@ async fn chat_upstream() -> (SocketAddr, Hits) {
             if path.ends_with("/responses") {
                 return axum::http::StatusCode::NOT_FOUND.into_response();
             }
-            if path.ends_with("/models") {
-                return axum::Json(json!({"data":[{"id":"gpt-a"}]})).into_response();
-            }
             if secret != "Bearer gpt-key" {
                 return (
                     axum::http::StatusCode::UNAUTHORIZED,
                     axum::Json(json!({"error":{"message":"bad key"}})),
                 )
                     .into_response();
+            }
+            if path.ends_with("/models") {
+                return axum::Json(json!({"data":[{"id":"gpt-a"}]})).into_response();
             }
             let model = value.get("model").and_then(Value::as_str).unwrap_or("");
             axum::Json(json!({"id":"chat_1","model":model,"choices":[{"index":0,"message":{"role":"assistant","content":"probe pong"},"finish_reason":"stop"}],"usage":{"prompt_tokens":2,"completion_tokens":1}})).into_response()
@@ -307,7 +307,7 @@ async fn route_test_reports_missing_key_scope_and_universal_fallback() {
 }
 
 #[tokio::test]
-async fn provider_probe_uses_saved_key_index_or_entered_secret() {
+async fn provider_test_detects_catalog_with_saved_key_index_or_entered_secret() {
     let (upstream, hits) = chat_upstream().await;
     let directory = tempfile::tempdir().unwrap();
     let store = Store::connect(&directory.path().join("provider.db"))
@@ -336,22 +336,18 @@ async fn provider_probe_uses_saved_key_index_or_entered_secret() {
     let (client, cookie) = admin(address, &store).await;
     let url = |path: &str| format!("http://{address}{path}");
 
-    // Default first saved key is revoked: probe fails with the upstream 401.
-    let body: Value = client
-        .post(url(&format!("/api/v1/providers/{}/probe", provider.id)))
+    // Default first saved key is revoked: catalog detection fails with 401.
+    let response = client
+        .post(url(&format!("/api/v1/providers/{}/test", provider.id)))
         .header("cookie", &cookie)
         .send()
         .await
-        .unwrap()
-        .json()
-        .await
         .unwrap();
-    assert_eq!(body["model"], "gpt-a");
-    assert_eq!(body["result"]["ok"], false);
+    assert_eq!(response.status(), 502);
 
     // key_index selects the working saved key without any plaintext.
     let body: Value = client
-        .post(url(&format!("/api/v1/providers/{}/probe", provider.id)))
+        .post(url(&format!("/api/v1/providers/{}/test", provider.id)))
         .header("cookie", &cookie)
         .json(&json!({"key_index":1}))
         .send()
@@ -360,34 +356,33 @@ async fn provider_probe_uses_saved_key_index_or_entered_secret() {
         .json()
         .await
         .unwrap();
-    assert_eq!(body["result"]["ok"], true);
-    assert_eq!(body["result"]["reply"], "probe pong");
+    assert_eq!(body["models"], json!(["gpt-a"]));
 
     // An entered secret overrides the saved key.
     let body: Value = client
-        .post(url(&format!("/api/v1/providers/{}/probe", provider.id)))
+        .post(url(&format!("/api/v1/providers/{}/test", provider.id)))
         .header("cookie", &cookie)
-        .json(&json!({"secret":"gpt-key","model":"gpt-a"}))
+        .json(&json!({"secret":"gpt-key"}))
         .send()
         .await
         .unwrap()
         .json()
         .await
         .unwrap();
-    assert_eq!(body["result"]["ok"], true);
+    assert_eq!(body["models"], json!(["gpt-a"]));
 
-    // Unsaved provider preview probes without persisting anything.
+    // Unsaved provider preview detects models without persisting anything.
     let body: Value = client
-        .post(url("/api/v1/providers/probe"))
+        .post(url("/api/v1/providers/test"))
         .header("cookie", &cookie)
-        .json(&json!({"protocol":"openai","endpoint":format!("http://{upstream}"),"secret":"gpt-key","model":"gpt-a"}))
+        .json(&json!({"protocol":"openai","endpoint":format!("http://{upstream}"),"secret":"gpt-key"}))
         .send()
         .await
         .unwrap()
         .json()
         .await
         .unwrap();
-    assert_eq!(body["result"]["ok"], true);
+    assert_eq!(body["models"], json!(["gpt-a"]));
     let providers: Value = client
         .get(url("/api/v1/providers"))
         .header("cookie", &cookie)
@@ -398,7 +393,9 @@ async fn provider_probe_uses_saved_key_index_or_entered_secret() {
         .await
         .unwrap();
     assert_eq!(providers.as_array().unwrap().len(), 1);
-    assert!(hits.0.lock().unwrap().len() >= 4);
+    // Catalog detection only lists models; it never sends an inference ping.
+    let paths = hits.0.lock().unwrap().clone();
+    assert!(paths.iter().all(|path| path.ends_with("/models")));
 }
 
 // Reasoning upstream: spends its whole output budget on hidden reasoning when
@@ -444,13 +441,24 @@ async fn probe_budget_lets_reasoning_models_emit_visible_content() {
         )
         .await
         .unwrap();
+    let route = store
+        .create_route(NewRoute {
+            slug: "think-route".into(),
+            name: "think-route".into(),
+            description: String::new(),
+            patterns: vec!["qwen-max".into()],
+            provider_id: provider.id,
+            model: "qwen-max".into(),
+            is_default: false,
+            list_members: true,
+            candidates: vec![(provider.id, "qwen-max".into())],
+        })
+        .await
+        .unwrap();
     let address = serve(app(AppState::for_testing(store.clone()).await)).await;
     let (client, cookie) = admin(address, &store).await;
     let body: Value = client
-        .post(format!(
-            "http://{address}/api/v1/providers/{}/probe",
-            provider.id
-        ))
+        .post(format!("http://{address}/api/v1/routes/{}/test", route.id))
         .header("cookie", &cookie)
         .send()
         .await
@@ -458,6 +466,6 @@ async fn probe_budget_lets_reasoning_models_emit_visible_content() {
         .json()
         .await
         .unwrap();
-    assert_eq!(body["result"]["ok"], true);
-    assert_eq!(body["result"]["reply"], "probe pong");
+    assert_eq!(body["candidates"][0]["result"]["ok"], true);
+    assert_eq!(body["candidates"][0]["result"]["reply"], "probe pong");
 }
