@@ -32,7 +32,6 @@ export type Provider = {
   routeOnly?: boolean
   fetchModels?: boolean
   modelsFetchedAt?: string
-  modelCatalog?: string[]
   keyCount?: number
   keyScopes?: ProviderKeyScope[]
 }

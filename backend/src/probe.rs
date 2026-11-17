@@ -49,10 +49,14 @@ pub async fn probe_model(
     model: &str,
     legs: &[Protocol],
 ) -> ProbeOutcome {
+    // Reasoning models spend output tokens on hidden reasoning before any
+    // visible content; a tiny budget makes them answer with empty content,
+    // which strict upstream gateways reject as a failed channel. Give the
+    // probe enough room to finish reasoning and emit a short reply.
     let request = ChatRequest {
         model: model.to_string(),
         messages: vec![Message::new(Role::User, "ping")],
-        max_tokens: Some(16),
+        max_tokens: Some(512),
         ..Default::default()
     };
     let mut last: Option<ProbeOutcome> = None;

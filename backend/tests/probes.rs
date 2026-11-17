@@ -400,3 +400,64 @@ async fn provider_probe_uses_saved_key_index_or_entered_secret() {
     assert_eq!(providers.as_array().unwrap().len(), 1);
     assert!(hits.0.lock().unwrap().len() >= 4);
 }
+
+// Reasoning upstream: spends its whole output budget on hidden reasoning when
+// the budget is tiny, answering with empty visible content. A probe must give
+// the model room to finish thinking instead of reporting an empty reply.
+#[tokio::test]
+async fn probe_budget_lets_reasoning_models_emit_visible_content() {
+    let handler = any(move |request: axum::extract::Request| async move {
+        let body = axum::body::to_bytes(request.into_body(), 1024 * 1024)
+            .await
+            .unwrap();
+        let value: Value = serde_json::from_slice(&body).unwrap();
+        let budget = value
+            .get("max_tokens")
+            .and_then(Value::as_u64)
+            .unwrap_or(4096);
+        let message = if budget < 64 {
+            json!({"role":"assistant","content":"","reasoning_content":"thinking hard about ping"})
+        } else {
+            json!({"role":"assistant","content":"probe pong","reasoning_content":"thought about ping"})
+        };
+        let finish = if budget < 64 { "length" } else { "stop" };
+        axum::Json(json!({"id":"chat_r","model":value.get("model").and_then(Value::as_str).unwrap_or(""),"choices":[{"index":0,"message":message,"finish_reason":finish}],"usage":{"prompt_tokens":2,"completion_tokens":budget.min(16),"completion_tokens_details":{"reasoning_tokens":budget.min(16)}}}))
+            .into_response()
+    });
+    let upstream = serve(Router::new().fallback(handler)).await;
+    let directory = tempfile::tempdir().unwrap();
+    let store = Store::connect(&directory.path().join("reasoning.db"))
+        .await
+        .unwrap();
+    let keys = KeyStore::testing();
+    let provider = store
+        .create_provider(
+            NewProvider {
+                name: "thinker".into(),
+                protocol: ProviderProtocol::OpenAI,
+                endpoint: format!("http://{upstream}"),
+                models: vec!["qwen-max".into()],
+            },
+            "gpt-key",
+            &[],
+            &keys,
+        )
+        .await
+        .unwrap();
+    let address = serve(app(AppState::for_testing(store.clone()).await)).await;
+    let (client, cookie) = admin(address, &store).await;
+    let body: Value = client
+        .post(format!(
+            "http://{address}/api/v1/providers/{}/probe",
+            provider.id
+        ))
+        .header("cookie", &cookie)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(body["result"]["ok"], true);
+    assert_eq!(body["result"]["reply"], "probe pong");
+}

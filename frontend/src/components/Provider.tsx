@@ -7,7 +7,7 @@ import { protocolOf, useTranslation, useWorkspace, type ProtocolType, type Provi
 export type { Provider } from '../workspace'
 
 export type ProviderKeyDraft = { value: string; models: string[] | null }
-type KeyProbe = { ok: boolean; model: string; latency_ms: number; endpoint: string | null; error: string | null }
+type KeyProbe = { ok: boolean; model: string; latency_ms: number; endpoint: string | null; error: string | null; reply: string | null }
 type KeyDraft = { id: number; value: string; configured: boolean; models: string[] | null; detected: string[] | null; error: string | null; probe: KeyProbe | null }
 let keyDraftId = 0
 const createKeyDraft = (configured = false, models: string[] | null = null): KeyDraft => ({ id: ++keyDraftId, value: '', configured, models, detected: null, error: null, probe: null })
@@ -16,6 +16,7 @@ const keyDraftsFor = (provider?: Provider | null) => {
   if (scopes?.length) return scopes.map((scope) => createKeyDraft(true, scope.models))
   return Array.from({ length: Math.max(provider?.keyCount || 1, 1) }, () => createKeyDraft(Boolean(provider)))
 }
+const maskKey = (value: string) => value.length > 12 ? `${value.slice(0, 4)}…${value.slice(-4)}` : '••••'
 
 export function ProviderMark({ name, short, color, small = false }: Pick<Provider, 'name' | 'short' | 'color'> & { small?: boolean }) {
   return <span className={`provider-mark ${small ? 'small' : ''}`} style={{ background: `${color}14`, color }} aria-label={name}>{short}</span>
@@ -39,7 +40,6 @@ export function ProviderDialog({ open, onClose, onSave, onDelete, onTest, provid
   const [models, setModels] = useState<string[]>(provider?.modelsList || [])
   const [modelDraft, setModelDraft] = useState('')
   const [modelSettingsOpen, setModelSettingsOpen] = useState(false)
-  const [modelCatalog, setModelCatalog] = useState<string[]>(provider?.modelCatalog?.length ? provider.modelCatalog : (provider?.modelsList || []))
   useEffect(() => {
     if (!open) return
     const nextType = provider ? protocolOf(provider) : 'openai'
@@ -52,7 +52,6 @@ export function ProviderDialog({ open, onClose, onSave, onDelete, onTest, provid
     setTested(false)
     setModels([...(provider?.modelsList || [])])
     setModelDraft('')
-    setModelCatalog([...(provider?.modelCatalog?.length ? provider.modelCatalog : (provider?.modelsList || []))])
     setModelSettingsOpen(false)
     setGroupOpen(false)
     setDetectingKey(null)
@@ -68,7 +67,6 @@ export function ProviderDialog({ open, onClose, onSave, onDelete, onTest, provid
     if (!id) { notify(t('modelIdRequired')); return }
     if (models.includes(id)) { notify(t('modelExists')); return }
     setModels((current) => [...current, id])
-    setModelCatalog((current) => [...current, id])
     setModelDraft('')
     notify(t('modelAdded', { name: id }))
   }
@@ -86,7 +84,6 @@ export function ProviderDialog({ open, onClose, onSave, onDelete, onTest, provid
       const discovered = await discoverKey(index)
       setKeyDrafts((current) => current.map((key) => key.id === id ? { ...key, models: [...discovered], detected: [...discovered], error: null } : key))
       setModels((current) => [...new Set([...current, ...discovered])])
-      setModelCatalog((current) => [...new Set([...current, ...discovered])])
       notify(t('keyModelsDetected', { number: index + 1, count: discovered.length }))
     } catch (cause) {
       const message = cause instanceof Error ? cause.message : String(cause)
@@ -106,7 +103,6 @@ export function ProviderDialog({ open, onClose, onSave, onDelete, onTest, provid
     const discovered = [...new Set(results.flatMap((result) => result.models || []))]
     if (discovered.length) {
       setModels(discovered)
-      setModelCatalog(discovered)
     }
     return results
   }
@@ -141,9 +137,6 @@ export function ProviderDialog({ open, onClose, onSave, onDelete, onTest, provid
   const clearModels = () => {
     setModels([])
     notify(t('modelsCleared'))
-  }
-  const toggleModel = (model: string) => {
-    setModels((current) => current.includes(model) ? current.filter((item) => item !== model) : [...current, model])
   }
   const addKey = () => setKeyDrafts((current) => [...current, createKeyDraft()])
   const updateKey = (id: number, value: string) => setKeyDrafts((current) => current.map((key) => key.id === id ? { ...key, value, models: null, detected: null, error: null, probe: null } : key))
@@ -186,6 +179,8 @@ export function ProviderDialog({ open, onClose, onSave, onDelete, onTest, provid
     { value: 'openai-responses', label: t('openaiResponsesCompatible'), description: t('openaiResponsesProtocolHint'), badge: 'Responses' },
   ]
   const busy = testing || detectingKey !== null
+  const probeResults = keyDrafts.flatMap((key, index) => key.probe ? [{ key, index, probe: key.probe }] : [])
+  const probePassed = probeResults.length > 0 && probeResults.every((item) => item.probe.ok)
   return <>{!groupOpen && !modelSettingsOpen && <Modal open={open} onClose={onClose} title={provider ? t('manageProvider', { name: provider.name }) : t('connectProviderTitle')} description={t('providerDialogSubtitle')} size="channel-dialog">
     <form onSubmit={submit}>
       <div className="channel-section-title"><span className="channel-section-icon"><Check size={14} /></span><h3>{t('basicInformation')}</h3></div>
@@ -202,9 +197,15 @@ export function ProviderDialog({ open, onClose, onSave, onDelete, onTest, provid
             {key.models === null
               ? <small className="field-hint">{key.configured && !key.value.trim() ? t('keyScopeStored') : t('keyScopeAll')}</small>
               : <small className="field-hint">{t('keyScopeCount', { count: key.models.length })} · <button type="button" className="button text-button key-scope-edit" onClick={() => setModelSettingsOpen(true)}>{t('keyModelsEdit')}</button></small>}
-            {key.probe && <small className={key.probe.ok ? 'key-probe-ok' : 'key-probe-fail'}>{key.probe.ok ? <Check size={12} /> : <X size={12} />}{key.probe.ok ? `${t('keyTestOk')} · ${key.probe.model} · ${key.probe.latency_ms} ms` : key.probe.error}</small>}
             {key.error && !key.probe && <small className="key-scope-error">{key.error}</small>}
           </div>)}</div>
+          {probeResults.length > 0 && <div className="key-test-panel">
+            <div className={`key-test-panel-head ${probePassed ? 'pass' : 'fail'}`}>{probePassed ? <Check size={14} /> : <X size={14} />}<strong>{probePassed ? t('keyTestPassed') : t('keyTestFailed')}</strong><small>{t('keyTestResultCount', { count: probeResults.length })}</small></div>
+            {probeResults.map(({ key, index, probe }) => <div className="key-test-row" key={key.id}>
+              <div className="key-test-row-top"><code>{`${endpoint.replace(/\/+$/, '')}/${probe.endpoint || ''}`}</code><span className="key-test-badge">{key.value.trim() ? maskKey(key.value.trim()) : t('apiKeyNumber', { number: index + 1 })}</span><span className="key-test-badge">{probe.model}</span><span className={`key-test-status ${probe.ok ? 'pass' : 'fail'}`}>{probe.ok ? <Check size={12} /> : <X size={12} />}{probe.latency_ms} ms · {probe.ok ? t('testPassed') : t('testFailed')}</span></div>
+              <p className={`key-test-row-note ${probe.ok ? '' : 'error'}`}>{probe.ok ? (probe.reply || t('keyTestOk')) : probe.error}</p>
+            </div>)}
+          </div>}
           <small className="field-hint">{t('multipleKeysHint')} {t('keyScopeHint')}</small>
         </div>
         <Field label={t('baseUrl')} type="url" value={endpoint} onChange={setEndpoint} placeholder="https://api.example.com/v1" />
@@ -230,9 +231,6 @@ export function ProviderDialog({ open, onClose, onSave, onDelete, onTest, provid
   </Modal>}
   <Modal open={modelSettingsOpen} onClose={() => setModelSettingsOpen(false)} title={t('keyModelsTitle')} description={t('keyModelsSubtitle')} size="nested-dialog model-settings-dialog">
     <div className="model-settings-body">
-      <div className="model-catalog-heading"><span>{t('catalogModels')}</span><small>{models.length} {t('models')}</small></div>
-      <div className="model-selection-list">{modelCatalog.map((model) => <label className="model-setting-option" key={model}><input type="checkbox" checked={models.includes(model)} onChange={() => toggleModel(model)} /><code>{model}</code></label>)}</div>
-      {!modelCatalog.length && <p className="field-hint">{t('noModelsConfigured')}</p>}
       <div className="key-scope-sections">{keyDrafts.map((key, index) => <section className="key-scope-section" key={key.id}>
         <div className="key-scope-section-head"><strong>{t('apiKeyNumber', { number: index + 1 })}</strong><button type="button" className="button secondary key-detect-button" disabled={busy || !endpoint.trim() || (!provider && !key.value.trim())} onClick={() => detectKeyModels(key.id)}><RefreshCw className={detectingKey === key.id ? 'spin' : ''} size={12} />{t('detectKeyModels')}</button></div>
         {key.detected && <small className="field-hint">{t('keyModelsDetected', { number: index + 1, count: key.detected.length })}</small>}
