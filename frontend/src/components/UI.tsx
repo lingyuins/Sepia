@@ -19,8 +19,8 @@ export function Modal({ open, onClose, title, description, children, size = '' }
 export function Field({ label, value, onChange, placeholder = '', type = 'text', required = false, hint }: { label: string; value: string; onChange: (value: string) => void; placeholder?: string; type?: string; required?: boolean; hint?: string }) {
   return <label className="form-field"><span className="field-label">{label}</span><input className="field" value={value} type={type} required={required} onChange={(e) => onChange(e.target.value)} placeholder={placeholder} />{hint && <small className="field-hint">{hint}</small>}</label>
 }
-export function DialogActions({ onClose, label, disabled = false }: { onClose: () => void; label: string; disabled?: boolean }) {
-  return <div className="dialog-actions"><button type="button" className="button secondary" onClick={onClose}>{useTranslation()('cancel')}</button><button type="submit" className="button primary" disabled={disabled}>{label}</button></div>
+export function DialogActions({ onClose, label, disabled = false, leading }: { onClose: () => void; label: string; disabled?: boolean; leading?: React.ReactNode }) {
+  return <div className="dialog-actions">{leading}<button type="button" className="button secondary" onClick={onClose}>{useTranslation()('cancel')}</button><button type="submit" className="button primary" disabled={disabled}>{label}</button></div>
 }
 export function Toggle({ checked, onChange, label }: { checked: boolean; onChange: () => void; label: string }) {
   return <button type="button" role="switch" aria-checked={checked} aria-label={label} onClick={onChange} className={`toggle ${checked ? 'enabled' : ''}`}><span /></button>

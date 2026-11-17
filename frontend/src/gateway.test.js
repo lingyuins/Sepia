@@ -22,16 +22,24 @@ test('allows cloud deployments to use HTTP', () => {
   )
 })
 
-test('allows cloud deployments to use HTTPS', () => {
+test('cloud HTTPS uses the standard port regardless of the stored port', () => {
   assert.equal(
     gatewayUrl({ deployment: 'cloud', protocol: 'https', host: 'gateway.example.com', port: '443' }),
     'https://gateway.example.com/v1',
   )
+  assert.equal(
+    gatewayUrl({ deployment: 'cloud', protocol: 'https', host: 'gateway.example.com', port: '5000' }),
+    'https://gateway.example.com/v1',
+  )
+  assert.equal(
+    gatewayUrl({ deployment: 'cloud', protocol: 'https', host: 'gateway.example.com', port: '' }, '/v1/models'),
+    'https://gateway.example.com/v1/models',
+  )
 })
 
-test('builds a cloud HTTPS URL with a custom port and API path', () => {
+test('cloud HTTP keeps the explicit port in the URL', () => {
   assert.equal(
-    gatewayUrl({ deployment: 'cloud', protocol: 'https', host: 'gateway.example.com', port: '8443' }, '/v1/models'),
-    'https://gateway.example.com:8443/v1/models',
+    gatewayUrl({ deployment: 'cloud', protocol: 'http', host: 'gateway.example.com', port: '8080' }, '/v1/models'),
+    'http://gateway.example.com:8080/v1/models',
   )
 })

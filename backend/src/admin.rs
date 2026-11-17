@@ -54,6 +54,13 @@ pub struct ProviderPreviewInput {
     secrets: Vec<String>,
 }
 #[derive(Deserialize)]
+pub struct ProviderProbePreviewInput {
+    protocol: crate::ProviderProtocol,
+    endpoint: String,
+    secret: String,
+    model: String,
+}
+#[derive(Deserialize)]
 pub struct KeyModelsInput {
     secret: String,
     models: Vec<String>,
@@ -83,6 +90,15 @@ pub struct RouteInput {
     list_members: bool,
     #[serde(default = "default_true")]
     enabled: bool,
+}
+#[derive(Deserialize, Default)]
+pub struct ProviderProbeInput {
+    protocol: Option<crate::ProviderProtocol>,
+    endpoint: Option<String>,
+    secret: Option<String>,
+    #[serde(default)]
+    key_index: Option<usize>,
+    model: Option<String>,
 }
 #[derive(Deserialize)]
 pub struct PriceInput {
@@ -564,36 +580,163 @@ async fn test_provider(
     {
         provider.endpoint = endpoint;
     }
-    let secret = match input.secret.filter(|secret| !secret.trim().is_empty()) {
-        Some(secret) => secret,
-        None => match input.key_index {
-            Some(index) => {
-                let keys = match state.store.provider_keys(id).await {
-                    Ok(keys) => keys,
-                    Err(message) => return error(StatusCode::INTERNAL_SERVER_ERROR, message),
-                };
-                let Some(key) = keys.get(index) else {
-                    return error(StatusCode::BAD_REQUEST, "provider key not found");
-                };
-                match state
-                    .store
-                    .upstream_key_by_id(id, key.id, &state.keys)
-                    .await
-                {
-                    Ok(secret) => secret,
-                    Err(message) => return error(StatusCode::BAD_REQUEST, message),
-                }
-            }
-            None => match state.store.upstream_key(id, &state.keys).await {
-                Ok(secret) => secret,
-                Err(message) => return error(StatusCode::BAD_REQUEST, message),
-            },
-        },
+    let secret = match resolve_test_secret(&state, id, input.secret, input.key_index).await {
+        Ok(secret) => secret,
+        Err(response) => return *response,
     };
     match crate::discovery::discover_models(&state.http, &provider, &secret).await {
         Ok(models) => Json(json!({"models":models})).into_response(),
         Err(message) => error(StatusCode::BAD_GATEWAY, message),
     }
+}
+async fn resolve_test_secret(
+    state: &AppState,
+    provider_id: i64,
+    input_secret: Option<String>,
+    key_index: Option<usize>,
+) -> Result<String, Box<Response>> {
+    if let Some(secret) = input_secret.filter(|secret| !secret.trim().is_empty()) {
+        return Ok(secret);
+    }
+    match key_index {
+        Some(index) => {
+            let keys = state
+                .store
+                .provider_keys(provider_id)
+                .await
+                .map_err(|message| Box::new(error(StatusCode::INTERNAL_SERVER_ERROR, message)))?;
+            let Some(key) = keys.get(index) else {
+                return Err(Box::new(error(
+                    StatusCode::BAD_REQUEST,
+                    "provider key not found",
+                )));
+            };
+            state
+                .store
+                .upstream_key_by_id(provider_id, key.id, &state.keys)
+                .await
+                .map_err(|message| Box::new(error(StatusCode::BAD_REQUEST, message)))
+        }
+        None => state
+            .store
+            .upstream_key(provider_id, &state.keys)
+            .await
+            .map_err(|message| Box::new(error(StatusCode::BAD_REQUEST, message))),
+    }
+}
+async fn probe_provider(
+    State(state): State<AppState>,
+    Path(id): Path<i64>,
+    input: Option<Json<ProviderProbeInput>>,
+) -> Response {
+    let mut provider = match state.store.providers().await {
+        Ok(providers) => match providers.into_iter().find(|provider| provider.id == id) {
+            Some(provider) => provider,
+            None => return error(StatusCode::NOT_FOUND, "provider not found"),
+        },
+        Err(message) => return error(StatusCode::INTERNAL_SERVER_ERROR, message),
+    };
+    let input = input.map(|Json(input)| input).unwrap_or_default();
+    if let Some(protocol) = input.protocol {
+        provider.protocol = protocol;
+    }
+    if let Some(endpoint) = input
+        .endpoint
+        .filter(|endpoint| !endpoint.trim().is_empty())
+    {
+        provider.endpoint = endpoint;
+    }
+    let model = match input.model.filter(|model| !model.trim().is_empty()) {
+        Some(model) => model,
+        None => match provider.models.first() {
+            Some(model) => model.clone(),
+            None => return error(StatusCode::BAD_REQUEST, "provider has no models to probe"),
+        },
+    };
+    let secret = match resolve_test_secret(&state, id, input.secret, input.key_index).await {
+        Ok(secret) => secret,
+        Err(response) => return *response,
+    };
+    let legs = crate::server::candidate_protocols(
+        &provider,
+        &crate::server::InboundProtocol::Provider(crate::protocol::Protocol::OpenAI),
+    );
+    let outcome = crate::probe::probe_model(&state.http, &provider, &secret, &model, &legs).await;
+    Json(json!({"model":model,"result":outcome.to_json()})).into_response()
+}
+async fn preview_provider_probe(
+    State(state): State<AppState>,
+    Json(input): Json<ProviderProbePreviewInput>,
+) -> Response {
+    if input.model.trim().is_empty() {
+        return error(StatusCode::BAD_REQUEST, "model required");
+    }
+    let provider = crate::Provider {
+        id: 0,
+        name: String::new(),
+        protocol: input.protocol,
+        endpoint: input.endpoint,
+        models: Vec::new(),
+        key_count: 0,
+        group_id: String::new(),
+        enabled: false,
+    };
+    let legs = crate::server::candidate_protocols(
+        &provider,
+        &crate::server::InboundProtocol::Provider(crate::protocol::Protocol::OpenAI),
+    );
+    let outcome =
+        crate::probe::probe_model(&state.http, &provider, &input.secret, &input.model, &legs).await;
+    Json(json!({"model":input.model,"result":outcome.to_json()})).into_response()
+}
+async fn test_route(State(state): State<AppState>, Path(id): Path<i64>) -> Response {
+    let route = match state.store.routes().await {
+        Ok(routes) => match routes.into_iter().find(|route| route.id == id) {
+            Some(route) => route,
+            None => return error(StatusCode::NOT_FOUND, "route not found"),
+        },
+        Err(message) => return error(StatusCode::INTERNAL_SERVER_ERROR, message),
+    };
+    let providers = match state.store.providers().await {
+        Ok(providers) => providers,
+        Err(message) => return error(StatusCode::INTERNAL_SERVER_ERROR, message),
+    };
+    let mut results = Vec::new();
+    for (provider_id, model) in &route.candidates {
+        let Some(provider) = providers
+            .iter()
+            .find(|provider| provider.id == *provider_id)
+        else {
+            results.push(json!({"provider_id":provider_id,"provider":null,"model":model,"enabled":false,"result":{"ok":false,"latency_ms":0,"endpoint":null,"error":"provider not found","reply":null}}));
+            continue;
+        };
+        if !provider.enabled {
+            results.push(json!({"provider_id":provider.id,"provider":provider.name,"model":model,"enabled":false,"result":{"ok":false,"latency_ms":0,"endpoint":null,"error":"provider disabled","reply":null}}));
+            continue;
+        }
+        let secret = match state
+            .store
+            .upstream_key_for_attempt(provider.id, model, 0, &Default::default(), &state.keys)
+            .await
+        {
+            Ok(Some((_, secret))) => secret,
+            Ok(None) => {
+                results.push(json!({"provider_id":provider.id,"provider":provider.name,"model":model,"enabled":true,"result":{"ok":false,"latency_ms":0,"endpoint":null,"error":"no key serves this model","reply":null}}));
+                continue;
+            }
+            Err(message) => {
+                results.push(json!({"provider_id":provider.id,"provider":provider.name,"model":model,"enabled":true,"result":{"ok":false,"latency_ms":0,"endpoint":null,"error":message,"reply":null}}));
+                continue;
+            }
+        };
+        let legs = crate::server::candidate_protocols(
+            provider,
+            &crate::server::InboundProtocol::Provider(crate::protocol::Protocol::OpenAI),
+        );
+        let outcome = crate::probe::probe_model(&state.http, provider, &secret, model, &legs).await;
+        results.push(json!({"provider_id":provider.id,"provider":provider.name,"model":model,"enabled":true,"result":outcome.to_json()}));
+    }
+    Json(json!({"route":route.slug,"candidates":results})).into_response()
 }
 async fn add_key(
     State(state): State<AppState>,
@@ -816,6 +959,9 @@ pub fn router(state: AppState) -> Router<AppState> {
         .route("/providers/{id}", axum::routing::put(update_provider))
         .route("/routes/{id}", axum::routing::put(update_route))
         .route("/providers/{id}/test", post(test_provider))
+        .route("/providers/{id}/probe", post(probe_provider))
+        .route("/providers/probe", post(preview_provider_probe))
+        .route("/routes/{id}/test", post(test_route))
         .route(
             "/providers/{id}/keys",
             get(list_provider_keys).post(add_key),

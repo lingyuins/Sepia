@@ -7,9 +7,10 @@ import { protocolOf, useTranslation, useWorkspace, type ProtocolType, type Provi
 export type { Provider } from '../workspace'
 
 export type ProviderKeyDraft = { value: string; models: string[] | null }
-type KeyDraft = { id: number; value: string; configured: boolean; models: string[] | null; detected: string[] | null; error: string | null }
+type KeyProbe = { ok: boolean; model: string; latency_ms: number; endpoint: string | null; error: string | null }
+type KeyDraft = { id: number; value: string; configured: boolean; models: string[] | null; detected: string[] | null; error: string | null; probe: KeyProbe | null }
 let keyDraftId = 0
-const createKeyDraft = (configured = false, models: string[] | null = null): KeyDraft => ({ id: ++keyDraftId, value: '', configured, models, detected: null, error: null })
+const createKeyDraft = (configured = false, models: string[] | null = null): KeyDraft => ({ id: ++keyDraftId, value: '', configured, models, detected: null, error: null, probe: null })
 const keyDraftsFor = (provider?: Provider | null) => {
   const scopes = provider?.keyScopes
   if (scopes?.length) return scopes.map((scope) => createKeyDraft(true, scope.models))
@@ -22,7 +23,7 @@ export function ProviderMark({ name, short, color, small = false }: Pick<Provide
 
 export function ProviderDialog({ open, onClose, onSave, onDelete, onTest, provider }: { open: boolean; onClose: () => void; onSave: (provider: Provider, keys: ProviderKeyDraft[]) => Promise<void>; onDelete?: () => void; onTest?: (provider: Provider, keyIndex?: number, secret?: string) => Promise<string[]>; provider?: Provider | null }) {
   const [name, setName] = useState('')
-  const { channelGroups, run, notify, settings } = useWorkspace()
+  const { channelGroups, run, notify } = useWorkspace()
   const t = useTranslation()
   const [type, setType] = useState<ProtocolType>('openai')
   const [group, setGroup] = useState('official')
@@ -37,11 +38,8 @@ export function ProviderDialog({ open, onClose, onSave, onDelete, onTest, provid
   const [groupDescription, setGroupDescription] = useState('')
   const [models, setModels] = useState<string[]>(provider?.modelsList || [])
   const [modelDraft, setModelDraft] = useState('')
-  const [modelsFetchedAt, setModelsFetchedAt] = useState(provider?.modelsFetchedAt || '')
-  const [modelTested, setModelTested] = useState(false)
-  const [fetchingModels, setFetchingModels] = useState(false)
   const [modelSettingsOpen, setModelSettingsOpen] = useState(false)
-  const [modelCatalog, setModelCatalog] = useState<string[]>(provider?.modelCatalog || [])
+  const [modelCatalog, setModelCatalog] = useState<string[]>(provider?.modelCatalog?.length ? provider.modelCatalog : (provider?.modelsList || []))
   useEffect(() => {
     if (!open) return
     const nextType = provider ? protocolOf(provider) : 'openai'
@@ -54,25 +52,16 @@ export function ProviderDialog({ open, onClose, onSave, onDelete, onTest, provid
     setTested(false)
     setModels([...(provider?.modelsList || [])])
     setModelDraft('')
-    setModelsFetchedAt(provider?.modelsFetchedAt || '')
-    setModelCatalog([...(provider?.modelCatalog || [])])
-    setModelTested(false)
-    setFetchingModels(false)
+    setModelCatalog([...(provider?.modelCatalog?.length ? provider.modelCatalog : (provider?.modelsList || []))])
     setModelSettingsOpen(false)
     setGroupOpen(false)
     setDetectingKey(null)
+    setTesting(false)
   }, [open, provider])
-  const modelListLabel = modelsFetchedAt
-    ? Date.now() - new Date(modelsFetchedAt).getTime() < 60000
-      ? t('justNow')
-      : new Intl.DateTimeFormat(settings.language === '简体中文' ? 'zh-CN' : settings.language === '日本語' ? 'ja-JP' : 'en-US', { month: 'short', day: 'numeric' }).format(new Date(modelsFetchedAt))
-    : t('notFetched')
   const changeType = (value: string) => {
     const nextType = value as ProtocolType
     setType(nextType)
-    setModelsFetchedAt('')
     setTested(false)
-    setModelTested(false)
   }
   const addModel = () => {
     const id = modelDraft.trim()
@@ -81,7 +70,6 @@ export function ProviderDialog({ open, onClose, onSave, onDelete, onTest, provid
     setModels((current) => [...current, id])
     setModelCatalog((current) => [...current, id])
     setModelDraft('')
-    setModelTested(false)
     notify(t('modelAdded', { name: id }))
   }
   const discoverKey = (index: number) => {
@@ -99,8 +87,6 @@ export function ProviderDialog({ open, onClose, onSave, onDelete, onTest, provid
       setKeyDrafts((current) => current.map((key) => key.id === id ? { ...key, models: [...discovered], detected: [...discovered], error: null } : key))
       setModels((current) => [...new Set([...current, ...discovered])])
       setModelCatalog((current) => [...new Set([...current, ...discovered])])
-      setModelsFetchedAt(new Date().toISOString())
-      setModelTested(false)
       notify(t('keyModelsDetected', { number: index + 1, count: discovered.length }))
     } catch (cause) {
       const message = cause instanceof Error ? cause.message : String(cause)
@@ -121,31 +107,46 @@ export function ProviderDialog({ open, onClose, onSave, onDelete, onTest, provid
     if (discovered.length) {
       setModels(discovered)
       setModelCatalog(discovered)
-      setModelsFetchedAt(new Date().toISOString())
-      setModelTested(false)
     }
     return results
   }
-  const refreshModels = async () => {
-    if (!provider && (!name.trim() || !endpoint.trim() || !keyDrafts.some((key) => key.value.trim()))) { notify(t('modelsRequired')); return }
-    setFetchingModels(true)
-    try { const results = await detectAllKeys(); const count = results.flatMap((result) => result.models || []).length; if (count) notify(t('modelsRefreshed', { count })); const failed = results.find((result) => result.error); if (failed?.error) notify(failed.error) } catch (cause) { notify(cause instanceof Error ? cause.message : String(cause)) } finally { setFetchingModels(false) }
+  const probeKey = async (index: number): Promise<KeyProbe> => {
+    const key = keyDrafts[index]
+    const secret = key.value.trim()
+    const model = (key.models && key.models[0]) || key.detected?.[0] || models[0] || ''
+    if (!model) throw new Error(t('keyTestNeedsModel'))
+    const response = provider
+      ? await run(() => api<{ model: string; result: Omit<KeyProbe, 'model'> }>(`/api/v1/providers/${provider.id}/probe`, { method: 'POST', body: JSON.stringify({ protocol: type, endpoint, secret: secret || undefined, key_index: secret ? undefined : index, model }) }))
+      : await run(() => api<{ model: string; result: Omit<KeyProbe, 'model'> }>('/api/v1/providers/probe', { method: 'POST', body: JSON.stringify({ protocol: type, endpoint, secret, model }) }))
+    return { ...response.result, model: response.model }
   }
-  const testModels = async () => {
-    setFetchingModels(true)
-    try { const results = await detectAllKeys(); const discovered = results.flatMap((result) => result.models || []); setModelTested(discovered.length > 0 && models.every((model) => discovered.includes(model))); notify(t('modelsTested', { count: models.filter((model) => discovered.includes(model)).length })); const failed = results.find((result) => result.error); if (failed?.error) notify(failed.error) } catch (cause) { setModelTested(false); notify(cause instanceof Error ? cause.message : String(cause)) } finally { setFetchingModels(false) }
+  const testKeys = async () => {
+    if (!endpoint.trim()) { notify(t('modelsRequired')); return }
+    if (!provider && !keyDrafts.some((key) => key.value.trim())) { notify(t('apiKeyRequired')); return }
+    setTesting(true)
+    try {
+      const results = await Promise.all(keyDrafts.map(async (key, index) => {
+        try { return { id: key.id, probe: await probeKey(index), error: null as string | null } } catch (cause) { return { id: key.id, probe: null, error: cause instanceof Error ? cause.message : String(cause) } }
+      }))
+      setKeyDrafts((current) => current.map((key) => {
+        const result = results.find((item) => item.id === key.id)
+        if (!result) return key
+        return result.probe ? { ...key, probe: result.probe, error: result.probe.ok ? null : result.probe.error } : { ...key, probe: null, error: result.error }
+      }))
+      const ok = results.filter((result) => result.probe?.ok).length
+      setTested(ok > 0 && ok === results.length)
+      notify(t('keyTestSummary', { ok, total: results.length }))
+    } catch (cause) { setTested(false); notify(cause instanceof Error ? cause.message : String(cause)) } finally { setTesting(false) }
   }
   const clearModels = () => {
     setModels([])
-    setModelTested(false)
     notify(t('modelsCleared'))
   }
   const toggleModel = (model: string) => {
     setModels((current) => current.includes(model) ? current.filter((item) => item !== model) : [...current, model])
-    setModelTested(false)
   }
   const addKey = () => setKeyDrafts((current) => [...current, createKeyDraft()])
-  const updateKey = (id: number, value: string) => setKeyDrafts((current) => current.map((key) => key.id === id ? { ...key, value, models: null, detected: null, error: null } : key))
+  const updateKey = (id: number, value: string) => setKeyDrafts((current) => current.map((key) => key.id === id ? { ...key, value, models: null, detected: null, error: null, probe: null } : key))
   const removeKey = (id: number) => setKeyDrafts((current) => current.length > 1 ? current.filter((key) => key.id !== id) : current)
   const toggleKeyModel = (id: number, model: string) => setKeyDrafts((current) => current.map((key) => {
     if (key.id !== id) return key
@@ -184,6 +185,7 @@ export function ProviderDialog({ open, onClose, onSave, onDelete, onTest, provid
     { value: 'gemini', label: t('geminiCompatible'), description: t('geminiProtocolHint'), badge: 'Gemini' },
     { value: 'openai-responses', label: t('openaiResponsesCompatible'), description: t('openaiResponsesProtocolHint'), badge: 'Responses' },
   ]
+  const busy = testing || detectingKey !== null
   return <>{!groupOpen && !modelSettingsOpen && <Modal open={open} onClose={onClose} title={provider ? t('manageProvider', { name: provider.name }) : t('connectProviderTitle')} description={t('providerDialogSubtitle')} size="channel-dialog">
     <form onSubmit={submit}>
       <div className="channel-section-title"><span className="channel-section-icon"><Check size={14} /></span><h3>{t('basicInformation')}</h3></div>
@@ -194,13 +196,14 @@ export function ProviderDialog({ open, onClose, onSave, onDelete, onTest, provid
       </div>
       <div className="channel-connection-fields">
         <div className="key-manager">
-          <div className="key-manager-heading"><span className="field-label">{t('apiKeys')}</span><button type="button" className="button text-button" onClick={addKey}><Plus size={12} />{t('addKey')}</button></div>
+          <div className="key-manager-heading"><span className="field-label">{t('apiKeys')}</span><div className="key-manager-actions"><button type="button" className="button text-button" disabled={busy || !endpoint.trim() || (!provider && !keyDrafts.some((key) => key.value.trim()))} onClick={testKeys}><Play size={12} />{testing ? t('keyTesting') : t('testKeys')}</button><button type="button" className="button text-button" onClick={addKey}><Plus size={12} />{t('addKey')}</button></div></div>
           <div className="key-input-list">{keyDrafts.map((key, index) => <div className="key-input-item" key={key.id}>
-            <div className="key-input-row"><input className="field" type="password" value={key.value} onChange={(event) => updateKey(key.id, event.target.value)} placeholder={key.configured ? t('notStored') : t('apiKeyPlaceholder')} aria-label={t('apiKeyNumber', { number: index + 1 })} autoComplete="new-password" /><button type="button" className="button secondary key-detect-button" disabled={detectingKey !== null || fetchingModels || !endpoint.trim() || (!provider && !key.value.trim())} onClick={() => detectKeyModels(key.id)}><RefreshCw className={detectingKey === key.id ? 'spin' : ''} size={12} />{t('detectKeyModels')}</button><button type="button" className="icon-button" disabled={keyDrafts.length === 1} onClick={() => removeKey(key.id)} aria-label={t('removeApiKey', { number: index + 1 })}><X size={14} /></button></div>
+            <div className="key-input-row"><input className="field" type="password" value={key.value} onChange={(event) => updateKey(key.id, event.target.value)} placeholder={key.configured ? t('notStored') : t('apiKeyPlaceholder')} aria-label={t('apiKeyNumber', { number: index + 1 })} autoComplete="new-password" /><button type="button" className="button secondary key-detect-button" disabled={busy || !endpoint.trim() || (!provider && !key.value.trim())} onClick={() => detectKeyModels(key.id)}><RefreshCw className={detectingKey === key.id ? 'spin' : ''} size={12} />{t('detectKeyModels')}</button><button type="button" className="icon-button" disabled={keyDrafts.length === 1} onClick={() => removeKey(key.id)} aria-label={t('removeApiKey', { number: index + 1 })}><X size={14} /></button></div>
             {key.models === null
               ? <small className="field-hint">{key.configured && !key.value.trim() ? t('keyScopeStored') : t('keyScopeAll')}</small>
-              : <div className="key-scope-chips">{models.map((model) => <label className={`key-scope-chip ${key.models?.includes(model) ? 'selected' : ''}`} key={model}><input type="checkbox" checked={key.models?.includes(model) || false} onChange={() => toggleKeyModel(key.id, model)} /><code>{model}</code></label>)}<button type="button" className="button text-button" onClick={() => clearKeyScope(key.id)}>{t('keyScopeAll')}</button></div>}
-            {key.error && <small className="key-scope-error">{key.error}</small>}
+              : <small className="field-hint">{t('keyScopeCount', { count: key.models.length })} · <button type="button" className="button text-button key-scope-edit" onClick={() => setModelSettingsOpen(true)}>{t('keyModelsEdit')}</button></small>}
+            {key.probe && <small className={key.probe.ok ? 'key-probe-ok' : 'key-probe-fail'}>{key.probe.ok ? <Check size={12} /> : <X size={12} />}{key.probe.ok ? `${t('keyTestOk')} · ${key.probe.model} · ${key.probe.latency_ms} ms` : key.probe.error}</small>}
+            {key.error && !key.probe && <small className="key-scope-error">{key.error}</small>}
           </div>)}</div>
           <small className="field-hint">{t('multipleKeysHint')} {t('keyScopeHint')}</small>
         </div>
@@ -210,29 +213,34 @@ export function ProviderDialog({ open, onClose, onSave, onDelete, onTest, provid
         <div className="channel-section-title"><span className="channel-section-icon"><Settings2 size={14} /></span><h3>{t('modelManagement')}</h3><span className="model-count">{models.length} {t('models')}</span></div>
         <div className="model-toolbar">
           <input className="field model-id-input" value={modelDraft} onChange={(event) => setModelDraft(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') { event.preventDefault(); addModel() } }} placeholder={t('modelIdPlaceholder')} aria-label={t('modelIdPlaceholder')} />
-          <button type="button" className="button secondary" disabled={!modelDraft.trim() || fetchingModels} onClick={addModel}><Plus size={13} />{t('addModel')}</button>
-          <button type="button" className="button primary" disabled={fetchingModels || !endpoint.trim() || (!provider && (!name.trim() || !keyDrafts.some((key) => key.value.trim())))} onClick={refreshModels}><RefreshCw className={fetchingModels ? 'spin' : ''} size={13} />{fetchingModels ? t('fetchingModels') : t('fetchModels')}</button>
-          <button type="button" className="button secondary" disabled={!models.length || fetchingModels} onClick={testModels}><Play size={13} />{t('testModels')}</button>
-          <button type="button" className="button secondary" onClick={() => setModelSettingsOpen(true)}><Settings2 size={13} />{t('modelSettings')}</button>
-          <span className="model-list-meta">{t('providerList')} · {modelListLabel}</span>
+          <button type="button" className="button secondary" disabled={!modelDraft.trim() || busy} onClick={addModel}><Plus size={13} />{t('addModel')}</button>
+          <button type="button" className="button secondary" onClick={() => setModelSettingsOpen(true)}><Settings2 size={13} />{t('keyModelsTitle')}</button>
           <button type="button" className="button secondary" disabled={!models.length} onClick={clearModels}>{t('clear')}</button>
         </div>
         <div className={`model-chip-list ${models.length ? '' : 'is-empty'}`}>
-          {models.map((model) => <span className="model-chip" key={model}><code>{model}</code><button type="button" onClick={() => { setModels((current) => current.filter((item) => item !== model)); setModelTested(false) }} aria-label={t('removeModel', { name: model })}><X size={12} /></button></span>)}
+          {models.map((model) => <span className="model-chip" key={model}><code>{model}</code><button type="button" onClick={() => setModels((current) => current.filter((item) => item !== model))} aria-label={t('removeModel', { name: model })}><X size={12} /></button></span>)}
           {!models.length && <span>{t('noModelsConfigured')}</span>}
         </div>
-        {modelTested && <div className="model-test-result"><Check size={13} />{t('modelsTested', { count: models.length })}</div>}
       </section>
       <div className="switch-row"><span>{t('enableProvider')}</span><Toggle label={t('enableProvider')} checked={enabled} onChange={() => setEnabled(!enabled)} /></div>
-      <div className="provider-test"><button type="button" className="button secondary" disabled={testing || fetchingModels || !endpoint.trim() || (!provider && (!name.trim() || !keyDrafts.some((key) => key.value.trim())))} onClick={async () => { setTesting(true); try { const results = await detectAllKeys(); setTested(results.some((result) => result.models?.length)); const failed = results.find((result) => result.error); if (failed?.error) notify(failed.error) } catch (cause) { setTested(false); notify(cause instanceof Error ? cause.message : String(cause)) } finally { setTesting(false) } }}>{testing || fetchingModels ? t('testingConnection') : t('testConnection')}</button>{tested && <span><Check size={13} />{t('configLooksGood')}</span>}</div>
-      <DialogActions onClose={onClose} label={provider ? t('saveProvider') : t('connectProvider')} />
+      <DialogActions onClose={onClose} label={provider ? t('saveProvider') : t('connectProvider')} leading={<button type="button" className="button secondary dialog-actions-leading" disabled={busy || !endpoint.trim() || (!provider && !keyDrafts.some((key) => key.value.trim()))} onClick={async () => { setTesting(true); try { const results = await detectAllKeys(); setTested(results.some((result) => result.models?.length)); const failed = results.find((result) => result.error); if (failed?.error) notify(failed.error) } catch (cause) { setTested(false); notify(cause instanceof Error ? cause.message : String(cause)) } finally { setTesting(false) } }}>{testing ? t('testingConnection') : t('testConnection')}</button>} />
+      {tested && <div className="provider-test-result"><Check size={13} />{t('configLooksGood')}</div>}
       {provider && onDelete && <button type="button" className="dialog-danger-link" onClick={onDelete}>{t('disconnectProvider')}</button>}
     </form>
   </Modal>}
-  <Modal open={modelSettingsOpen} onClose={() => setModelSettingsOpen(false)} title={t('modelSettings')} description={t('modelSettingsSubtitle')} size="nested-dialog model-settings-dialog">
+  <Modal open={modelSettingsOpen} onClose={() => setModelSettingsOpen(false)} title={t('keyModelsTitle')} description={t('keyModelsSubtitle')} size="nested-dialog model-settings-dialog">
     <div className="model-settings-body">
       <div className="model-catalog-heading"><span>{t('catalogModels')}</span><small>{models.length} {t('models')}</small></div>
       <div className="model-selection-list">{modelCatalog.map((model) => <label className="model-setting-option" key={model}><input type="checkbox" checked={models.includes(model)} onChange={() => toggleModel(model)} /><code>{model}</code></label>)}</div>
+      {!modelCatalog.length && <p className="field-hint">{t('noModelsConfigured')}</p>}
+      <div className="key-scope-sections">{keyDrafts.map((key, index) => <section className="key-scope-section" key={key.id}>
+        <div className="key-scope-section-head"><strong>{t('apiKeyNumber', { number: index + 1 })}</strong><button type="button" className="button secondary key-detect-button" disabled={busy || !endpoint.trim() || (!provider && !key.value.trim())} onClick={() => detectKeyModels(key.id)}><RefreshCw className={detectingKey === key.id ? 'spin' : ''} size={12} />{t('detectKeyModels')}</button></div>
+        {key.detected && <small className="field-hint">{t('keyModelsDetected', { number: index + 1, count: key.detected.length })}</small>}
+        {key.error && <small className="key-scope-error">{key.error}</small>}
+        {key.models === null
+          ? <div className="key-scope-all-row"><small className="field-hint">{key.configured && !key.value.trim() ? t('keyScopeStored') : t('keyScopeAll')}</small>{!!models.length && <button type="button" className="button text-button" onClick={() => setKeyDrafts((current) => current.map((item) => item.id === key.id ? { ...item, models: [] } : item))}>{t('keyScopeLimit')}</button>}</div>
+          : <><div className="key-scope-chips">{models.map((model) => <label className={`key-scope-chip ${key.models?.includes(model) ? 'selected' : ''}`} key={model}><input type="checkbox" checked={key.models?.includes(model) || false} onChange={() => toggleKeyModel(key.id, model)} /><code>{model}</code></label>)}<button type="button" className="button text-button" onClick={() => clearKeyScope(key.id)}>{t('keyScopeAll')}</button></div>{!models.length && <small className="field-hint">{t('noModelsConfigured')}</small>}</>}
+      </section>)}</div>
     </div>
     <div className="dialog-actions"><button type="button" className="button primary" onClick={() => setModelSettingsOpen(false)}>{t('done')}</button></div>
   </Modal>

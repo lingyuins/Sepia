@@ -7,6 +7,7 @@ pub mod discovery;
 pub mod lifecycle;
 pub mod observability;
 pub mod policy;
+pub mod probe;
 pub mod protocol;
 pub mod quota;
 pub mod relay;

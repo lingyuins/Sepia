@@ -55,7 +55,7 @@ pub enum InboundProtocol {
     OpenAIResponses,
 }
 
-fn candidate_protocols(provider: &crate::Provider, inbound: &InboundProtocol) -> Vec<Protocol> {
+pub fn candidate_protocols(provider: &crate::Provider, inbound: &InboundProtocol) -> Vec<Protocol> {
     match provider.protocol {
         ProviderProtocol::OpenAI => {
             if matches!(inbound, InboundProtocol::OpenAIResponses) {

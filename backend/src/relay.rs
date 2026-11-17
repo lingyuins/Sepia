@@ -53,6 +53,19 @@ pub fn endpoint_label(protocol: Protocol) -> &'static str {
         Protocol::OpenAIResponses => "responses",
     }
 }
+pub fn authorize(
+    request: reqwest::RequestBuilder,
+    protocol: Protocol,
+    secret: &str,
+) -> reqwest::RequestBuilder {
+    match protocol {
+        Protocol::OpenAI | Protocol::OpenAIResponses => request.bearer_auth(secret),
+        Protocol::Anthropic => request
+            .header("x-api-key", secret)
+            .header("anthropic-version", "2023-06-01"),
+        Protocol::Gemini => request.header("x-goog-api-key", secret),
+    }
+}
 pub async fn call(
     client: &reqwest::Client,
     provider: &Provider,
@@ -65,14 +78,7 @@ pub async fn call(
     let outgoing = client
         .post(upstream_url(protocol, provider, model, request.stream))
         .json(&body);
-    let outgoing = match protocol {
-        Protocol::OpenAI | Protocol::OpenAIResponses => outgoing.bearer_auth(secret),
-        Protocol::Anthropic => outgoing
-            .header("x-api-key", secret)
-            .header("anthropic-version", "2023-06-01"),
-        Protocol::Gemini => outgoing.header("x-goog-api-key", secret),
-    };
-    outgoing
+    authorize(outgoing, protocol, secret)
         .timeout(std::time::Duration::from_secs(60))
         .send()
         .await
