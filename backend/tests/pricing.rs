@@ -43,6 +43,7 @@ async fn amount_budget_reserves_and_charges_actual_model_usage() {
                 models: vec!["priced-model".into()],
             },
             "secret",
+            &[],
             &sepia_gateway::KeyStore::testing(),
         )
         .await

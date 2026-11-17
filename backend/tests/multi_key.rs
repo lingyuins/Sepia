@@ -17,21 +17,22 @@ async fn second_provider_key_is_used_after_authentication_failure() {
                 models: vec!["x".into()],
             },
             "first",
+            &[],
             &keys,
         )
         .await
         .unwrap();
     store
-        .add_provider_key(provider.id, "second", &keys)
+        .add_provider_key(provider.id, "second", None, &keys)
         .await
         .unwrap();
     let first = store
-        .upstream_key_for_attempt(provider.id, 0, &HashMap::new(), &keys)
+        .upstream_key_for_attempt(provider.id, "x", 0, &HashMap::new(), &keys)
         .await
         .unwrap()
         .unwrap();
     let second = store
-        .upstream_key_for_attempt(provider.id, 1, &HashMap::new(), &keys)
+        .upstream_key_for_attempt(provider.id, "x", 1, &HashMap::new(), &keys)
         .await
         .unwrap()
         .unwrap();

@@ -37,6 +37,8 @@ pub struct ProviderInput {
     secret: String,
     #[serde(default)]
     secrets: Vec<String>,
+    #[serde(default)]
+    key_models: Vec<KeyModelsInput>,
     #[serde(default = "default_group")]
     group_id: String,
     #[serde(default = "default_true")]
@@ -51,11 +53,22 @@ pub struct ProviderPreviewInput {
     #[serde(default)]
     secrets: Vec<String>,
 }
+#[derive(Deserialize)]
+pub struct KeyModelsInput {
+    secret: String,
+    models: Vec<String>,
+}
+#[derive(Deserialize)]
+pub struct ProviderKeyModelsUpdate {
+    models: Option<Vec<String>>,
+}
 #[derive(Deserialize, Default)]
 pub struct ProviderTestInput {
     protocol: Option<crate::ProviderProtocol>,
     endpoint: Option<String>,
     secret: Option<String>,
+    #[serde(default)]
+    key_index: Option<usize>,
 }
 #[derive(Deserialize)]
 pub struct RouteInput {
@@ -206,7 +219,19 @@ async fn auth(
     }
 }
 async fn providers(State(state): State<AppState>) -> Response {
-    match state.store.providers().await { Ok(providers) => Json(json!(providers.into_iter().map(|p| json!({"id":p.id,"name":p.name,"protocol":p.protocol,"endpoint":p.endpoint,"models":p.models,"key_count":p.key_count,"group_id":p.group_id,"enabled":p.enabled})).collect::<Vec<_>>())).into_response(), Err(message) => error(StatusCode::INTERNAL_SERVER_ERROR, message) }
+    let providers = match state.store.providers().await {
+        Ok(providers) => providers,
+        Err(message) => return error(StatusCode::INTERNAL_SERVER_ERROR, message),
+    };
+    let mut output = Vec::new();
+    for provider in providers {
+        let keys = match state.store.provider_keys(provider.id).await {
+            Ok(keys) => keys,
+            Err(message) => return error(StatusCode::INTERNAL_SERVER_ERROR, message),
+        };
+        output.push(json!({"id":provider.id,"name":provider.name,"protocol":provider.protocol,"endpoint":provider.endpoint,"models":provider.models,"key_count":provider.key_count,"group_id":provider.group_id,"enabled":provider.enabled,"keys":keys.iter().map(|key| json!({"id":key.id,"models":key.models})).collect::<Vec<_>>()}));
+    }
+    Json(output).into_response()
 }
 async fn preview_provider_models(
     State(state): State<AppState>,
@@ -248,9 +273,14 @@ async fn create_provider(
         mut models,
         secret,
         secrets,
+        key_models,
         group_id,
         enabled,
     } = input;
+    let key_scopes: Vec<(String, Vec<String>)> = key_models
+        .into_iter()
+        .map(|entry| (entry.secret, entry.models))
+        .collect();
     if models.is_empty() {
         let candidate = crate::Provider {
             id: 0,
@@ -262,19 +292,38 @@ async fn create_provider(
             group_id: group_id.clone(),
             enabled,
         };
-        let discovery_secret = if secret.trim().is_empty() {
-            secrets
-                .iter()
-                .find(|value| !value.trim().is_empty())
-                .map(String::as_str)
-                .unwrap_or("")
-        } else {
-            secret.as_str()
-        };
-        match crate::discovery::discover_models(&state.http, &candidate, discovery_secret).await {
-            Ok(discovered) => models = discovered,
-            Err(message) => return error(StatusCode::BAD_GATEWAY, message),
+        let mut discovered = Vec::new();
+        let mut first_error = None;
+        let mut seen = Vec::new();
+        for candidate_secret in std::iter::once(secret.as_str())
+            .chain(secrets.iter().map(String::as_str))
+            .filter(|value| !value.trim().is_empty())
+        {
+            if seen.contains(&candidate_secret) {
+                continue;
+            }
+            seen.push(candidate_secret);
+            match crate::discovery::discover_models(&state.http, &candidate, candidate_secret).await
+            {
+                Ok(models) => {
+                    for model in models {
+                        if !discovered.contains(&model) {
+                            discovered.push(model);
+                        }
+                    }
+                }
+                Err(message) => {
+                    first_error.get_or_insert(message);
+                }
+            };
         }
+        if discovered.is_empty() {
+            return error(
+                StatusCode::BAD_GATEWAY,
+                first_error.unwrap_or_else(|| "provider returned no models".into()),
+            );
+        }
+        models = discovered;
     }
     match state
         .store
@@ -286,6 +335,7 @@ async fn create_provider(
                 models,
             },
             &secret,
+            &key_scopes,
             &state.keys,
         )
         .await
@@ -309,9 +359,13 @@ async fn create_provider(
             for additional_secret in secrets.iter().filter(|additional_secret| {
                 !additional_secret.is_empty() && **additional_secret != secret
             }) {
+                let scope = key_scopes
+                    .iter()
+                    .find(|(key, _)| key == additional_secret)
+                    .map(|(_, models)| models.as_slice());
                 if let Err(message) = state
                     .store
-                    .add_provider_key(provider.id, additional_secret, &state.keys)
+                    .add_provider_key(provider.id, additional_secret, scope, &state.keys)
                     .await
                 {
                     return error(StatusCode::BAD_REQUEST, message);
@@ -378,6 +432,33 @@ async fn update_provider(
         .await
     {
         Ok(()) => {
+            if !input.key_models.is_empty() {
+                let keys = match state.store.provider_keys(id).await {
+                    Ok(keys) => keys,
+                    Err(message) => return error(StatusCode::INTERNAL_SERVER_ERROR, message),
+                };
+                for entry in &input.key_models {
+                    for key in &keys {
+                        let Ok(secret) = state
+                            .store
+                            .upstream_key_by_id(id, key.id, &state.keys)
+                            .await
+                        else {
+                            continue;
+                        };
+                        if secret == entry.secret {
+                            if let Err(message) = state
+                                .store
+                                .set_provider_key_models(id, key.id, Some(&entry.models))
+                                .await
+                            {
+                                return error(StatusCode::BAD_REQUEST, message);
+                            }
+                            break;
+                        }
+                    }
+                }
+            }
             let _ = state.snapshots.refresh(&state.store).await;
             StatusCode::OK.into_response()
         }
@@ -476,9 +557,28 @@ async fn test_provider(
     }
     let secret = match input.secret.filter(|secret| !secret.trim().is_empty()) {
         Some(secret) => secret,
-        None => match state.store.upstream_key(id, &state.keys).await {
-            Ok(secret) => secret,
-            Err(message) => return error(StatusCode::BAD_REQUEST, message),
+        None => match input.key_index {
+            Some(index) => {
+                let keys = match state.store.provider_keys(id).await {
+                    Ok(keys) => keys,
+                    Err(message) => return error(StatusCode::INTERNAL_SERVER_ERROR, message),
+                };
+                let Some(key) = keys.get(index) else {
+                    return error(StatusCode::BAD_REQUEST, "provider key not found");
+                };
+                match state
+                    .store
+                    .upstream_key_by_id(id, key.id, &state.keys)
+                    .await
+                {
+                    Ok(secret) => secret,
+                    Err(message) => return error(StatusCode::BAD_REQUEST, message),
+                }
+            }
+            None => match state.store.upstream_key(id, &state.keys).await {
+                Ok(secret) => secret,
+                Err(message) => return error(StatusCode::BAD_REQUEST, message),
+            },
         },
     };
     match crate::discovery::discover_models(&state.http, &provider, &secret).await {
@@ -494,8 +594,44 @@ async fn add_key(
     let Some(secret) = input.get("secret").and_then(serde_json::Value::as_str) else {
         return error(StatusCode::BAD_REQUEST, "secret required");
     };
-    match state.store.add_provider_key(id, secret, &state.keys).await {
+    let models = match input.get("models") {
+        None | Some(serde_json::Value::Null) => None,
+        Some(value) => match serde_json::from_value::<Vec<String>>(value.clone()) {
+            Ok(models) => Some(models),
+            Err(_) => return error(StatusCode::BAD_REQUEST, "models must be a string array"),
+        },
+    };
+    match state
+        .store
+        .add_provider_key(id, secret, models.as_deref(), &state.keys)
+        .await
+    {
         Ok(id) => Json(json!({"id":id})).into_response(),
+        Err(message) => error(StatusCode::BAD_REQUEST, message),
+    }
+}
+async fn list_provider_keys(State(state): State<AppState>, Path(id): Path<i64>) -> Response {
+    match state.store.provider_keys(id).await {
+        Ok(keys) => Json(json!(
+            keys.into_iter()
+                .map(|key| json!({"id":key.id,"models":key.models}))
+                .collect::<Vec<_>>()
+        ))
+        .into_response(),
+        Err(message) => error(StatusCode::INTERNAL_SERVER_ERROR, message),
+    }
+}
+async fn update_provider_key_models(
+    State(state): State<AppState>,
+    Path((id, key_id)): Path<(i64, i64)>,
+    Json(input): Json<ProviderKeyModelsUpdate>,
+) -> Response {
+    match state
+        .store
+        .set_provider_key_models(id, key_id, input.models.as_deref())
+        .await
+    {
+        Ok(()) => StatusCode::OK.into_response(),
         Err(message) => error(StatusCode::BAD_REQUEST, message),
     }
 }
@@ -671,7 +807,14 @@ pub fn router(state: AppState) -> Router<AppState> {
         .route("/providers/{id}", axum::routing::put(update_provider))
         .route("/routes/{id}", axum::routing::put(update_route))
         .route("/providers/{id}/test", post(test_provider))
-        .route("/providers/{id}/keys", post(add_key))
+        .route(
+            "/providers/{id}/keys",
+            get(list_provider_keys).post(add_key),
+        )
+        .route(
+            "/providers/{id}/keys/{key_id}/models",
+            axum::routing::put(update_provider_key_models),
+        )
         .route("/providers/{id}/enabled", post(provider_enabled))
         .route("/routes/{id}/enabled", post(route_enabled))
         .route("/routes/{id}", axum::routing::delete(delete_route))

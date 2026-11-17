@@ -22,6 +22,7 @@ async fn anthropic_model_listing_does_not_require_a_version_header() {
                 models: vec!["claude-sonnet".into()],
             },
             "upstream-secret",
+            &[],
             &KeyStore::testing(),
         )
         .await
@@ -106,6 +107,7 @@ async fn a_candidate_permission_exposes_its_route_slug() {
                 models: vec!["GLM-5.3-Premium".into()],
             },
             "upstream-secret",
+            &[],
             &KeyStore::testing(),
         )
         .await

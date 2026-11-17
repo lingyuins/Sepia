@@ -22,7 +22,10 @@ pub mod updates;
 pub static MIGRATIONS: sqlx::migrate::Migrator = sqlx::migrate!("./migrations");
 
 pub use crypto::{KeyStore, default_data_directory};
-pub use store::{NewProvider, NewRoute, Provider, ProviderProtocol, Route, Store, UpsertClientKey};
+pub use store::{
+    NewProvider, NewRoute, Provider, ProviderKeyInfo, ProviderProtocol, Route, Store,
+    UpsertClientKey,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ClientKey {

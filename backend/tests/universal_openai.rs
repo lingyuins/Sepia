@@ -72,6 +72,7 @@ async fn store_with_route(
                 models: vec!["upstream-model".into()],
             },
             "first-secret",
+            &[],
             &KeyStore::testing(),
         )
         .await
@@ -307,12 +308,13 @@ async fn authentication_failures_rotate_keys_before_switching_endpoint() {
                 models: vec!["upstream-model".into()],
             },
             "first-secret",
+            &[],
             &keys,
         )
         .await
         .unwrap();
     store
-        .add_provider_key(provider.id, "second-secret", &keys)
+        .add_provider_key(provider.id, "second-secret", None, &keys)
         .await
         .unwrap();
     store
@@ -391,6 +393,7 @@ async fn failing_both_endpoints_advances_to_next_candidate() {
                 models: vec!["upstream-model".into()],
             },
             "upstream-secret",
+            &[],
             &keys,
         )
         .await
@@ -405,6 +408,7 @@ async fn failing_both_endpoints_advances_to_next_candidate() {
                 models: vec!["upstream-model".into()],
             },
             "upstream-secret",
+            &[],
             &keys,
         )
         .await

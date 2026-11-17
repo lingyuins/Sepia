@@ -2,7 +2,7 @@ import type { KeyPolicy } from './key-policy'
 import type { Provider, RequestRecord, RouteRule } from './workspace'
 type ProviderProtocol = 'openai' | 'anthropic' | 'gemini' | 'openai-responses'
 
-export type ApiProvider = { id: number; name: string; protocol: ProviderProtocol; endpoint: string; models: string[]; key_count: number; enabled: boolean; group_id: string }
+export type ApiProvider = { id: number; name: string; protocol: ProviderProtocol; endpoint: string; models: string[]; key_count: number; enabled: boolean; group_id: string; keys?: { id: number; models: string[] | null }[] }
 export type ApiRoute = { id: number; slug: string; name: string; description: string; patterns: string[]; is_default: boolean; list_members: boolean; enabled: boolean; candidates: [number, string][] }
 export type ApiRequest = { id: string; protocol: string; model: string; route?: string; status: string; input_tokens: number; output_tokens: number; cost_micros: number; latency_ms: number; created_at: string; provider?: string; key?: string }
 export type ApiClientKey = { id: number; name: string; models: string[]; token_limit: number; max_amount_micros: number; rpm: number; tpm: number; expires_at: string | null }
@@ -31,7 +31,7 @@ export function apiClient(fetcher: typeof fetch = fetch) {
 export const api = apiClient()
 const color = ['#dcf1d2', '#e8cdb7', '#c5d9ef', '#c8c5ee']
 export function mapProvider(provider: ApiProvider): Provider {
-  return { id: provider.id, name: provider.name, short: provider.name.charAt(0).toUpperCase(), type: provider.protocol, models: provider.models.length, latency: 0, success: '—', requests: '0', color: color[provider.id % color.length], enabled: provider.enabled, endpoint: provider.endpoint, group: provider.group_id, modelsList: provider.models, keyCount: provider.key_count }
+  return { id: provider.id, name: provider.name, short: provider.name.charAt(0).toUpperCase(), type: provider.protocol, models: provider.models.length, latency: 0, success: '—', requests: '0', color: color[provider.id % color.length], enabled: provider.enabled, endpoint: provider.endpoint, group: provider.group_id, modelsList: provider.models, keyCount: provider.key_count, keyScopes: provider.keys }
 }
 export function mapRoute(route: ApiRoute, providers: Provider[]): RouteRule {
   const candidates = route.candidates.map(([provider, model], index) => ({ id: `${route.id}-${index}`, provider: providers.find((item) => item.id === provider)?.name || String(provider), model, enabled: true, weight: 1 }))
@@ -43,9 +43,10 @@ export function mapRequest(request: ApiRequest): RequestRecord {
   const time = new Date(request.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false })
   return { id: request.id, createdAt: request.created_at, time, model: request.model || 'unknown', provider: request.provider || '—', tokens: total.toLocaleString('en-US'), inputTokens: request.input_tokens, outputTokens: request.output_tokens, latency: `${request.latency_ms} ms`, latencyMs: request.latency_ms, status: request.status === 'success' ? '200 OK' : request.status === 'failed' ? 'Failed' : request.status, key: request.key || '—', cost: `$${(request.cost_micros / 1000000).toFixed(6)}`, route: request.route || '—' }
 }
-export function providerInput(provider: Provider & { keyDrafts?: { value: string }[] }, secrets?: string[]) {
-  const entered = secrets || provider.keyDrafts?.map((key) => key.value).filter(Boolean) || []
-  return { name: provider.name, protocol: provider.type, endpoint: provider.endpoint, models: provider.modelsList, secret: entered[0] || '', ...(secrets ? { secrets } : {}), group_id: provider.group, enabled: provider.enabled }
+export type ProviderKeyDraft = { value: string; models: string[] | null }
+export function providerInput(provider: Provider, keyDrafts: ProviderKeyDraft[] = []) {
+  const entered = keyDrafts.filter((key) => key.value.trim())
+  return { name: provider.name, protocol: provider.type, endpoint: provider.endpoint, models: provider.modelsList, secret: entered[0]?.value.trim() || '', secrets: entered.map((key) => key.value.trim()), key_models: entered.filter((key) => key.models !== null).map((key) => ({ secret: key.value.trim(), models: key.models })), group_id: provider.group, enabled: provider.enabled }
 }
 export function keyInput(policy: KeyPolicy) {
   const expiresAt = policy.expiresAt ? policy.expiresAt.slice(0, 16) : null

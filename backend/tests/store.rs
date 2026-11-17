@@ -36,7 +36,7 @@ async fn bootstrap_authenticates_sessions_and_persists_configuration() {
         models: vec!["example-1".into()],
     };
     let provider = store
-        .create_provider(provider, "sk-upstream-secret", &key_store)
+        .create_provider(provider, "sk-upstream-secret", &[], &key_store)
         .await
         .unwrap();
     let providers = store.providers().await.unwrap();

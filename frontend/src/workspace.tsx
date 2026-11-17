@@ -14,6 +14,7 @@ export function useTranslation() {
 }
 
 export type Page = 'Overview' | 'Providers' | 'Routing' | 'Plugins' | 'Requests' | 'Analytics' | 'Settings'
+export type ProviderKeyScope = { id: number; models: string[] | null }
 export type Provider = {
   id: number
   name: string
@@ -33,6 +34,7 @@ export type Provider = {
   modelsFetchedAt?: string
   modelCatalog?: string[]
   keyCount?: number
+  keyScopes?: ProviderKeyScope[]
 }
 export type ChannelGroup = { id: string; name: string; description: string }
 export type RouteCandidate = {

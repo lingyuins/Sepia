@@ -34,6 +34,7 @@ async fn gateway(upstream: Router) -> (SocketAddr, Store, String, tempfile::Temp
                 models: vec!["upstream-model".into()],
             },
             "upstream-secret",
+            &[],
             &KeyStore::testing(),
         )
         .await

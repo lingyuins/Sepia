@@ -38,6 +38,18 @@ impl ProviderProtocol {
         }
     }
 }
+fn provider_key_models(
+    key_scopes: &[(String, Vec<String>)],
+    secret: &str,
+) -> Result<Option<String>, String> {
+    key_scopes
+        .iter()
+        .find(|(key, _)| key == secret)
+        .map(|(_, models)| serde_json::to_string(models))
+        .transpose()
+        .map_err(|e| e.to_string())
+}
+
 #[derive(Debug, Clone)]
 pub struct NewProvider {
     pub name: String,
@@ -55,6 +67,11 @@ pub struct Provider {
     pub key_count: i64,
     pub group_id: String,
     pub enabled: bool,
+}
+#[derive(Debug, Clone)]
+pub struct ProviderKeyInfo {
+    pub id: i64,
+    pub models: Option<Vec<String>>,
 }
 #[derive(Debug, Clone)]
 pub struct NewRoute {
@@ -264,6 +281,7 @@ impl Store {
         &self,
         input: NewProvider,
         secret: &str,
+        key_scopes: &[(String, Vec<String>)],
         key_store: &KeyStore,
     ) -> Result<Provider, String> {
         if input.name.trim().is_empty() || input.models.is_empty() {
@@ -295,10 +313,11 @@ impl Store {
                 .map_err(|e| e.to_string())?;
         }
         let (nonce, ciphertext) = key_store.encrypt(secret)?;
-        sqlx::query("INSERT INTO provider_keys (provider_id, nonce, ciphertext) VALUES (?, ?, ?)")
+        sqlx::query("INSERT INTO provider_keys (provider_id, nonce, ciphertext, models) VALUES (?, ?, ?, ?)")
             .bind(id)
             .bind(nonce)
             .bind(ciphertext)
+            .bind(provider_key_models(key_scopes, secret)?)
             .execute(&mut *transaction)
             .await
             .map_err(|e| e.to_string())?;
@@ -341,28 +360,83 @@ impl Store {
         &self,
         provider_id: i64,
         secret: &str,
+        models: Option<&[String]>,
         key_store: &KeyStore,
     ) -> Result<i64, String> {
         let (nonce, ciphertext) = key_store.encrypt(secret)?;
         Ok(sqlx::query(
-            "INSERT INTO provider_keys (provider_id, nonce, ciphertext) VALUES (?, ?, ?)",
+            "INSERT INTO provider_keys (provider_id, nonce, ciphertext, models) VALUES (?, ?, ?, ?)",
         )
         .bind(provider_id)
         .bind(nonce)
         .bind(ciphertext)
+        .bind(models.map(serde_json::to_string).transpose().map_err(|e| e.to_string())?)
         .execute(&self.pool)
         .await
         .map_err(|e| e.to_string())?
         .last_insert_rowid())
     }
+    pub async fn provider_keys(&self, provider_id: i64) -> Result<Vec<ProviderKeyInfo>, String> {
+        let rows = sqlx::query("SELECT id, models FROM provider_keys WHERE provider_id = ? AND disabled = 0 ORDER BY id").bind(provider_id).fetch_all(&self.pool).await.map_err(|e| e.to_string())?;
+        rows.into_iter()
+            .map(|row| {
+                let models: Option<String> = row.get("models");
+                Ok(ProviderKeyInfo {
+                    id: row.get("id"),
+                    models: models
+                        .map(|models| serde_json::from_str(&models))
+                        .transpose()
+                        .map_err(|e| e.to_string())?,
+                })
+            })
+            .collect()
+    }
+    pub async fn set_provider_key_models(
+        &self,
+        provider_id: i64,
+        key_id: i64,
+        models: Option<&[String]>,
+    ) -> Result<(), String> {
+        let result =
+            sqlx::query("UPDATE provider_keys SET models = ? WHERE id = ? AND provider_id = ?")
+                .bind(
+                    models
+                        .map(serde_json::to_string)
+                        .transpose()
+                        .map_err(|e| e.to_string())?,
+                )
+                .bind(key_id)
+                .bind(provider_id)
+                .execute(&self.pool)
+                .await
+                .map_err(|e| e.to_string())?;
+        if result.rows_affected() == 0 {
+            return Err("provider key not found".into());
+        }
+        Ok(())
+    }
     pub async fn upstream_key_for_attempt(
         &self,
         provider_id: i64,
+        model: &str,
         start_index: usize,
         cooldowns: &std::collections::HashMap<i64, chrono::DateTime<Utc>>,
         key_store: &KeyStore,
     ) -> Result<Option<(i64, String)>, String> {
-        let rows = sqlx::query("SELECT id, nonce, ciphertext FROM provider_keys WHERE provider_id = ? AND disabled = 0 ORDER BY id").bind(provider_id).fetch_all(&self.pool).await.map_err(|e| e.to_string())?;
+        let rows = sqlx::query("SELECT id, nonce, ciphertext, models FROM provider_keys WHERE provider_id = ? AND disabled = 0 ORDER BY id").bind(provider_id).fetch_all(&self.pool).await.map_err(|e| e.to_string())?;
+        // A scoped key only serves requests for models inside its scope; an
+        // unscoped (NULL) key serves every provider model.
+        let rows: Vec<_> = rows
+            .into_iter()
+            .filter(|row| {
+                let models: Option<String> = row.get("models");
+                match models {
+                    None => true,
+                    Some(models) => serde_json::from_str::<Vec<String>>(&models)
+                        .is_ok_and(|models| models.iter().any(|item| item == model)),
+                }
+            })
+            .collect();
         if rows.is_empty() {
             return Ok(None);
         }
@@ -380,6 +454,17 @@ impl Store {
             )));
         }
         Ok(None)
+    }
+    pub async fn upstream_key_by_id(
+        &self,
+        provider_id: i64,
+        key_id: i64,
+        key_store: &KeyStore,
+    ) -> Result<String, String> {
+        let row = sqlx::query("SELECT nonce, ciphertext FROM provider_keys WHERE id = ? AND provider_id = ? AND disabled = 0").bind(key_id).bind(provider_id).fetch_optional(&self.pool).await.map_err(|e| e.to_string())?.ok_or("provider key not found")?;
+        Ok(key_store
+            .decrypt(row.get("nonce"), row.get("ciphertext"))?
+            .to_string())
     }
     pub async fn upstream_key(
         &self,

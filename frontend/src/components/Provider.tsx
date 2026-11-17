@@ -6,16 +6,21 @@ import { api } from '../api'
 import { protocolOf, useTranslation, useWorkspace, type ProtocolType, type Provider } from '../workspace'
 export type { Provider } from '../workspace'
 
-type KeyDraft = { id: number; value: string; configured: boolean }
+export type ProviderKeyDraft = { value: string; models: string[] | null }
+type KeyDraft = { id: number; value: string; configured: boolean; models: string[] | null; detected: string[] | null; error: string | null }
 let keyDraftId = 0
-const createKeyDraft = (configured = false): KeyDraft => ({ id: ++keyDraftId, value: '', configured })
-const keyDraftsFor = (provider?: Provider | null) => Array.from({ length: Math.max(provider?.keyCount || 1, 1) }, () => createKeyDraft(Boolean(provider)))
+const createKeyDraft = (configured = false, models: string[] | null = null): KeyDraft => ({ id: ++keyDraftId, value: '', configured, models, detected: null, error: null })
+const keyDraftsFor = (provider?: Provider | null) => {
+  const scopes = provider?.keyScopes
+  if (scopes?.length) return scopes.map((scope) => createKeyDraft(true, scope.models))
+  return Array.from({ length: Math.max(provider?.keyCount || 1, 1) }, () => createKeyDraft(Boolean(provider)))
+}
 
 export function ProviderMark({ name, short, color, small = false }: Pick<Provider, 'name' | 'short' | 'color'> & { small?: boolean }) {
   return <span className={`provider-mark ${small ? 'small' : ''}`} style={{ background: `${color}14`, color }} aria-label={name}>{short}</span>
 }
 
-export function ProviderDialog({ open, onClose, onSave, onDelete, onTest, provider }: { open: boolean; onClose: () => void; onSave: (provider: Provider, keys: string[]) => Promise<void>; onDelete?: () => void; onTest?: (provider: Provider, secret?: string) => Promise<string[]>; provider?: Provider | null }) {
+export function ProviderDialog({ open, onClose, onSave, onDelete, onTest, provider }: { open: boolean; onClose: () => void; onSave: (provider: Provider, keys: ProviderKeyDraft[]) => Promise<void>; onDelete?: () => void; onTest?: (provider: Provider, keyIndex?: number, secret?: string) => Promise<string[]>; provider?: Provider | null }) {
   const [name, setName] = useState('')
   const { channelGroups, run, notify, settings } = useWorkspace()
   const t = useTranslation()
@@ -26,6 +31,7 @@ export function ProviderDialog({ open, onClose, onSave, onDelete, onTest, provid
   const [testing, setTesting] = useState(false)
   const [tested, setTested] = useState(false)
   const [keyDrafts, setKeyDrafts] = useState<KeyDraft[]>(() => keyDraftsFor(provider))
+  const [detectingKey, setDetectingKey] = useState<number | null>(null)
   const [groupOpen, setGroupOpen] = useState(false)
   const [groupName, setGroupName] = useState('')
   const [groupDescription, setGroupDescription] = useState('')
@@ -54,6 +60,7 @@ export function ProviderDialog({ open, onClose, onSave, onDelete, onTest, provid
     setFetchingModels(false)
     setModelSettingsOpen(false)
     setGroupOpen(false)
+    setDetectingKey(null)
   }, [open, provider])
   const modelListLabel = modelsFetchedAt
     ? Date.now() - new Date(modelsFetchedAt).getTime() < 60000
@@ -77,19 +84,56 @@ export function ProviderDialog({ open, onClose, onSave, onDelete, onTest, provid
     setModelTested(false)
     notify(t('modelAdded', { name: id }))
   }
-  const testProvider = () => {
-    const secret = keyDrafts.find((key) => key.value.trim())?.value.trim()
-    if (provider && onTest) return onTest({ ...provider, type, endpoint }, secret)
-    return run(() => api<{ models: string[] }>('/api/v1/providers/test', { method: 'POST', body: JSON.stringify({ protocol: type, endpoint, secret: secret || '', secrets: keyDrafts.map((key) => key.value.trim()).filter(Boolean) }) })).then((result) => result.models)
+  const discoverKey = (index: number) => {
+    const key = keyDrafts[index]
+    const secret = key.value.trim()
+    if (provider && onTest) return onTest({ ...provider, type, endpoint }, index, secret || undefined)
+    return run(() => api<{ models: string[] }>('/api/v1/providers/test', { method: 'POST', body: JSON.stringify({ protocol: type, endpoint, secret: secret || '', secrets: keyDrafts.map((item) => item.value.trim()).filter(Boolean) }) })).then((result) => result.models)
+  }
+  const detectKeyModels = async (id: number) => {
+    const index = keyDrafts.findIndex((key) => key.id === id)
+    if (index < 0) return
+    setDetectingKey(id)
+    try {
+      const discovered = await discoverKey(index)
+      setKeyDrafts((current) => current.map((key) => key.id === id ? { ...key, models: [...discovered], detected: [...discovered], error: null } : key))
+      setModels((current) => [...new Set([...current, ...discovered])])
+      setModelCatalog((current) => [...new Set([...current, ...discovered])])
+      setModelsFetchedAt(new Date().toISOString())
+      setModelTested(false)
+      notify(t('keyModelsDetected', { number: index + 1, count: discovered.length }))
+    } catch (cause) {
+      const message = cause instanceof Error ? cause.message : String(cause)
+      setKeyDrafts((current) => current.map((key) => key.id === id ? { ...key, error: message } : key))
+      notify(message)
+    } finally { setDetectingKey(null) }
+  }
+  const detectAllKeys = async () => {
+    const results = await Promise.all(keyDrafts.map(async (key, index) => {
+      try { return { id: key.id, models: await discoverKey(index), error: null as string | null } } catch (cause) { return { id: key.id, models: null, error: cause instanceof Error ? cause.message : String(cause) } }
+    }))
+    setKeyDrafts((current) => current.map((key) => {
+      const result = results.find((item) => item.id === key.id)
+      if (!result) return key
+      return result.models ? { ...key, models: [...result.models], detected: [...result.models], error: null } : { ...key, error: result.error }
+    }))
+    const discovered = [...new Set(results.flatMap((result) => result.models || []))]
+    if (discovered.length) {
+      setModels(discovered)
+      setModelCatalog(discovered)
+      setModelsFetchedAt(new Date().toISOString())
+      setModelTested(false)
+    }
+    return results
   }
   const refreshModels = async () => {
     if (!provider && (!name.trim() || !endpoint.trim() || !keyDrafts.some((key) => key.value.trim()))) { notify(t('modelsRequired')); return }
     setFetchingModels(true)
-    try { const catalog = await testProvider(); setModels([...catalog]); setModelCatalog([...catalog]); setModelsFetchedAt(new Date().toISOString()); setModelTested(false); notify(t('modelsRefreshed', { count: catalog.length })) } catch (cause) { notify(cause instanceof Error ? cause.message : String(cause)) } finally { setFetchingModels(false) }
+    try { const results = await detectAllKeys(); const count = results.flatMap((result) => result.models || []).length; if (count) notify(t('modelsRefreshed', { count })); const failed = results.find((result) => result.error); if (failed?.error) notify(failed.error) } catch (cause) { notify(cause instanceof Error ? cause.message : String(cause)) } finally { setFetchingModels(false) }
   }
   const testModels = async () => {
     setFetchingModels(true)
-    try { const discovered = await testProvider(); setModelTested(models.every((model) => discovered.includes(model))); notify(t('modelsTested', { count: models.filter((model) => discovered.includes(model)).length })) } catch (cause) { setModelTested(false); notify(cause instanceof Error ? cause.message : String(cause)) } finally { setFetchingModels(false) }
+    try { const results = await detectAllKeys(); const discovered = results.flatMap((result) => result.models || []); setModelTested(discovered.length > 0 && models.every((model) => discovered.includes(model))); notify(t('modelsTested', { count: models.filter((model) => discovered.includes(model)).length })); const failed = results.find((result) => result.error); if (failed?.error) notify(failed.error) } catch (cause) { setModelTested(false); notify(cause instanceof Error ? cause.message : String(cause)) } finally { setFetchingModels(false) }
   }
   const clearModels = () => {
     setModels([])
@@ -101,8 +145,14 @@ export function ProviderDialog({ open, onClose, onSave, onDelete, onTest, provid
     setModelTested(false)
   }
   const addKey = () => setKeyDrafts((current) => [...current, createKeyDraft()])
-  const updateKey = (id: number, value: string) => setKeyDrafts((current) => current.map((key) => key.id === id ? { ...key, value } : key))
+  const updateKey = (id: number, value: string) => setKeyDrafts((current) => current.map((key) => key.id === id ? { ...key, value, models: null, detected: null, error: null } : key))
   const removeKey = (id: number) => setKeyDrafts((current) => current.length > 1 ? current.filter((key) => key.id !== id) : current)
+  const toggleKeyModel = (id: number, model: string) => setKeyDrafts((current) => current.map((key) => {
+    if (key.id !== id) return key
+    const scope = key.models || []
+    return { ...key, models: scope.includes(model) ? scope.filter((item) => item !== model) : [...scope, model] }
+  }))
+  const clearKeyScope = (id: number) => setKeyDrafts((current) => current.map((key) => key.id === id ? { ...key, models: null } : key))
   const submit = async (event: React.FormEvent) => {
     event.preventDefault()
     if (!name.trim()) { notify(t('channelNameRequired')); return }
@@ -110,8 +160,8 @@ export function ProviderDialog({ open, onClose, onSave, onDelete, onTest, provid
     if (!models.length) { notify(t('modelsRequired')); return }
     try {
       const keyCount = keyDrafts.filter((key) => key.configured || key.value.trim()).length
-      const saved = { id: provider?.id || Date.now(), name: name.trim(), short: name.trim().charAt(0).toUpperCase(), type, group, models: models.length, latency: provider?.latency || 0, success: provider?.success || '—', requests: provider?.requests || '0', color: provider?.color || '#c4f4aa', enabled, endpoint, modelsList: models, keyCount }
-      await onSave(saved, keyDrafts.map((key) => key.value.trim()).filter(Boolean))
+      const saved = { id: provider?.id || Date.now(), name: name.trim(), short: name.trim().charAt(0).toUpperCase(), type, group, models: models.length, latency: provider?.latency || 0, success: provider?.success || '—', requests: provider?.requests || '0', color: provider?.color || '#c4f4aa', enabled, endpoint, modelsList: models, keyCount, keyScopes: provider?.keyScopes }
+      await onSave(saved, keyDrafts.filter((key) => key.configured || key.value.trim()).map((key) => ({ value: key.value.trim(), models: key.models })))
     } catch (cause) { notify(cause instanceof Error ? cause.message : String(cause)) }
   }
   const createGroup = async (event: React.FormEvent) => {
@@ -145,8 +195,14 @@ export function ProviderDialog({ open, onClose, onSave, onDelete, onTest, provid
       <div className="channel-connection-fields">
         <div className="key-manager">
           <div className="key-manager-heading"><span className="field-label">{t('apiKeys')}</span><button type="button" className="button text-button" onClick={addKey}><Plus size={12} />{t('addKey')}</button></div>
-          <div className="key-input-list">{keyDrafts.map((key, index) => <div className="key-input-row" key={key.id}><input className="field" type="password" value={key.value} onChange={(event) => updateKey(key.id, event.target.value)} placeholder={key.configured ? t('notStored') : t('apiKeyPlaceholder')} aria-label={t('apiKeyNumber', { number: index + 1 })} autoComplete="new-password" /><button type="button" className="icon-button" disabled={keyDrafts.length === 1} onClick={() => removeKey(key.id)} aria-label={t('removeApiKey', { number: index + 1 })}><X size={14} /></button></div>)}</div>
-          <small className="field-hint">{t('multipleKeysHint')}</small>
+          <div className="key-input-list">{keyDrafts.map((key, index) => <div className="key-input-item" key={key.id}>
+            <div className="key-input-row"><input className="field" type="password" value={key.value} onChange={(event) => updateKey(key.id, event.target.value)} placeholder={key.configured ? t('notStored') : t('apiKeyPlaceholder')} aria-label={t('apiKeyNumber', { number: index + 1 })} autoComplete="new-password" /><button type="button" className="button secondary key-detect-button" disabled={detectingKey !== null || fetchingModels || !endpoint.trim() || (!provider && !key.value.trim())} onClick={() => detectKeyModels(key.id)}><RefreshCw className={detectingKey === key.id ? 'spin' : ''} size={12} />{t('detectKeyModels')}</button><button type="button" className="icon-button" disabled={keyDrafts.length === 1} onClick={() => removeKey(key.id)} aria-label={t('removeApiKey', { number: index + 1 })}><X size={14} /></button></div>
+            {key.models === null
+              ? <small className="field-hint">{key.configured && !key.value.trim() ? t('keyScopeStored') : t('keyScopeAll')}</small>
+              : <div className="key-scope-chips">{models.map((model) => <label className={`key-scope-chip ${key.models?.includes(model) ? 'selected' : ''}`} key={model}><input type="checkbox" checked={key.models?.includes(model) || false} onChange={() => toggleKeyModel(key.id, model)} /><code>{model}</code></label>)}<button type="button" className="button text-button" onClick={() => clearKeyScope(key.id)}>{t('keyScopeAll')}</button></div>}
+            {key.error && <small className="key-scope-error">{key.error}</small>}
+          </div>)}</div>
+          <small className="field-hint">{t('multipleKeysHint')} {t('keyScopeHint')}</small>
         </div>
         <Field label={t('baseUrl')} type="url" value={endpoint} onChange={setEndpoint} placeholder="https://api.example.com/v1" />
       </div>
@@ -168,7 +224,7 @@ export function ProviderDialog({ open, onClose, onSave, onDelete, onTest, provid
         {modelTested && <div className="model-test-result"><Check size={13} />{t('modelsTested', { count: models.length })}</div>}
       </section>
       <div className="switch-row"><span>{t('enableProvider')}</span><Toggle label={t('enableProvider')} checked={enabled} onChange={() => setEnabled(!enabled)} /></div>
-      <div className="provider-test"><button type="button" className="button secondary" disabled={testing || fetchingModels || !endpoint.trim() || (!provider && (!name.trim() || !keyDrafts.some((key) => key.value.trim())))} onClick={async () => { setTesting(true); try { const discovered = await testProvider(); setModels(discovered); setModelCatalog(discovered); setModelsFetchedAt(new Date().toISOString()); setTested(true) } catch (cause) { setTested(false); notify(cause instanceof Error ? cause.message : String(cause)) } finally { setTesting(false) } }}>{testing || fetchingModels ? t('testingConnection') : t('testConnection')}</button>{tested && <span><Check size={13} />{t('configLooksGood')}</span>}</div>
+      <div className="provider-test"><button type="button" className="button secondary" disabled={testing || fetchingModels || !endpoint.trim() || (!provider && (!name.trim() || !keyDrafts.some((key) => key.value.trim())))} onClick={async () => { setTesting(true); try { const results = await detectAllKeys(); setTested(results.some((result) => result.models?.length)); const failed = results.find((result) => result.error); if (failed?.error) notify(failed.error) } catch (cause) { setTested(false); notify(cause instanceof Error ? cause.message : String(cause)) } finally { setTesting(false) } }}>{testing || fetchingModels ? t('testingConnection') : t('testConnection')}</button>{tested && <span><Check size={13} />{t('configLooksGood')}</span>}</div>
       <DialogActions onClose={onClose} label={provider ? t('saveProvider') : t('connectProvider')} />
       {provider && onDelete && <button type="button" className="dialog-danger-link" onClick={onDelete}>{t('disconnectProvider')}</button>}
     </form>

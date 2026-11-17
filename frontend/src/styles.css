@@ -549,6 +549,14 @@ kbd { font-family: inherit; }
 .key-input-row { display: flex; align-items: center; gap: 7px; }
 .key-input-row .field { min-width: 0; }
 .key-input-row .icon-button:disabled { opacity: .25; }
+.key-input-item { display: flex; flex-direction: column; gap: 6px; }
+.key-detect-button { min-height: 40px; white-space: nowrap; }
+.key-scope-chips { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
+.key-scope-chip { display: inline-flex; align-items: center; gap: 5px; max-width: 100%; padding: 4px 8px; border: 1px solid var(--border); border-radius: 5px; background: var(--surface); cursor: pointer; }
+.key-scope-chip.selected { border-color: var(--accent-border); background: var(--accent-soft); }
+.key-scope-chip code { overflow: hidden; color: var(--text); font-size: 12px; text-overflow: ellipsis; }
+.key-scope-chip input { accent-color: var(--accent); }
+.key-scope-error { color: var(--danger); font-size: 12px; overflow-wrap: anywhere; }
 .model-manager { margin-top: 22px; border-top: 1px solid var(--border); }
 .model-manager .channel-section-title { margin: 18px 0 14px; }
 .model-count { margin-left: auto; color: var(--text-muted); font-size: 12px; }

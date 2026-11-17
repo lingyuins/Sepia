@@ -559,7 +559,18 @@ pub async fn relay(
             // the other endpoint and later candidates. Each leg restarts at
             // the provider's first key.
             let mut key_attempts = 0usize;
-            let key_count = provider.key_count.max(0) as usize;
+            let key_count = state
+                .store
+                .provider_keys(provider.id)
+                .await
+                .unwrap_or_default()
+                .iter()
+                .filter(|key| {
+                    key.models
+                        .as_ref()
+                        .is_none_or(|models| models.iter().any(|item| item == model))
+                })
+                .count();
             loop {
                 if let Some(lifecycle) = &response_state
                     && state
@@ -582,6 +593,7 @@ pub async fn relay(
                         .store
                         .upstream_key_for_attempt(
                             provider.id,
+                            model,
                             key_attempts,
                             &health.cooldowns,
                             &state.keys,

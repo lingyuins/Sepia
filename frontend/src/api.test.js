@@ -32,13 +32,13 @@ test('maps real backend records to existing UI shapes', () => {
 test('serializes editor data for the real management API', () => {
   const provider = mapProvider(remoteProvider)
   const route = mapRoute(remoteRoute, [provider])
-  assert.deepEqual(providerInput({ ...provider, keyDrafts: [{ value: 'secret' }] }), { name: 'Local OpenAI', protocol: 'openai', endpoint: 'http://127.0.0.1:9000/v1', models: ['local-model'], secret: 'secret', group_id: 'official', enabled: true })
+  assert.deepEqual(providerInput(provider, [{ value: 'secret', models: null }]), { name: 'Local OpenAI', protocol: 'openai', endpoint: 'http://127.0.0.1:9000/v1', models: ['local-model'], secret: 'secret', secrets: ['secret'], key_models: [], group_id: 'official', enabled: true })
   assert.deepEqual(routeInput(route, [provider]), { slug: 'chat', name: 'Chat route', description: 'Real description', patterns: ['chat-*'], is_default: true, list_members: true, enabled: true, candidates: [[7, 'local-model']] })
 })
 
 test('uses the first entered secret for discovery and retains additional keys', () => {
   const provider = mapProvider(remoteProvider)
-  assert.deepEqual(providerInput(provider, ['first-secret', 'second-secret']), { name: 'Local OpenAI', protocol: 'openai', endpoint: 'http://127.0.0.1:9000/v1', models: ['local-model'], secret: 'first-secret', secrets: ['first-secret', 'second-secret'], group_id: 'official', enabled: true })
+  assert.deepEqual(providerInput(provider, [{ value: 'first-secret', models: ['claude-a'] }, { value: 'second-secret', models: null }]), { name: 'Local OpenAI', protocol: 'openai', endpoint: 'http://127.0.0.1:9000/v1', models: ['local-model'], secret: 'first-secret', secrets: ['first-secret', 'second-secret'], key_models: [{ secret: 'first-secret', models: ['claude-a'] }], group_id: 'official', enabled: true })
 })
 
 test('serializes key creation and policy without accepting a client-generated secret', () => {

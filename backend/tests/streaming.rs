@@ -39,6 +39,7 @@ async fn provider(
                 models: vec!["upstream-model".into()],
             },
             "upstream-secret",
+            &[],
             &KeyStore::testing(),
         )
         .await

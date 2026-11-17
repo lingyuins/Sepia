@@ -18,6 +18,7 @@ async fn provider_and_route_updates_round_trip_and_analytics_are_real() {
                 models: vec!["one".into()],
             },
             "secret",
+            &[],
             &sepia_gateway::KeyStore::testing(),
         )
         .await
