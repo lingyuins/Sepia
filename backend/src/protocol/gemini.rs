@@ -386,28 +386,29 @@ pub fn decode_response(value: Value) -> Result<ChatResponse, String> {
         } else {
             FinishReason::Stop
         });
-    if content
-        .iter()
-        .any(|block| matches!(block, ContentBlock::ToolCall { .. }))
-    {
-        return Ok(ChatResponse::from_content(
-            String::new(),
-            String::new(),
-            content,
-            FinishReason::ToolUse,
-            usage(root, "promptTokenCount", "candidatesTokenCount").0,
-            usage(root, "promptTokenCount", "candidatesTokenCount").1,
-        ));
-    }
     let (input_tokens, output_tokens) = usage(root, "promptTokenCount", "candidatesTokenCount");
-    Ok(ChatResponse::from_content(
+    let (cached_tokens, reasoning_tokens) = root
+        .get("usageMetadata")
+        .map(usage_details)
+        .unwrap_or((0, 0));
+    let tool_use = content
+        .iter()
+        .any(|block| matches!(block, ContentBlock::ToolCall { .. }));
+    let mut response = ChatResponse::from_content(
         String::new(),
         String::new(),
         content,
-        reason,
+        if tool_use {
+            FinishReason::ToolUse
+        } else {
+            reason
+        },
         input_tokens,
         output_tokens,
-    ))
+    );
+    response.cached_tokens = cached_tokens;
+    response.reasoning_tokens = reasoning_tokens;
+    Ok(response)
 }
 pub fn encode_response(response: &ChatResponse) -> Value {
     json!({"candidates":[{"content":{"role":"model","parts":response.content.iter().map(content_block_value).collect::<Vec<_>>()},"finishReason":gemini_finish(response.finish_reason)}],"usageMetadata":{"promptTokenCount":response.input_tokens,"candidatesTokenCount":response.output_tokens,"totalTokenCount":response.input_tokens + response.output_tokens}})
@@ -417,6 +418,7 @@ pub fn encode_sse(events: &[StreamEvent]) -> Vec<(Option<&'static str>, Value)> 
         if let StreamEvent::Usage {
             input_tokens,
             output_tokens,
+            ..
         } = event
         {
             Some((*input_tokens, *output_tokens))
@@ -497,6 +499,8 @@ pub fn decode_sse(
         output.push(StreamEvent::Usage {
             input_tokens: response.input_tokens,
             output_tokens: response.output_tokens,
+            cached_tokens: response.cached_tokens,
+            reasoning_tokens: response.reasoning_tokens,
         });
     }
     let has_finish = value.pointer("/candidates/0/finishReason").is_some()

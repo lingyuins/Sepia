@@ -5,6 +5,7 @@ pub struct RequestGuard {
     store: Store,
     request_id: String,
     reservation: String,
+    started: std::time::Instant,
     state: Arc<Mutex<GuardState>>,
 }
 #[derive(Clone)]
@@ -17,6 +18,7 @@ impl RequestGuard {
             store,
             request_id,
             reservation,
+            started: std::time::Instant::now(),
             state: Arc::new(Mutex::new(GuardState { completed: false })),
         }
     }
@@ -49,6 +51,7 @@ impl RequestGuard {
                 input_tokens,
                 output_tokens,
                 cost_micros,
+                self.started.elapsed().as_millis() as i64,
             )
             .await?;
         self.state

@@ -313,7 +313,7 @@ pub fn decode_response(value: Value) -> Result<ChatResponse, String> {
         .map(content_block)
         .collect::<Result<Vec<_>, _>>()?;
     let (input_tokens, output_tokens) = usage(root, "input_tokens", "output_tokens");
-    Ok(ChatResponse::from_content(
+    let mut response = ChatResponse::from_content(
         root.get("id").and_then(Value::as_str).unwrap_or("").into(),
         root.get("model")
             .and_then(Value::as_str)
@@ -323,7 +323,11 @@ pub fn decode_response(value: Value) -> Result<ChatResponse, String> {
         finish(root.get("stop_reason").and_then(Value::as_str)),
         input_tokens,
         output_tokens,
-    ))
+    );
+    if let Some(usage) = root.get("usage") {
+        (response.cached_tokens, response.reasoning_tokens) = usage_details(usage);
+    }
+    Ok(response)
 }
 pub fn encode_response(response: &ChatResponse) -> Value {
     json!({"id":response.id,"type":"message","role":"assistant","model":response.model,"content":response.content.iter().map(content_block_value).collect::<Vec<_>>(),"stop_reason":anthropic_finish(response.finish_reason),"usage":{"input_tokens":response.input_tokens,"output_tokens":response.output_tokens}})
@@ -333,6 +337,7 @@ pub fn encode_sse(events: &[StreamEvent]) -> Vec<(Option<&'static str>, Value)> 
         if let StreamEvent::Usage {
             input_tokens,
             output_tokens,
+            ..
         } = event
         {
             Some((*input_tokens, *output_tokens))
@@ -440,6 +445,7 @@ pub fn decode_sse(
                     .get("output_tokens")
                     .and_then(Value::as_u64)
                     .unwrap_or(0);
+                state.cached_tokens = usage_details(usage).0;
             }
             output.push(StreamEvent::Start {
                 id: message
@@ -511,9 +517,15 @@ pub fn decode_sse(
                     .get("output_tokens")
                     .and_then(Value::as_u64)
                     .unwrap_or(state.output_tokens);
+                let cached = usage_details(usage).0;
+                if cached > 0 {
+                    state.cached_tokens = cached;
+                }
                 output.push(StreamEvent::Usage {
                     input_tokens: state.input_tokens,
                     output_tokens: state.output_tokens,
+                    cached_tokens: state.cached_tokens,
+                    reasoning_tokens: 0,
                 });
             }
             if let Some(reason) = root

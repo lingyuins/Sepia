@@ -71,6 +71,8 @@ fn stream_events_round_trip_with_native_event_names_and_done_markers() {
         StreamEvent::Usage {
             input_tokens: 2,
             output_tokens: 1,
+            cached_tokens: 0,
+            reasoning_tokens: 0,
         },
         StreamEvent::Stop(FinishReason::Stop),
     ];
@@ -88,7 +90,9 @@ fn stream_events_round_trip_with_native_event_names_and_done_markers() {
                     StreamEvent::Delta("Hello".into()),
                     StreamEvent::Usage {
                         input_tokens: 2,
-                        output_tokens: 1
+                        output_tokens: 1,
+                        cached_tokens: 0,
+                        reasoning_tokens: 0,
                     },
                     StreamEvent::Stop(FinishReason::Stop)
                 ]
@@ -158,7 +162,9 @@ fn responses_stream_events_decode_to_shared_events() {
             StreamEvent::Delta("Hello".into()),
             StreamEvent::Usage {
                 input_tokens: 2,
-                output_tokens: 1
+                output_tokens: 1,
+                cached_tokens: 0,
+                reasoning_tokens: 0,
             },
             StreamEvent::Stop(FinishReason::Stop),
         ]

@@ -13,6 +13,7 @@ pub struct AnthropicState {
     indices: std::collections::HashMap<usize, Option<(String, String)>>,
     input_tokens: u64,
     output_tokens: u64,
+    cached_tokens: u64,
     finished: bool,
 }
 

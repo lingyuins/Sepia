@@ -265,7 +265,7 @@ pub fn response_object(
         "model":response.model,"output":if in_progress { json!([]) } else { json!(output_items(response)) },"parallel_tool_calls":original.get("parallel_tool_calls").cloned().unwrap_or(json!(true)),"previous_response_id":context.and_then(|context| context.previous_response_id.as_ref()).map(|value| json!(value)).unwrap_or(Value::Null),"conversation":context.and_then(|context| context.conversation.as_ref()).map(|id| json!({"id":id})).unwrap_or(Value::Null),
         "background":context.is_some_and(|context| context.background),"reasoning":original.get("reasoning").cloned().unwrap_or(json!({"effort":null,"summary":null})),"store":context.is_none_or(|context| context.store),"temperature":original.get("temperature").cloned().unwrap_or(json!(1.0)),"top_p":original.get("top_p").cloned().unwrap_or(json!(1.0)),"top_logprobs":original.get("top_logprobs").cloned().unwrap_or(Value::Null),
         "text":original.get("text").cloned().unwrap_or(json!({"format":{"type":"text"}})),"tool_choice":original.get("tool_choice").cloned().unwrap_or(json!("auto")),"tools":context.map(|context| context.tools.clone()).unwrap_or_default(),"truncation":original.get("truncation").cloned().unwrap_or(json!("disabled")),"metadata":original.get("metadata").cloned().unwrap_or(json!({})),
-        "usage":if in_progress { Value::Null } else { json!({"input_tokens":response.input_tokens,"input_tokens_details":{"cached_tokens":0},"output_tokens":response.output_tokens,"output_tokens_details":{"reasoning_tokens":0},"total_tokens":response.input_tokens + response.output_tokens}) }
+        "usage":if in_progress { Value::Null } else { json!({"input_tokens":response.input_tokens,"input_tokens_details":{"cached_tokens":response.cached_tokens},"output_tokens":response.output_tokens,"output_tokens_details":{"reasoning_tokens":response.reasoning_tokens},"total_tokens":response.input_tokens + response.output_tokens}) }
     })
 }
 pub fn encode_response(response_value: &ChatResponse) -> Value {
@@ -292,6 +292,8 @@ pub struct StreamEncoder {
     text: String,
     input_tokens: u64,
     output_tokens: u64,
+    cached_tokens: u64,
+    reasoning_tokens: u64,
     sequence: u64,
     started: bool,
     message_started: bool,
@@ -312,6 +314,8 @@ impl StreamEncoder {
             text: String::new(),
             input_tokens: 0,
             output_tokens: 0,
+            cached_tokens: 0,
+            reasoning_tokens: 0,
             sequence: 0,
             started: false,
             message_started: false,
@@ -329,18 +333,17 @@ impl StreamEncoder {
         format!("event: {name}\ndata: {data}\n\n")
     }
     fn response(&self, in_progress: bool) -> Value {
-        response_object(
-            &ChatResponse::from_content(
-                self.id.clone(),
-                self.model.clone(),
-                self.content(),
-                FinishReason::Stop,
-                self.input_tokens,
-                self.output_tokens,
-            ),
-            self.context.as_ref(),
-            in_progress,
-        )
+        let mut response = ChatResponse::from_content(
+            self.id.clone(),
+            self.model.clone(),
+            self.content(),
+            FinishReason::Stop,
+            self.input_tokens,
+            self.output_tokens,
+        );
+        response.cached_tokens = self.cached_tokens;
+        response.reasoning_tokens = self.reasoning_tokens;
+        response_object(&response, self.context.as_ref(), in_progress)
     }
     fn content(&self) -> Vec<ContentBlock> {
         let mut content = Vec::new();
@@ -402,18 +405,17 @@ impl StreamEncoder {
             output.push_str(&self.frame("response.output_item.done", json!({"output_index":call.output_index,"item":{"id":format!("fc_{}_{}",self.id,call.output_index),"type":"function_call","status":"completed","call_id":call.id,"name":call.name,"arguments":call.arguments}})));
         }
         self.finished = true;
-        let response = response_object(
-            &ChatResponse::from_content(
-                self.id.clone(),
-                self.model.clone(),
-                self.content(),
-                reason,
-                self.input_tokens,
-                self.output_tokens,
-            ),
-            self.context.as_ref(),
-            false,
+        let mut response = ChatResponse::from_content(
+            self.id.clone(),
+            self.model.clone(),
+            self.content(),
+            reason,
+            self.input_tokens,
+            self.output_tokens,
         );
+        response.cached_tokens = self.cached_tokens;
+        response.reasoning_tokens = self.reasoning_tokens;
+        let response = response_object(&response, self.context.as_ref(), false);
         let event = match reason {
             FinishReason::Stop | FinishReason::ToolUse => "response.completed",
             FinishReason::Length | FinishReason::ContentFilter => "response.incomplete",
@@ -480,9 +482,13 @@ impl StreamEncoder {
                 StreamEvent::Usage {
                     input_tokens,
                     output_tokens,
+                    cached_tokens,
+                    reasoning_tokens,
                 } => {
                     self.input_tokens = *input_tokens;
                     self.output_tokens = *output_tokens;
+                    self.cached_tokens = *cached_tokens;
+                    self.reasoning_tokens = *reasoning_tokens;
                 }
                 StreamEvent::Stop(reason) => self.stop(*reason, &mut output),
             }

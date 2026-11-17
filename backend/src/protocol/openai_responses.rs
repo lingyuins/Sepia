@@ -270,7 +270,7 @@ pub fn decode_response(value: Value) -> Result<ChatResponse, String> {
         .iter()
         .any(|block| matches!(block, ContentBlock::ToolCall { .. }));
     let (input_tokens, output_tokens) = usage(root, "input_tokens", "output_tokens");
-    Ok(ChatResponse::from_content(
+    let mut response = ChatResponse::from_content(
         root.get("id").and_then(Value::as_str).unwrap_or("").into(),
         root.get("model")
             .and_then(Value::as_str)
@@ -280,7 +280,11 @@ pub fn decode_response(value: Value) -> Result<ChatResponse, String> {
         response_finish(root, has_tool_call),
         input_tokens,
         output_tokens,
-    ))
+    );
+    if let Some(usage) = root.get("usage") {
+        (response.cached_tokens, response.reasoning_tokens) = usage_details(usage);
+    }
+    Ok(response)
 }
 
 fn call_index(state: &mut super::ResponsesState, output_index: usize) -> usize {
@@ -304,6 +308,7 @@ fn terminal(
     }
     state.finished = true;
     if let Some(usage) = response.get("usage").filter(|usage| usage.is_object()) {
+        let (cached_tokens, reasoning_tokens) = usage_details(usage);
         output.push(StreamEvent::Usage {
             input_tokens: usage
                 .get("input_tokens")
@@ -313,6 +318,8 @@ fn terminal(
                 .get("output_tokens")
                 .and_then(Value::as_u64)
                 .unwrap_or(0),
+            cached_tokens,
+            reasoning_tokens,
         });
     }
     output.push(StreamEvent::Stop(reason));

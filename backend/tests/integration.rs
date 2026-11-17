@@ -116,7 +116,7 @@ async fn provider_and_route_updates_round_trip_and_analytics_are_real() {
         .await
         .unwrap();
     store
-        .finish_request_with_cost(&request, "success", 10, 5, 42)
+        .finish_request_with_cost(&request, "success", 10, 5, 42, 25)
         .await
         .unwrap();
     store

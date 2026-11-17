@@ -99,6 +99,8 @@ fn anthropic_stream_uses_message_start_usage_and_cumulative_message_delta_usage(
             StreamEvent::Usage {
                 input_tokens: 25,
                 output_tokens: 15,
+                cached_tokens: 0,
+                reasoning_tokens: 0,
             },
             StreamEvent::Stop(FinishReason::Stop),
         ]
@@ -117,6 +119,8 @@ fn anthropic_encoding_has_required_start_usage_and_single_content_block_lifecycl
         StreamEvent::Usage {
             input_tokens: 25,
             output_tokens: 15,
+            cached_tokens: 0,
+            reasoning_tokens: 0,
         },
         StreamEvent::Stop(FinishReason::Stop),
     ];
@@ -224,6 +228,8 @@ fn openai_usage_null_is_ignored_and_native_usage_is_preserved() {
             StreamEvent::Usage {
                 input_tokens: 7,
                 output_tokens: 2,
+                cached_tokens: 0,
+                reasoning_tokens: 0,
             },
         ]
     );
@@ -275,6 +281,8 @@ fn gemini_accepts_usage_only_and_prompt_feedback_without_fabricated_text() {
             StreamEvent::Usage {
                 input_tokens: 11,
                 output_tokens: 4,
+                cached_tokens: 0,
+                reasoning_tokens: 0,
             },
         ]
     );

@@ -78,6 +78,19 @@ pub async fn call(
         .await
         .map_err(|_| "upstream unavailable".into())
 }
+/// Bodies are stored verbatim up to a hard cap so one huge multimodal payload
+/// cannot bloat the log database; truncation is explicit, never silent.
+pub fn capped_body(body: &str) -> String {
+    const LIMIT: usize = 1024 * 1024;
+    if body.len() <= LIMIT {
+        return body.to_string();
+    }
+    let mut end = LIMIT;
+    while !body.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("{}\n…[truncated, {} bytes total]", &body[..end], body.len())
+}
 pub async fn json_response(
     inbound: crate::server::InboundProtocol,
     response: ChatResponse,
@@ -133,6 +146,12 @@ pub async fn json_response(
             value
         }
     };
+    if state.snapshots.get().log_bodies {
+        let _ = state
+            .store
+            .save_response_body(&response.id, &capped_body(&value.to_string()))
+            .await;
+    }
     Response::builder()
         .header(header::CONTENT_TYPE, "application/json")
         .body(Body::from(value.to_string()))
@@ -146,6 +165,9 @@ pub struct StreamContext {
     pub model: String,
     pub guard: crate::lifecycle::RequestGuard,
     pub started: Instant,
+    pub first_byte_ms: i64,
+    pub log_bodies: bool,
+    pub inbound_protocol: Protocol,
     pub response_context: Option<crate::responses::ResponseContext>,
     pub response_state: Option<(i64, String)>,
 }
@@ -198,7 +220,7 @@ pub fn stream_response(
         let mut bytes = response.bytes_stream();
         let mut stopped = false;
         let mut terminal = None;
-        let mut usage = (0, 0);
+        let mut usage = (0, 0, 0, 0);
         let mut failed = false;
         let mut decoder = SseDecoder::new(outbound);
         loop {
@@ -220,7 +242,7 @@ pub fn stream_response(
                         let (stops, events): (Vec<_>, Vec<_>) = events.into_iter().partition(|event| matches!(event, StreamEvent::Stop(_)));
                         if let Some(stop) = stops.into_iter().next() { terminal = Some(stop); }
                         stopped |= terminal.is_some();
-                        for event in &events { if let StreamEvent::Usage { input_tokens, output_tokens } = event { usage = (*input_tokens, *output_tokens); } }
+                        for event in &events { if let StreamEvent::Usage { input_tokens, output_tokens, cached_tokens, reasoning_tokens } = event { usage = (*input_tokens, *output_tokens, *cached_tokens, *reasoning_tokens); } }
                         for event in &events {
                             match event {
                                 StreamEvent::Delta(text) => recorded_content.push(crate::protocol::ContentBlock::Text(text.clone())),
@@ -251,17 +273,29 @@ pub fn stream_response(
             yield Ok(encode(&inbound, &[StreamEvent::Stop(crate::protocol::FinishReason::Other)], &mut responses));
         }
         let status = if stopped && !failed { "success" } else { "failed" };
+        let mut response = crate::protocol::ChatResponse::from_content(context.request_id.clone(), context.model.clone(), recorded_content, if stopped && !failed { terminal_reason.unwrap_or(crate::protocol::FinishReason::Stop) } else { crate::protocol::FinishReason::Other }, usage.0, usage.1);
+        response.cached_tokens = usage.2;
+        response.reasoning_tokens = usage.3;
+        let mut logged_value = None;
         if let (Some((client_key, id)), Some(response_context)) = (&context.response_state, &context.response_context) {
             let id = id.strip_prefix("resp_").unwrap_or(id);
             if context.store.response(*client_key, id).await.ok().flatten().is_some_and(|stored| stored.cancel_requested) {
                 return;
             }
-            let response = crate::protocol::ChatResponse::from_content(context.request_id.clone(), context.model.clone(), recorded_content, if stopped && !failed { terminal_reason.unwrap_or(crate::protocol::FinishReason::Stop) } else { crate::protocol::FinishReason::Other }, usage.0, usage.1);
             let value = crate::responses::encode_response_with_context(&response, response_context);
             let output = crate::responses::output_items(&response);
             let _ = context.store.update_response(*client_key, id, value.get("status").and_then(serde_json::Value::as_str).unwrap_or("failed"), &value, &output).await;
             let _ = context.store.append_response_events(*client_key, id, &recorded_events).await;
             if let Some(conversation) = &response_context.conversation { let mut items = response_context.input_items.clone(); items.extend(output); let _ = context.store.append_conversation_items(*client_key, conversation, &items).await; }
+            logged_value = Some(value);
+        }
+        let _ = context.store.set_request_details(&context.request_id, context.first_byte_ms, usage.2, usage.3).await;
+        if context.log_bodies {
+            let value = logged_value.unwrap_or_else(|| match context.inbound_protocol {
+                Protocol::OpenAIResponses => crate::responses::encode_response(&response),
+                protocol => encode_response(protocol, &response),
+            });
+            let _ = context.store.save_response_body(&context.request_id, &capped_body(&value.to_string())).await;
         }
         let _ = context.store.record_attempt(crate::observability::NewAttempt { request_id: &context.request_id, provider_id: Some(context.provider_id), provider_key_id: Some(context.provider_key_id), model: &context.model, status, error: None, input_tokens: usage.0, output_tokens: usage.1, latency_ms: context.started.elapsed().as_millis() as i64 }).await;
         let cost = context.store.model_cost(&context.model, usage.0, usage.1).await.unwrap_or(0);

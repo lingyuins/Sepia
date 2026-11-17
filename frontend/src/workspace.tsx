@@ -96,6 +96,12 @@ export type RequestRecord = {
   key: string
   cost: string
   route: string
+  clientIp: string | null
+  firstByteMs: number | null
+  cachedTokens: number
+  reasoningTokens: number
+  protocol: string
+  hasBody: boolean
 }
 export type Settings = {
   workspace: string

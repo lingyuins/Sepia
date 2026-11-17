@@ -16,7 +16,7 @@ export function useGatewayWorkspace(): GatewayWorkspace {
   const [analytics, setAnalytics] = useState<ApiAnalytics>({ requests: 0, successful: 0, input_tokens: 0, output_tokens: 0, cost_micros: 0 })
   const [clientKeys, setClientKeys] = useState<ApiClientKey[]>([])
   const [settings, setSettings] = useState<Settings>(() => { try { const stored = JSON.parse(localStorage.getItem('sepia.workspace.v1') || '{}'); const merged = { ...defaultSettings, ...stored.settings }; return stored.settings?.port === '3425' ? { ...merged, port: defaultSettings.port } : merged } catch { return defaultSettings } })
-  const applyServerSettings = useCallback((server: ApiSettings) => { setSettings((current) => ({ ...current, retries: String(server.max_attempts ?? current.retries) })) }, [])
+  const applyServerSettings = useCallback((server: ApiSettings) => { setSettings((current) => ({ ...current, retries: String(server.max_attempts ?? current.retries), logBodies: server.log_bodies ?? current.logBodies })) }, [])
   const [channelGroups, setChannelGroups] = useState<ChannelGroup[]>([])
   const [plugins] = useState<Plugin[]>([])
   const [toast, setToast] = useState('')

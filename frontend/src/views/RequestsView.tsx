@@ -25,9 +25,9 @@ export function RequestsView({ onSelect }: { onSelect: (row: RequestRecord) => v
   const exportLogs = (format: 'json' | 'csv') => {
     if (format === 'json') downloadFile('sepia-requests.json', JSON.stringify(filtered, null, 2))
     else {
-      const header = 'id,time,model,route,provider,tokens,latency_ms,status,key,cost\n'
+      const header = 'id,time,model,route,provider,tokens,input_tokens,output_tokens,cached_tokens,reasoning_tokens,latency_ms,first_byte_ms,client_ip,status,key,cost\n'
       const escape = (value: string | number) => `"${String(value).replace(/"/g, '""')}"`
-      downloadFile('sepia-requests.csv', header + filtered.map((row) => [row.id, row.time, row.model, row.route, row.provider, row.tokens, row.latencyMs, row.status, row.key, row.cost].map(escape).join(',')).join('\n'), 'text/csv')
+      downloadFile('sepia-requests.csv', header + filtered.map((row) => [row.id, row.time, row.model, row.route, row.provider, row.tokens, row.inputTokens, row.outputTokens, row.cachedTokens, row.reasoningTokens, row.latencyMs, row.firstByteMs ?? '', row.clientIp ?? '', row.status, row.key, row.cost].map(escape).join(',')).join('\n'), 'text/csv')
     }
     notify(`${filtered.length} ${t('requestRecordsExported')} · ${format.toUpperCase()}`)
   }

@@ -409,7 +409,7 @@ pub fn decode_response(value: Value) -> Result<ChatResponse, String> {
         content.push(tool_call(call)?);
     }
     let (input_tokens, output_tokens) = usage(root, "prompt_tokens", "completion_tokens");
-    Ok(ChatResponse::from_content(
+    let mut response = ChatResponse::from_content(
         root.get("id").and_then(Value::as_str).unwrap_or("").into(),
         root.get("model")
             .and_then(Value::as_str)
@@ -419,7 +419,11 @@ pub fn decode_response(value: Value) -> Result<ChatResponse, String> {
         finish(choices[0].get("finish_reason").and_then(Value::as_str)),
         input_tokens,
         output_tokens,
-    ))
+    );
+    if let Some(usage) = root.get("usage") {
+        (response.cached_tokens, response.reasoning_tokens) = usage_details(usage);
+    }
+    Ok(response)
 }
 pub fn encode_response(response: &ChatResponse) -> Value {
     let calls: Vec<_> = response
@@ -462,7 +466,7 @@ pub fn encode_sse(events: &[StreamEvent]) -> Vec<(Option<&'static str>, Value)> 
             StreamEvent::ToolCallStart { index, id, name } => vec![(None, chunk(json!({"tool_calls":[{"index":index,"id":id,"type":"function","function":{"name":name,"arguments":""}}]}), Value::Null))],
             StreamEvent::ToolCallDelta { index, arguments } => vec![(None, chunk(json!({"tool_calls":[{"index":index,"function":{"arguments":arguments}}]}), Value::Null))],
             StreamEvent::ToolCallEnd { .. } => Vec::new(),
-            StreamEvent::Usage { input_tokens, output_tokens } => vec![(None, json!({"id":"","object":"chat.completion.chunk","created":0,"model":"","choices":[],"usage":{"prompt_tokens":input_tokens,"completion_tokens":output_tokens}}))],
+            StreamEvent::Usage { input_tokens, output_tokens, cached_tokens, reasoning_tokens } => vec![(None, json!({"id":"","object":"chat.completion.chunk","created":0,"model":"","choices":[],"usage":{"prompt_tokens":input_tokens,"completion_tokens":output_tokens,"prompt_tokens_details":{"cached_tokens":cached_tokens},"completion_tokens_details":{"reasoning_tokens":reasoning_tokens}}}))],
             StreamEvent::Stop(reason) => vec![(None, chunk(json!({}), json!(openai_finish(*reason))))],
         }
     }).collect()
@@ -473,9 +477,12 @@ pub fn decode_sse(root: &Map<String, Value>) -> Result<Vec<StreamEvent>, String>
         let prompt = usage.get("prompt_tokens").and_then(Value::as_u64);
         let completion = usage.get("completion_tokens").and_then(Value::as_u64);
         if prompt.is_some() || completion.is_some() {
+            let (cached_tokens, reasoning_tokens) = usage_details(usage);
             output.push(StreamEvent::Usage {
                 input_tokens: prompt.unwrap_or(0),
                 output_tokens: completion.unwrap_or(0),
+                cached_tokens,
+                reasoning_tokens,
             });
         }
     }

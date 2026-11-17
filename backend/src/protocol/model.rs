@@ -148,6 +148,8 @@ pub struct ChatResponse {
     pub finish_reason: FinishReason,
     pub input_tokens: u64,
     pub output_tokens: u64,
+    pub cached_tokens: u64,
+    pub reasoning_tokens: u64,
 }
 
 impl ChatResponse {
@@ -168,6 +170,8 @@ impl ChatResponse {
             finish_reason,
             input_tokens,
             output_tokens,
+            cached_tokens: 0,
+            reasoning_tokens: 0,
         }
     }
 }
@@ -195,6 +199,8 @@ pub enum StreamEvent {
     Usage {
         input_tokens: u64,
         output_tokens: u64,
+        cached_tokens: u64,
+        reasoning_tokens: u64,
     },
     Stop(FinishReason),
 }
@@ -295,6 +301,28 @@ pub fn usage(value: &Map<String, Value>, input: &str, output: &str) -> (u64, u64
             .and_then(Value::as_u64)
             .unwrap_or(0),
     )
+}
+/// Cached-input / reasoning-output token detail. Vendors nest these under
+/// different keys; missing detail means zero, never an invented value.
+pub fn usage_details(value: &Value) -> (u64, u64) {
+    let cached = [
+        "/prompt_tokens_details/cached_tokens",
+        "/input_tokens_details/cached_tokens",
+        "/cache_read_input_tokens",
+        "/cachedContentTokenCount",
+    ]
+    .iter()
+    .find_map(|pointer| value.pointer(pointer).and_then(Value::as_u64))
+    .unwrap_or(0);
+    let reasoning = [
+        "/completion_tokens_details/reasoning_tokens",
+        "/output_tokens_details/reasoning_tokens",
+        "/thoughtsTokenCount",
+    ]
+    .iter()
+    .find_map(|pointer| value.pointer(pointer).and_then(Value::as_u64))
+    .unwrap_or(0);
+    (cached, reasoning)
 }
 pub fn finish(reason: Option<&str>) -> FinishReason {
     match reason {

@@ -18,6 +18,11 @@ pub struct RequestRecord {
     pub route: Option<String>,
     pub provider: Option<String>,
     pub key: Option<String>,
+    pub client_ip: Option<String>,
+    pub first_byte_ms: Option<i64>,
+    pub cached_tokens: i64,
+    pub reasoning_tokens: i64,
+    pub has_body: bool,
 }
 #[derive(Debug, Clone, Serialize)]
 pub struct AttemptRecord {
@@ -107,12 +112,74 @@ impl Store {
         input_tokens: u64,
         output_tokens: u64,
         cost_micros: i64,
+        latency_ms: i64,
     ) -> Result<(), String> {
-        sqlx::query("UPDATE requests SET status = ?, input_tokens = ?, output_tokens = ?, cost_micros = ? WHERE id = ?").bind(status).bind(input_tokens as i64).bind(output_tokens as i64).bind(cost_micros).bind(request_id).execute(&self.pool).await.map_err(|e| e.to_string())?;
+        sqlx::query("UPDATE requests SET status = ?, input_tokens = ?, output_tokens = ?, cost_micros = ?, latency_ms = ? WHERE id = ?").bind(status).bind(input_tokens as i64).bind(output_tokens as i64).bind(cost_micros).bind(latency_ms).bind(request_id).execute(&self.pool).await.map_err(|e| e.to_string())?;
         Ok(())
     }
+    pub async fn set_request_client_ip(&self, request_id: &str, ip: &str) -> Result<(), String> {
+        sqlx::query("UPDATE requests SET client_ip = ? WHERE id = ?")
+            .bind(ip)
+            .bind(request_id)
+            .execute(&self.pool)
+            .await
+            .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+    /// Records upstream timing and token detail for a finished (or failed)
+    /// upstream leg; a later attempt overwrites earlier partial values.
+    pub async fn set_request_details(
+        &self,
+        request_id: &str,
+        first_byte_ms: i64,
+        cached_tokens: u64,
+        reasoning_tokens: u64,
+    ) -> Result<(), String> {
+        sqlx::query("UPDATE requests SET first_byte_ms = ?, cached_tokens = ?, reasoning_tokens = ? WHERE id = ?")
+            .bind(first_byte_ms)
+            .bind(cached_tokens as i64)
+            .bind(reasoning_tokens as i64)
+            .bind(request_id)
+            .execute(&self.pool)
+            .await
+            .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+    pub async fn save_request_body(&self, request_id: &str, body: &str) -> Result<(), String> {
+        sqlx::query("INSERT INTO request_bodies (request_id, request_body, created_at) VALUES (?, ?, ?) ON CONFLICT(request_id) DO UPDATE SET request_body = excluded.request_body")
+            .bind(request_id)
+            .bind(body)
+            .bind(Utc::now().to_rfc3339())
+            .execute(&self.pool)
+            .await
+            .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+    pub async fn save_response_body(&self, request_id: &str, body: &str) -> Result<(), String> {
+        sqlx::query("INSERT INTO request_bodies (request_id, request_body, response_body, created_at) VALUES (?, '', ?, ?) ON CONFLICT(request_id) DO UPDATE SET response_body = excluded.response_body")
+            .bind(request_id)
+            .bind(body)
+            .bind(Utc::now().to_rfc3339())
+            .execute(&self.pool)
+            .await
+            .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+    pub async fn request_bodies(
+        &self,
+        request_id: &str,
+    ) -> Result<Option<(String, Option<String>)>, String> {
+        let row = sqlx::query(
+            "SELECT request_body, response_body FROM request_bodies WHERE request_id = ?",
+        )
+        .bind(request_id)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|e| e.to_string())?;
+        Ok(row.map(|row| (row.get("request_body"), row.get("response_body"))))
+    }
     pub async fn requests(&self) -> Result<Vec<RequestRecord>, String> {
-        let rows = sqlx::query("SELECT r.id, r.protocol, COALESCE((SELECT a.model FROM attempts a WHERE a.request_id = r.id AND a.status IN ('success', 'streaming') ORDER BY a.id DESC LIMIT 1), r.model) model, r.route, r.status, r.input_tokens, r.output_tokens, r.cost_micros, r.latency_ms, r.created_at, (SELECT p.name FROM attempts a JOIN providers p ON p.id = a.provider_id WHERE a.request_id = r.id AND a.status IN ('success', 'streaming') ORDER BY a.id DESC LIMIT 1) provider, k.name key FROM requests r LEFT JOIN client_keys k ON k.id = r.client_key_id ORDER BY r.created_at DESC LIMIT 200").fetch_all(&self.pool).await.map_err(|e| e.to_string())?;
+        let rows = sqlx::query("SELECT r.id, r.protocol, COALESCE((SELECT a.model FROM attempts a WHERE a.request_id = r.id AND a.status IN ('success', 'streaming') ORDER BY a.id DESC LIMIT 1), r.model) model, r.route, r.status, r.input_tokens, r.output_tokens, r.cost_micros, r.latency_ms, r.created_at, r.client_ip, r.first_byte_ms, r.cached_tokens, r.reasoning_tokens, EXISTS(SELECT 1 FROM request_bodies b WHERE b.request_id = r.id) has_body, (SELECT p.name FROM attempts a JOIN providers p ON p.id = a.provider_id WHERE a.request_id = r.id AND a.status IN ('success', 'streaming') ORDER BY a.id DESC LIMIT 1) provider, k.name key FROM requests r LEFT JOIN client_keys k ON k.id = r.client_key_id ORDER BY r.created_at DESC LIMIT 200").fetch_all(&self.pool).await.map_err(|e| e.to_string())?;
         Ok(rows
             .into_iter()
             .map(|row| RequestRecord {
@@ -128,6 +195,11 @@ impl Store {
                 route: row.get("route"),
                 provider: row.get("provider"),
                 key: row.get("key"),
+                client_ip: row.get("client_ip"),
+                first_byte_ms: row.get("first_byte_ms"),
+                cached_tokens: row.get("cached_tokens"),
+                reasoning_tokens: row.get("reasoning_tokens"),
+                has_body: row.get::<i64, _>("has_body") != 0,
             })
             .collect())
     }

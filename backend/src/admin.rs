@@ -533,6 +533,15 @@ async fn attempts(State(state): State<AppState>, Path(id): Path<String>) -> Resp
         Err(message) => error(StatusCode::INTERNAL_SERVER_ERROR, message),
     }
 }
+async fn request_bodies(State(state): State<AppState>, Path(id): Path<String>) -> Response {
+    match state.store.request_bodies(&id).await {
+        Ok(Some((request_body, response_body))) => {
+            Json(json!({"request_body":request_body,"response_body":response_body})).into_response()
+        }
+        Ok(None) => error(StatusCode::NOT_FOUND, "no bodies recorded for this request"),
+        Err(message) => error(StatusCode::INTERNAL_SERVER_ERROR, message),
+    }
+}
 async fn test_provider(
     State(state): State<AppState>,
     Path(id): Path<i64>,
@@ -829,6 +838,7 @@ pub fn router(state: AppState) -> Router<AppState> {
         .route("/analytics", get(analytics))
         .route("/requests", get(requests).delete(clear_requests))
         .route("/requests/{id}/attempts", get(attempts))
+        .route("/requests/{id}/bodies", get(request_bodies))
         .route_layer(middleware::from_fn_with_state(state.clone(), auth));
     Router::new()
         .route("/auth/status", get(status))

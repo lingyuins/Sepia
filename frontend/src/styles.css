@@ -956,3 +956,11 @@ kbd { font-family: inherit; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; scroll-behavior: auto !important; }
 }
+.setting-note { color: var(--text-secondary); font-size: 12px; line-height: 1.7; margin-top: 4px; }
+.body-viewer { margin-top: 18px; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+.body-viewer-tabs { display: flex; align-items: center; gap: 4px; padding: 6px 8px; border-bottom: 1px solid var(--border); background: var(--surface); }
+.body-viewer-tabs button[role='tab'] { border: none; background: transparent; color: var(--text-secondary); font-size: 12px; padding: 8px 12px; border-radius: 6px; cursor: pointer; min-height: 32px; }
+.body-viewer-tabs button[role='tab'].active { background: var(--accent-soft); color: var(--text); }
+.body-viewer-tabs .icon-button { margin-left: auto; }
+.body-viewer-content { margin: 0; padding: 12px; max-height: 320px; overflow: auto; font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', monospace; font-size: 12px; line-height: 1.6; color: var(--text); white-space: pre-wrap; overflow-wrap: anywhere; }
+.body-viewer-empty { margin: 0; padding: 16px 12px; color: var(--text-secondary); font-size: 12px; }

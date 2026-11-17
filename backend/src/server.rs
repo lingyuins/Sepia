@@ -441,7 +441,22 @@ pub async fn relay(
             );
         }
     };
+    let _ = state
+        .store
+        .set_request_client_ip(&request_id, &peer.to_string())
+        .await;
+    let inbound_protocol = match inbound {
+        InboundProtocol::Provider(protocol) => protocol,
+        InboundProtocol::Gemini { .. } => Protocol::Gemini,
+        InboundProtocol::OpenAIResponses => Protocol::OpenAIResponses,
+    };
     let mut response_context = None;
+    if state.snapshots.get().log_bodies {
+        let _ = state
+            .store
+            .save_request_body(&request_id, &crate::relay::capped_body(&body.to_string()))
+            .await;
+    }
     let decoded_request = match &inbound {
         InboundProtocol::OpenAIResponses => crate::responses::decode_request_with_context(body)
             .map(|(request, context)| {
@@ -640,6 +655,7 @@ pub async fn relay(
                             continue 'legs;
                         }
                     };
+                let first_byte_ms = attempt_started.elapsed().as_millis() as i64;
                 if !response.status().is_success() {
                     let status = response.status();
                     let retry = status == StatusCode::TOO_MANY_REQUESTS
@@ -733,6 +749,9 @@ pub async fn relay(
                             model: model.clone(),
                             guard,
                             started,
+                            first_byte_ms,
+                            log_bodies: snapshot.log_bodies,
+                            inbound_protocol,
                             response_context,
                             response_state: response_state
                                 .map(|lifecycle| (lifecycle.client_key, lifecycle.id)),
@@ -776,6 +795,15 @@ pub async fn relay(
                         continue;
                     }
                 };
+                let _ = state
+                    .store
+                    .set_request_details(
+                        &request_id,
+                        first_byte_ms,
+                        decoded.cached_tokens,
+                        decoded.reasoning_tokens,
+                    )
+                    .await;
                 if let Some(response) = record_attempt(
                     &state,
                     crate::observability::NewAttempt {
