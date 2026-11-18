@@ -17,6 +17,7 @@ pub fn protected_http_client() -> Result<reqwest::Client, String> {
     reqwest::Client::builder()
         .redirect(reqwest::redirect::Policy::none())
         .connect_timeout(std::time::Duration::from_secs(10))
+        .user_agent(concat!("Sepia/", env!("CARGO_PKG_VERSION")))
         .build()
         .map_err(|e| e.to_string())
 }

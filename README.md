@@ -136,6 +136,8 @@ cargo run --release --manifest-path backend/Cargo.toml
 
 将客户端基础地址指向 Sepia，而不是上游供应商，并使用控制台创建的客户端密钥。
 
+网关发往上游的请求默认携带 `User-Agent: Sepia/<版本号>`（如 `Sepia/0.1.0`）；客户端请求未显式设置时使用该默认值。
+
 ### OpenAI Chat Completions
 
 ```sh
@@ -381,6 +383,8 @@ The gateway serves `frontend/dist/`, keeping the console, management API, and in
 ## Client usage
 
 Point clients at Sepia instead of the upstream provider and use a client key created in the console.
+
+Outbound upstream requests carry a default `User-Agent: Sepia/<version>` (e.g. `Sepia/0.1.0`), used whenever the request does not set one explicitly.
 
 ### OpenAI Chat Completions
 
