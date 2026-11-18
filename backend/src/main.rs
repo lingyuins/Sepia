@@ -10,6 +10,12 @@ async fn main() -> Result<(), String> {
         .unwrap_or_else(default_data_directory);
     std::fs::create_dir_all(&directory)
         .map_err(|error| format!("data directory {}: {error}", directory.display()))?;
+    // A staged in-app update lives in the data directory, so it also takes
+    // effect after container restarts where the image binary is read-only.
+    if let Some((binary, frontend)) = sepia_gateway::self_update::handoff_target(&directory) {
+        println!("Handing off to staged update {}", binary.display());
+        return sepia_gateway::self_update::restart_process(&binary, &frontend);
+    }
     let frontend_directory = if let Some(directory) = std::env::var_os("SEPIA_FRONTEND_DIR") {
         std::path::PathBuf::from(directory)
     } else {

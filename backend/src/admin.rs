@@ -1287,6 +1287,8 @@ pub fn router(state: AppState) -> Router<AppState> {
         .route("/plugins/{id}", axum::routing::delete(delete_plugin))
         .route("/plugins/{id}/ui-bundle", get(plugin_ui_bundle))
         .route("/plugins/{id}/rpc/{*path}", post(plugin_rpc))
+        .route("/update/check", get(crate::self_update::check_update))
+        .route("/update", post(crate::self_update::apply_update))
         .route_layer(middleware::from_fn_with_state(state.clone(), auth));
     Router::new()
         .route("/auth/status", get(status))
@@ -1294,6 +1296,7 @@ pub fn router(state: AppState) -> Router<AppState> {
         .route("/auth/login", post(login))
         .route("/auth/logout", post(logout))
         .route("/auth/session", get(session))
+        .route("/version", get(crate::self_update::version))
         .layer(middleware::from_fn(public_origin))
         .merge(protected)
 }

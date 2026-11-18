@@ -70,11 +70,12 @@ Sepia 是一个自托管的多供应商 AI 网关。连接上游模型服务，�
 | 请求观测与费用 | 记录客户端 IP、首字延迟、缓存输入与推理输出 Token 明细及真实总延迟；可选正文记录（默认关闭，1 MiB 截断）；Token/费用分析按真实请求日志聚合 |
 | 插件系统 | 本地 `.zip` 安装（manifest 权限校验、SHA256 记录、semver 拒降级），wasmtime 沙箱执行（fuel/epoch 超时、内存上限、无 WASI）；请求/路由/响应改写、观测、插件供应商与 RPC 钩子及 kv/secret/http/log 宿主能力；控制台启停、配置编辑、沙箱 iframe 插件 UI 与卸载 |
 | 运行控制台 | 管理员初始化与登录、供应商/路由/密钥/插件配置、模型广场、请求日志、Token/费用分析与运行参数设置；中文、English、日本語及明暗主题 |
+| 应用内更新 | 设置「关于」页检查 GitHub Release，下载当前平台发布包并校验 SHA256 后暂存到数据目录并自动重启；容器内更新同样生效且随数据卷保留，镜像升级到更新版本后自动清理旧暂存 |
 | 安全与持久化 | SQLite 存储配置与观测数据，上游密钥与插件 secret 加密，管理员 HttpOnly 会话 Cookie，上游重定向不转发凭据 |
 
 OpenAI 上游为通用双端点：按入站协议优先选择 Chat Completions 或 Responses，首腿失败在同一供应商内换另一端点一次后再推进候选。
 
-当前不支持多候选输出、自动供应商同步、会话亲和、公共插件市场/自动更新或任意供应商内置工具的通用转换；内置路由策略仅有有序故障转移（插件可通过策略钩子重排/排除候选）。
+当前不支持多候选输出、自动供应商同步、会话亲和、公共插件市场/插件自动更新或任意供应商内置工具的通用转换；内置路由策略仅有有序故障转移（插件可通过策略钩子重排/排除候选）。网关本体的应用内更新已支持（见「应用内更新」）。
 
 <a id="protocols"></a>
 
@@ -181,6 +182,8 @@ Compose 将端口仅绑定到本机回环地址，缺少 `SEPIA_MASTER_KEY` 时�
 | `SEPIA_DEV_INSECURE_KEYSTORE=1` | 仅 debug 构建使用文件测试密钥；禁止用于生产 |
 | `SEPIA_GATEWAY_URL` | Vite 开发代理目标，不是浏览器管理 API 的跨域地址 |
 | `SEPIA_METADATA_SOURCE` | 模型广场元数据同步源（OpenAI 风格模型列表），默认 `https://openrouter.ai/api/v1/models` |
+| `SEPIA_UPDATE_SOURCE` | 应用内更新的 Release 检查源（GitHub `releases/latest` API 地址），默认 `https://api.github.com/repos/lingyuins/Sepia/releases/latest` |
+| `SEPIA_GITHUB_TOKEN` | 可选的 GitHub 令牌，提高更新检查的 API 速率限制；仅用于读取 Release 信息 |
 
 ### 生产模式（源码运行）
 
@@ -192,6 +195,14 @@ cargo run --release --manifest-path backend/Cargo.toml
 ```
 
 网关直接托管 `frontend/dist/`，控制台与管理 API、推理 API 保持同源。生产环境不要设置调试密钥文件开关。
+
+### 应用内更新
+
+控制台「设置 → 关于」显示网关当前版本，可检查 GitHub Release 中的最新版本并一键更新：网关下载当前平台的 `.tar.gz` 发布包，校验随包发布的 `.sha256`，将新版二进制与前端暂存到数据目录（`<数据目录>/updates/<版本>/`），随后自动重启进入新版本，页面在网关恢复后自动刷新。
+
+- 更新只接受 semver 更高的版本；下载、校验或解包失败不会改动现有安装。
+- Docker 中同样可用：镜像内的二进制只读，但更新暂存在 `/data` 卷中，容器启动时入口二进制会自动交接到暂存的新版本，容器重启后更新依然生效。重建或升级到包含更新版本的镜像后，旧暂存会被自动清理。
+- 更新需要管理员会话；检查与下载默认走 GitHub，可用 `SEPIA_UPDATE_SOURCE` 指向镜像源，用 `SEPIA_GITHUB_TOKEN` 提升速率限制。
 
 ---
 
@@ -342,7 +353,7 @@ cargo clippy --manifest-path backend/Cargo.toml --all-targets -- -D warnings
 cargo test --manifest-path backend/Cargo.toml
 ```
 
-后端测试覆盖原生/跨协议 JSON 与 SSE、工具与多模态、Responses 状态、辅助端点、故障转移、配额、凭据、管理 API、模型元数据与 WASM 插件运行时，使用本地可控 HTTP 上游。它们不替代使用真实供应商账户的兼容性验证。
+后端测试覆盖原生/跨协议 JSON 与 SSE、工具与多模态、Responses 状态、辅助端点、故障转移、配额、凭据、管理 API、模型元数据、WASM 插件运行时与应用内更新（Release 解析、SHA256 校验、暂存与交接选择），使用本地可控 HTTP 上游。它们不替代使用真实供应商账户的兼容性验证。
 
 ---
 
@@ -401,7 +412,7 @@ Sepia is a self-hosted multi-provider AI gateway. Connect upstream model service
 
 Use it to share authorized model access across a small team, switch providers without configuring every client again, or operate a private multi-model service with a web console. Upstreams include OpenAI, Anthropic, Google Gemini, and other compatible services.
 
-The repository contains a working React 18 + TypeScript console, a Rust/Axum gateway, SQLite persistence, and protocol integration tests. It does not seed providers, demo requests, or fabricated monitoring data. A local WASM plugin runtime is implemented (wasmtime sandbox); plugins install from local `.zip` packages. There is no public plugin marketplace or auto-update.
+The repository contains a working React 18 + TypeScript console, a Rust/Axum gateway, SQLite persistence, and protocol integration tests. It does not seed providers, demo requests, or fabricated monitoring data. A local WASM plugin runtime is implemented (wasmtime sandbox); plugins install from local `.zip` packages. There is no public plugin marketplace or plugin auto-update; the gateway itself supports in-app self-update.
 
 > [!IMPORTANT]
 > Obtain upstream API keys, accounts, and model-service permissions lawfully, and comply with upstream terms of service and the laws of your jurisdiction. When operating this project as a public generative AI service, you are responsible for any required filing, licensing, content-safety, and log-retention obligations.
@@ -424,11 +435,12 @@ The repository contains a working React 18 + TypeScript console, a Rust/Axum gat
 | Request observation and costs | Client IP, time-to-first-byte, cached-input and reasoning-output token detail, and real total latency per request; optional body capture (off by default, capped at 1 MiB); token/cost analytics aggregate real request logs |
 | Plugin system | Local `.zip` install with manifest-validated permissions, SHA256 recording, and semver downgrade rejection; wasmtime sandboxed execution (fuel/epoch timeouts, memory caps, no WASI); relay/route/response rewrite, observation, plugin-backed provider, and RPC hooks plus kv/secret/http/log host capabilities; console enable/disable, config editing, sandboxed iframe plugin UI, and uninstall |
 | Operations console | Administrator bootstrap/login, provider/route/key/plugin management, Model Plaza, request logs, token/cost analytics, and runtime settings, with Chinese, English, Japanese, and light/dark themes |
+| In-app updates | The Settings About tab checks GitHub Releases, downloads the platform archive, verifies its SHA256, stages it in the data directory, and restarts into the new version; container updates persist in the data volume, and stale staging is cleaned once the image ships a newer version |
 | Security and persistence | SQLite configuration and observability, encrypted upstream keys and plugin secrets, HttpOnly administrator sessions, and no credential forwarding through upstream redirects |
 
 OpenAI upstreams are universal dual-endpoint: the primary API is chosen from the inbound protocol (Chat Completions or Responses), and a failed first leg tries the other endpoint once within the same provider before advancing candidates.
 
-Multiple candidate outputs, automatic provider synchronization, session affinity, a public plugin marketplace/auto-update, and generic conversion of arbitrary provider-specific built-in tools are not supported. Ordered failover is the only built-in routing strategy; plugins may reorder or exclude candidates through the strategy hook.
+Multiple candidate outputs, automatic provider synchronization, session affinity, a public plugin marketplace/plugin auto-update, and generic conversion of arbitrary provider-specific built-in tools are not supported. Ordered failover is the only built-in routing strategy; plugins may reorder or exclude candidates through the strategy hook. In-app self-update of the gateway itself is supported (see "In-app updates").
 
 <a id="protocols-en"></a>
 
@@ -535,6 +547,8 @@ For remote or LAN deployment, use an HTTPS reverse proxy, set `SEPIA_TRUSTED_PRO
 | `SEPIA_DEV_INSECURE_KEYSTORE=1` | Debug builds only; uses a file test key and must never protect production secrets |
 | `SEPIA_GATEWAY_URL` | Vite development proxy target, not a cross-origin browser management API setting |
 | `SEPIA_METADATA_SOURCE` | Model Plaza metadata sync source (OpenAI-style model list); defaults to `https://openrouter.ai/api/v1/models` |
+| `SEPIA_UPDATE_SOURCE` | In-app update release-check source (GitHub `releases/latest` API URL); defaults to `https://api.github.com/repos/lingyuins/Sepia/releases/latest` |
+| `SEPIA_GITHUB_TOKEN` | Optional GitHub token to raise the update-check API rate limit; only used to read release information |
 
 ### Production from source
 
@@ -546,6 +560,14 @@ cargo run --release --manifest-path backend/Cargo.toml
 ```
 
 The gateway serves `frontend/dist/`, keeping the console, management API, and inference API same-origin. Never enable the debug file keystore in production.
+
+### In-app updates
+
+The console's Settings → About tab shows the running gateway version, checks the latest GitHub Release, and applies updates in one click: the gateway downloads the platform `.tar.gz` archive, verifies the published `.sha256`, stages the new binary and frontend under the data directory (`<data dir>/updates/<version>/`), then restarts into the new version. The page reloads automatically once the gateway is back.
+
+- Only semver-newer releases are accepted; a failed download, checksum, or extraction never touches the existing installation.
+- Works inside Docker: the image binary is read-only, but updates stage into the `/data` volume. On startup the entrypoint binary hands off to the staged version, so updates survive container restarts. Rebuilding or upgrading to an image that already ships a newer version cleans the stale staging automatically.
+- Updating requires an administrator session. Checks and downloads use GitHub by default; point `SEPIA_UPDATE_SOURCE` at a mirror and set `SEPIA_GITHUB_TOKEN` to raise rate limits.
 
 ---
 
@@ -696,7 +718,7 @@ cargo clippy --manifest-path backend/Cargo.toml --all-targets -- -D warnings
 cargo test --manifest-path backend/Cargo.toml
 ```
 
-Backend tests cover native/cross-protocol JSON and SSE, tools and multimodal content, Responses state, auxiliary endpoints, failover, quotas, credentials, management APIs, model metadata, and the WASM plugin runtime using controllable local HTTP upstreams. They do not replace compatibility testing with real provider accounts.
+Backend tests cover native/cross-protocol JSON and SSE, tools and multimodal content, Responses state, auxiliary endpoints, failover, quotas, credentials, management APIs, model metadata, the WASM plugin runtime, and in-app self-update (release parsing, SHA256 verification, staging, and handoff selection) using controllable local HTTP upstreams. They do not replace compatibility testing with real provider accounts.
 
 ---
 

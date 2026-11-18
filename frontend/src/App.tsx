@@ -11,6 +11,7 @@ import { Dropdown } from './components/Dropdown'
 import { RouteChain } from './components/RouteChain'
 import { chartTimeLabel } from './analytics'
 import { latestSuccessfulRouteRequest, selectOverviewRoute } from './route-display'
+import { formatVersion } from './self-update'
 import { ProvidersView } from './views/ProvidersView'
 import { PlazaView } from './views/PlazaView'
 import { RoutingView } from './views/RoutingView'
@@ -67,7 +68,7 @@ function Overview({ providers, navigate, onAdd, onNotify, onRequest }: { provide
 }
 
 function App() {
-  const { settings, providers, plugins, routes, requests, notify, toast, clearToast, run } = useWorkspace()
+  const { settings, providers, plugins, routes, requests, notify, toast, clearToast, run, version } = useWorkspace()
   const t = useTranslation()
   const getPage = (): Page => { const p = window.location.hash.slice(1); return p === 'Settings' || [...navItems, ...insightItems].some((item) => item.label === p) ? p as Page : 'Overview' }
   const [page, setPage] = useState<Page>(getPage)
@@ -90,7 +91,7 @@ function App() {
     <main className="main-content"><header className="topbar"><div className="topbar-left"><button className="mobile-menu icon-button" onClick={() => setMobileNav(true)} aria-label={t('openNavigation')}><MenuIcon size={20} /></button><span className="breadcrumb">{t('workspace')}<ChevronRight size={12} /><strong>{t(page.toLowerCase() as 'overview')}</strong></span></div><div className="topbar-actions"><button className="top-search" onClick={() => setSearchOpen(true)}><Search size={16} /><span>{t('searchAnything')}</span><kbd><Command size={11} /> K</kbd></button><button className="top-avatar" onClick={() => setWorkspaceOpen(true)} aria-label={t('workspaceProfile')}>{settings.workspace.charAt(0)}</button></div></header><div className="page-content">
       {page === 'Overview' && <Overview providers={providers} navigate={navigate} onAdd={() => setAddProvider(true)} onNotify={notify} onRequest={setSelectedRequest} />}
       {page === 'Providers' && <ProvidersView />}{page === 'Plaza' && <PlazaView />}{page === 'Routing' && <RoutingView />}{page === 'Plugins' && <PluginsView />}{page === 'Requests' && <RequestsView onSelect={setSelectedRequest} />}{page === 'Analytics' && <AnalyticsView />}{page === 'Settings' && <SettingsView />}
-      <footer className="page-footer"><span><Logo compact />{t('footer')}</span><span>Sepia v0.1.0</span></footer>
+      <footer className="page-footer"><span><Logo compact />{t('footer')}</span><span>Sepia {formatVersion(version)}</span></footer>
     </div></main>
     <ProviderDialog open={addProvider} onClose={() => setAddProvider(false)} onSave={async (provider, keys) => { await run(() => api('/api/v1/providers', { method: 'POST', body: JSON.stringify(providerInput(provider, keys)) })); setAddProvider(false); notify(t('providerConnected', { name: provider.name })) }} />
     <Dialog open={searchOpen} onClose={() => setSearchOpen(false)} className="dialog-root"><div className="dialog-backdrop" /><div className="dialog-position search-position"><Dialog.Panel className="dialog-panel search-dialog glass-panel"><div className="search-dialog-input"><Search size={19} /><input autoFocus placeholder={t('searchPlaceholder')} aria-label={t('searchWorkspace')} value={search} onChange={(event) => setSearch(event.target.value)} /><button className="icon-button" onClick={() => setSearchOpen(false)} aria-label={t('close')}><X size={16} /></button></div><div className="search-results"><span className="nav-label">{t('page')}</span>{searchResults.map(({ label, icon: Icon, type, page: target }, index) => <button key={`${type}-${label}-${index}`} onClick={() => { navigate(target); setSearchOpen(false); setSearch('') }}><Icon size={17} /><span>{label}</span><small>{type}</small><ArrowUpRight size={14} /></button>)}{!searchResults.length && <p>{t('searchEmpty')}</p>}</div><div className="search-footer"><span><kbd>↵</kbd> {t('toSelect')}</span><span><kbd>esc</kbd> {t('toClose')}</span></div></Dialog.Panel></div></Dialog>

@@ -19,6 +19,7 @@ export function useGatewayWorkspace(): GatewayWorkspace {
   const applyServerSettings = useCallback((server: ApiSettings) => { setSettings((current) => ({ ...current, retries: String(server.max_attempts ?? current.retries), logBodies: server.log_bodies ?? current.logBodies })) }, [])
   const [channelGroups, setChannelGroups] = useState<ChannelGroup[]>([])
   const [plugins, setPlugins] = useState<Plugin[]>([])
+  const [version, setVersion] = useState('')
   const [toast, setToast] = useState('')
   const sequence = useRef(0)
   const periodRef = useRef('30 days')
@@ -26,15 +27,15 @@ export function useGatewayWorkspace(): GatewayWorkspace {
     periodRef.current = period
     const current = ++sequence.current
     try {
-      const [providerData, routeData, requestData, analyticsData, keyData, groupData, serverSettings, pluginData] = await Promise.all([
-        api<ApiProvider[]>('/api/v1/providers'), api<ApiRoute[]>('/api/v1/routes'), api<ApiRequest[]>('/api/v1/requests'), api<ApiAnalytics>(`/api/v1/analytics?period=${encodeURIComponent(period)}`), api<ApiClientKey[]>('/api/v1/keys'), api<ApiGroup[]>('/api/v1/groups'), api<ApiSettings>('/api/v1/settings'), api<ApiPlugin[]>('/api/v1/plugins'),
+      const [providerData, routeData, requestData, analyticsData, keyData, groupData, serverSettings, pluginData, versionData] = await Promise.all([
+        api<ApiProvider[]>('/api/v1/providers'), api<ApiRoute[]>('/api/v1/routes'), api<ApiRequest[]>('/api/v1/requests'), api<ApiAnalytics>(`/api/v1/analytics?period=${encodeURIComponent(period)}`), api<ApiClientKey[]>('/api/v1/keys'), api<ApiGroup[]>('/api/v1/groups'), api<ApiSettings>('/api/v1/settings'), api<ApiPlugin[]>('/api/v1/plugins'), api<{ version: string }>('/api/v1/version'),
       ])
       if (current !== sequence.current) return
       const mappedProviders = providerData.map(mapProvider)
       const providerStats = analyticsData.by_provider || []
       setProviders(mappedProviders.map((provider) => { const stat = providerStats.find((item) => item.provider_id === provider.id); return { ...provider, latency: Math.round(stat?.latency_ms || 0), requests: String(stat?.requests || 0), success: stat?.requests ? `${(stat.successful / stat.requests * 100).toFixed(2)}%` : '—' } }))
       setRoutes(routeData.map((route) => mapRoute(route, mappedProviders)))
-      setRequests(requestData.map(mapRequest)); setAnalytics(analyticsData); setClientKeys(keyData); setChannelGroups(groupData); setPlugins(pluginData.map(mapPlugin)); applyServerSettings(serverSettings); setStatus('ready'); setError('')
+      setRequests(requestData.map(mapRequest)); setAnalytics(analyticsData); setClientKeys(keyData); setChannelGroups(groupData); setPlugins(pluginData.map(mapPlugin)); setVersion(versionData.version); applyServerSettings(serverSettings); setStatus('ready'); setError('')
     } catch (cause) {
       if (current !== sequence.current) return
       setError(cause instanceof Error ? cause.message : 'Gateway unavailable')
@@ -79,11 +80,11 @@ export function useGatewayWorkspace(): GatewayWorkspace {
   useEffect(() => { try { const previous = JSON.parse(localStorage.getItem('sepia.workspace.v1') || '{}'); localStorage.setItem('sepia.workspace.v1', JSON.stringify({ settings: { ...defaultSettings, ...previous.settings, ...settings } })) } catch { /* Browser storage may be disabled. */ } }, [settings])
   useEffect(() => { applyTheme(document.documentElement, settings, window.matchMedia('(prefers-color-scheme: light)').matches) }, [settings])
   useEffect(() => { if (!toast) return; const timer = setTimeout(() => setToast(''), 3500); return () => clearTimeout(timer) }, [toast])
-  return { status, initialization, error, providers, routes, requests, analytics, clientKeys, settings, setSettings, channelGroups, setChannelGroups, plugins, toast, notify: setToast, clearToast: () => setToast(''), refresh, checkGateway, run, login, logout }
+  return { status, initialization, error, providers, routes, requests, analytics, clientKeys, settings, setSettings, channelGroups, setChannelGroups, plugins, version, toast, notify: setToast, clearToast: () => setToast(''), refresh, checkGateway, run, login, logout }
 }
 export interface GatewayWorkspace {
   status: ConnectionState; initialization: boolean | null; error: string; providers: Provider[]; routes: RouteRule[]; requests: RequestRecord[]; analytics: ApiAnalytics; clientKeys: ApiClientKey[]
   settings: Settings; setSettings: React.Dispatch<React.SetStateAction<Settings>>; channelGroups: ChannelGroup[]; setChannelGroups: React.Dispatch<React.SetStateAction<ChannelGroup[]>>
-  plugins: Plugin[]; toast: string; notify: (message: string) => void; clearToast: () => void
+  plugins: Plugin[]; version: string; toast: string; notify: (message: string) => void; clearToast: () => void
   refresh: (period?: string) => Promise<void>; checkGateway: () => Promise<GatewayStatus>; run: <T>(operation: () => Promise<T>) => Promise<T>; login: (username: string, password: string) => Promise<void>; logout: () => Promise<void>
 }

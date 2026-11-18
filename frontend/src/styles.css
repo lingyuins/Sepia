@@ -1011,6 +1011,9 @@ kbd { font-family: inherit; }
   *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; scroll-behavior: auto !important; }
 }
 .setting-note { color: var(--text-secondary); font-size: 12px; line-height: 1.7; margin-top: 4px; }
+.update-error { color: var(--danger); overflow-wrap: anywhere; }
+.release-notes { margin: 14px 0 0; padding: 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface-recessed); color: var(--text); font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', monospace; font-size: 12px; line-height: 1.7; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 320px; overflow: auto; }
+.settings-card .release-notes + .text-button { margin-top: 10px; }
 .body-viewer { margin-top: 18px; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
 .body-viewer-tabs { display: flex; align-items: center; gap: 4px; padding: 6px 8px; border-bottom: 1px solid var(--border); background: var(--surface); }
 .body-viewer-tabs button[role='tab'] { border: none; background: transparent; color: var(--text-secondary); font-size: 12px; padding: 8px 12px; border-radius: 6px; cursor: pointer; min-height: 32px; }

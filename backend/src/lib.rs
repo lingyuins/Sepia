@@ -17,6 +17,7 @@ pub mod relay;
 pub mod response_api;
 pub mod response_store;
 pub mod responses;
+pub mod self_update;
 pub mod server;
 pub mod settings;
 pub mod snapshot;
