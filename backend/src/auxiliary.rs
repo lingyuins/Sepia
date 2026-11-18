@@ -36,7 +36,14 @@ pub fn router() -> Router<AppState> {
         .route("/v1/videos", post(video_create))
         .route("/v1/videos/{task_id}", get(video_poll))
         .route("/v1/video/generations", post(video_generations))
+        .route(
+            "/v1/video/generations/{task_id}",
+            get(video_generations_poll),
+        )
         .route("/v1/search", post(search))
+        .route("/v1/alpha/search", post(alpha_search))
+        .route("/v1/tools/search", post(tools_search))
+        .route("/v1/tools/fetch", post(tools_fetch))
         .route("/suno/submit/{action}", post(suno_submit))
         .route("/suno/fetch", post(suno_fetch))
         .route("/suno/fetch/{task_id}", get(suno_poll))
@@ -191,6 +198,48 @@ async fn search(
     prepared.model = body_model(&value);
     forward(state, headers, peer.ip(), prepared).await
 }
+async fn alpha_search(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    body: Bytes,
+) -> Response {
+    let value = match json_body(body.clone()).await {
+        Ok(value) => value,
+        Err(response) => return *response,
+    };
+    let mut prepared = raw_prepared("alpha/search", None, body);
+    prepared.model = body_model(&value);
+    forward(state, headers, peer.ip(), prepared).await
+}
+async fn tools_search(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    body: Bytes,
+) -> Response {
+    let value = match json_body(body.clone()).await {
+        Ok(value) => value,
+        Err(response) => return *response,
+    };
+    let mut prepared = raw_prepared("tools/search", None, body);
+    prepared.model = body_model(&value);
+    forward(state, headers, peer.ip(), prepared).await
+}
+async fn tools_fetch(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    body: Bytes,
+) -> Response {
+    let value = match json_body(body.clone()).await {
+        Ok(value) => value,
+        Err(response) => return *response,
+    };
+    let mut prepared = raw_prepared("tools/fetch", None, body);
+    prepared.model = body_model(&value);
+    forward(state, headers, peer.ip(), prepared).await
+}
 async fn video_create(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -227,6 +276,25 @@ async fn video_poll(
 ) -> Response {
     let prepared = Prepared {
         path: format!("videos/{task_id}"),
+        suno: false,
+        get: true,
+        payload: Payload::None,
+        model: None,
+        task_kind: None,
+        required_task: Some(task_id),
+        lookup_task: None,
+        log_request: String::new(),
+    };
+    forward(state, headers, peer.ip(), prepared).await
+}
+async fn video_generations_poll(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    Path(task_id): Path<String>,
+) -> Response {
+    let prepared = Prepared {
+        path: format!("video/generations/{task_id}"),
         suno: false,
         get: true,
         payload: Payload::None,

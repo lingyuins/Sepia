@@ -110,6 +110,15 @@ async fn upstream() -> (SocketAddr, Hits) {
                 return axum::Json(json!({"id":"vid-1","status":"completed","model":"sora-2"}))
                     .into_response();
             }
+            if path.ends_with("/video/generations") {
+                return axum::Json(json!({"task_id":"gen-1","status":"queued"})).into_response();
+            }
+            if path.ends_with("/video/generations/gen-1") {
+                return axum::Json(json!({"task_id":"gen-1","status":"completed"})).into_response();
+            }
+            if path.ends_with("/tools/fetch") {
+                return axum::Json(json!({"content":"fetched page"})).into_response();
+            }
             if path.ends_with("/suno/submit/music") {
                 return axum::Json(json!({"code":"success","message":"","data":"song-1"}))
                     .into_response();
@@ -123,6 +132,9 @@ async fn upstream() -> (SocketAddr, Hits) {
                     json!({"code":"success","data":{"task_id":"song-1","status":"SUCCESS"}}),
                 )
                 .into_response();
+            }
+            if path.ends_with("/alpha/search") {
+                return axum::Json(json!({"results":[{"title":"alpha"}]})).into_response();
             }
             if path.ends_with("/search") {
                 return axum::Json(json!({"results":[{"title":"result"}]})).into_response();
@@ -701,4 +713,122 @@ async fn model_scope_denies_auxiliary_requests() {
         .await
         .unwrap();
     assert_eq!(requests[0]["status"], "denied");
+}
+
+#[tokio::test]
+async fn search_aliases_forward_to_their_upstream_paths() {
+    let (upstream, hits) = upstream().await;
+    let directory = tempfile::tempdir().unwrap();
+    let store = Store::connect(&directory.path().join("search.db"))
+        .await
+        .unwrap();
+    let keys = KeyStore::testing();
+    let provider = store
+        .create_provider(
+            NewProvider {
+                name: "search".into(),
+                protocol: ProviderProtocol::OpenAI,
+                endpoint: format!("http://{upstream}/v1"),
+                models: vec!["search-model".into()],
+            },
+            "good-key",
+            &[],
+            &keys,
+        )
+        .await
+        .unwrap();
+    default_route(&store, vec![(provider.id, "search-model".into())]).await;
+    let plaintext = client_key(&store, vec!["*".into()]).await;
+    let address = serve(app(AppState::for_testing(store.clone()).await)).await;
+    let client = reqwest::Client::new();
+    for (client_path, upstream_path, marker) in [
+        ("/v1/search", "/v1/search", "result"),
+        ("/v1/alpha/search", "/v1/alpha/search", "alpha"),
+        ("/v1/tools/search", "/v1/tools/search", "result"),
+        ("/v1/tools/fetch", "/v1/tools/fetch", "fetched page"),
+    ] {
+        let response = client
+            .post(format!("http://{address}{client_path}"))
+            .bearer_auth(&plaintext)
+            .json(&json!({"model":"search-model","query":"sepia"}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), 200, "{client_path}");
+        let text = response.text().await.unwrap();
+        assert!(text.contains(marker), "{client_path}: {text}");
+        assert!(
+            hits.0
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|(path, _)| path == upstream_path),
+            "upstream must receive {upstream_path}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn video_generations_poll_pins_submitting_channel() {
+    let (upstream, hits) = upstream().await;
+    let directory = tempfile::tempdir().unwrap();
+    let store = Store::connect(&directory.path().join("videogen.db"))
+        .await
+        .unwrap();
+    let keys = KeyStore::testing();
+    let provider = store
+        .create_provider(
+            NewProvider {
+                name: "videogen".into(),
+                protocol: ProviderProtocol::OpenAI,
+                endpoint: format!("http://{upstream}/v1"),
+                models: vec!["sora-2".into()],
+            },
+            "good-key",
+            &[],
+            &keys,
+        )
+        .await
+        .unwrap();
+    default_route(&store, vec![(provider.id, "sora-2".into())]).await;
+    let plaintext = client_key(&store, vec!["*".into()]).await;
+    let other = client_key(&store, vec!["*".into()]).await;
+    let address = serve(app(AppState::for_testing(store.clone()).await)).await;
+    let client = reqwest::Client::new();
+
+    let response = client
+        .post(format!("http://{address}/v1/video/generations"))
+        .bearer_auth(&plaintext)
+        .json(&json!({"model":"sora-2","prompt":"a cat"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 200);
+    let body: Value = response.json().await.unwrap();
+    assert_eq!(body["task_id"], "gen-1");
+
+    let response = client
+        .get(format!("http://{address}/v1/video/generations/gen-1"))
+        .bearer_auth(&plaintext)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 200);
+    let body: Value = response.json().await.unwrap();
+    assert_eq!(body["status"], "completed");
+    assert!(
+        hits.0
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|(path, _)| path == "/v1/video/generations/gen-1")
+    );
+
+    let response = client
+        .get(format!("http://{address}/v1/video/generations/gen-1"))
+        .bearer_auth(&other)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 404);
 }
