@@ -28,6 +28,7 @@ pub struct AppState {
     pub snapshots: std::sync::Arc<crate::snapshot::Snapshots>,
     pub key_health: std::sync::Arc<tokio::sync::Mutex<KeyHealth>>,
     pub secure_cookie: bool,
+    pub metadata_source: String,
 }
 impl AppState {
     pub async fn for_testing(store: Store) -> Self {
@@ -41,6 +42,7 @@ impl AppState {
             snapshots: std::sync::Arc::new(crate::snapshot::Snapshots::load(&store).await.unwrap()),
             key_health: Default::default(),
             secure_cookie: false,
+            metadata_source: crate::metadata::DEFAULT_SOURCE.into(),
         }
     }
 }

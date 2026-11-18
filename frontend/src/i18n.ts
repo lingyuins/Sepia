@@ -765,6 +765,13 @@ export const translations = {
   kindModeration: ['Moderation', '审核', 'モデレーション'],
   kindMusic: ['Music', '音乐', '音楽'],
   kindOther: ['Other', '其他', 'その他'],
+  plazaSyncMetadata: ['Sync model data', '同步模型数据', 'モデルデータを同期'],
+  plazaSyncDone: ['Synced {count} model entries', '已同步 {count} 条模型数据', '{count} 件のモデルデータを同期しました'],
+  plazaSyncedAt: ['Model data synced {date}', '模型数据同步于 {date}', 'モデルデータ同期：{date}'],
+  plazaVariantCount: ['{count} variants', '{count} 个变体', '{count} バリアント'],
+  plazaReferencePrice: ['Reference', '参考价', '参考価格'],
+  plazaContext: ['Context', '上下文', 'コンテキスト'],
+  plazaNoVisibleChannels: ['No channels match the current filters.', '没有符合当前筛选条件的渠道。', '現在のフィルターに一致するチャネルはありません。'],
 
 } as const
 export type TranslationKey = keyof typeof translations

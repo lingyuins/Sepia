@@ -26,6 +26,7 @@ async fn management_requires_session_and_client_secret_is_returned_once() {
         ),
         key_health: Default::default(),
         secure_cookie: false,
+        metadata_source: sepia_gateway::metadata::DEFAULT_SOURCE.into(),
     };
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
@@ -279,6 +280,7 @@ async fn provider_creation_discovers_models_before_persisting() {
         ),
         key_health: Default::default(),
         secure_cookie: false,
+        metadata_source: sepia_gateway::metadata::DEFAULT_SOURCE.into(),
     };
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();

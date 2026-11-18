@@ -233,6 +233,48 @@ async fn providers(State(state): State<AppState>) -> Response {
     }
     Json(output).into_response()
 }
+async fn sync_model_metadata(State(state): State<AppState>) -> Response {
+    let source = state.metadata_source.clone();
+    let body = match state.http.get(&source).send().await {
+        Ok(response) => match response.json::<serde_json::Value>().await {
+            Ok(body) => body,
+            Err(message) => {
+                return error(
+                    StatusCode::BAD_GATEWAY,
+                    format!("metadata source unreadable: {message}"),
+                );
+            }
+        },
+        Err(message) => {
+            return error(
+                StatusCode::BAD_GATEWAY,
+                format!("metadata source unreachable: {message}"),
+            );
+        }
+    };
+    let entries: Vec<(String, crate::metadata::ModelMeta)> = body
+        .get("data")
+        .and_then(serde_json::Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(crate::metadata::parse_entry)
+                .collect()
+        })
+        .unwrap_or_default();
+    if entries.is_empty() {
+        return error(
+            StatusCode::BAD_GATEWAY,
+            "metadata source returned no models".to_string(),
+        );
+    }
+    if let Err(message) = state.store.replace_model_metadata(&source, &entries).await {
+        return error(StatusCode::INTERNAL_SERVER_ERROR, message);
+    }
+    let (_, fetched_at) = state.store.catalog_meta().await.unwrap_or((None, None));
+    Json(json!({"count": entries.len(), "source": source, "fetched_at": fetched_at}))
+        .into_response()
+}
 async fn model_catalog(State(state): State<AppState>) -> Response {
     let providers = match state.store.providers().await {
         Ok(providers) => providers,
@@ -244,6 +286,14 @@ async fn model_catalog(State(state): State<AppState>) -> Response {
     };
     let prices = match state.store.model_prices().await {
         Ok(prices) => prices,
+        Err(message) => return error(StatusCode::INTERNAL_SERVER_ERROR, message),
+    };
+    let metadata = match state.store.model_metadata().await {
+        Ok(metadata) => metadata,
+        Err(message) => return error(StatusCode::INTERNAL_SERVER_ERROR, message),
+    };
+    let (source, fetched_at) = match state.store.catalog_meta().await {
+        Ok(meta) => meta,
         Err(message) => return error(StatusCode::INTERNAL_SERVER_ERROR, message),
     };
     let mut models: Vec<(String, serde_json::Value)> = Vec::new();
@@ -274,12 +324,19 @@ async fn model_catalog(State(state): State<AppState>) -> Response {
         }
     }
     models.sort_by(|(left, _), (right, _)| left.cmp(right));
-    Json(
-        models
-            .into_iter()
-            .map(|(model, channels)| json!({"model":model,"channels":channels}))
-            .collect::<Vec<_>>(),
-    )
+    Json(json!({
+        "source": source,
+        "fetched_at": fetched_at,
+        "models": models.into_iter().map(|(model, channels)| {
+            let meta = crate::metadata::match_meta(&metadata, &model);
+            json!({
+                "model": model,
+                "base_model": crate::metadata::base_model(&model),
+                "metadata": meta,
+                "channels": channels,
+            })
+        }).collect::<Vec<_>>(),
+    }))
     .into_response()
 }
 async fn preview_provider_models(
@@ -941,6 +998,7 @@ pub fn router(state: AppState) -> Router<AppState> {
         .route("/routes/{id}", axum::routing::delete(delete_route))
         .route("/models/pricing", post(set_price))
         .route("/models/catalog", get(model_catalog))
+        .route("/models/metadata/sync", post(sync_model_metadata))
         .route("/routes", get(routes).post(create_route))
         .route("/keys", get(keys).post(create_key))
         .route("/keys/{id}/revoke", post(revoke_key))

@@ -108,9 +108,13 @@ async fn catalog_aggregates_channels_prices_scopes_and_routes() {
         .json()
         .await
         .unwrap();
-    let entries = catalog.as_array().unwrap();
+    let entries = catalog["models"].as_array().unwrap();
     assert_eq!(entries.len(), 2);
+    assert!(catalog["source"].is_null());
+    assert!(catalog["fetched_at"].is_null());
+    assert!(entries[0]["metadata"].is_null());
     assert_eq!(entries[0]["model"], "embed-x");
+    assert_eq!(entries[0]["base_model"], "embed-x");
     let gpt = &entries[1];
     assert_eq!(gpt["model"], "gpt-x");
     let channels = gpt["channels"].as_array().unwrap();
@@ -138,4 +142,234 @@ async fn catalog_aggregates_channels_prices_scopes_and_routes() {
         .await
         .unwrap();
     assert_eq!(anonymous.status(), 401);
+}
+
+#[tokio::test]
+async fn metadata_sync_fetches_source_and_matches_variants() {
+    let directory = tempfile::tempdir().unwrap();
+    let store = Store::connect(&directory.path().join("metadata.db"))
+        .await
+        .unwrap();
+    let mut state = AppState::for_testing(store.clone()).await;
+    let mock_body = json!({"data": [
+        {"id": "openai/gpt-x-2024-08-06", "name": "OpenAI: GPT-X (dated)", "description": "dated snapshot", "context_length": 128000,
+         "architecture": {"input_modalities": ["text", "image"], "output_modalities": ["text"]},
+         "pricing": {"prompt": "0.000001", "completion": "0.000002"},
+         "supported_parameters": ["tools", "reasoning"]},
+        {"id": "openai/gpt-x", "name": "OpenAI: GPT-X", "context_length": 128000,
+         "pricing": {"prompt": "0.0000015", "completion": "0.000003"}},
+        {"id": "vendor/kimi-k3:free", "name": "Vendor: Kimi K3 (free)", "context_length": 262144,
+         "pricing": {"prompt": "0", "completion": "0"}}
+    ]});
+    let mock = {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let body = mock_body.clone();
+        tokio::spawn(
+            axum::serve(
+                listener,
+                axum::Router::new().route(
+                    "/models",
+                    axum::routing::get(move || {
+                        let body = body.clone();
+                        async move { axum::Json(body) }
+                    }),
+                ),
+            )
+            .into_future(),
+        );
+        address
+    };
+    state.metadata_source = format!("http://{mock}/models");
+    let keys = state.keys.clone();
+    store
+        .create_provider(
+            NewProvider {
+                name: "alpha".into(),
+                protocol: ProviderProtocol::OpenAI,
+                endpoint: "http://alpha.example/v1".into(),
+                models: vec!["gpt-x-2024-08-06".into(), "gpt-x".into(), "kimi-k3".into()],
+            },
+            "alpha-key",
+            &[],
+            &keys,
+        )
+        .await
+        .unwrap();
+    let address = {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        tokio::spawn(
+            axum::serve(
+                listener,
+                sepia_gateway::server::app(state.clone())
+                    .into_make_service_with_connect_info::<std::net::SocketAddr>(),
+            )
+            .into_future(),
+        );
+        address
+    };
+    let client = reqwest::Client::new();
+    let url = |path: &str| format!("http://{address}{path}");
+    client
+        .post(url("/api/v1/auth/bootstrap"))
+        .json(&json!({"username":"admin","password":"correct horse","token":state.bootstrap_token}))
+        .send()
+        .await
+        .unwrap();
+    let login = client
+        .post(url("/api/v1/auth/login"))
+        .json(&json!({"username":"admin","password":"correct horse"}))
+        .send()
+        .await
+        .unwrap();
+    let cookie = login
+        .headers()
+        .get("set-cookie")
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .split(';')
+        .next()
+        .unwrap()
+        .to_string();
+
+    // Before any sync the catalog has no metadata.
+    let before: Value = client
+        .get(url("/api/v1/models/catalog"))
+        .header("cookie", &cookie)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert!(before["source"].is_null());
+    assert!(before["models"][0]["metadata"].is_null());
+
+    let sync = client
+        .post(url("/api/v1/models/metadata/sync"))
+        .header("cookie", &cookie)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(sync.status(), 200);
+    let sync_body: Value = sync.json().await.unwrap();
+    assert_eq!(sync_body["count"], 3);
+    assert_eq!(sync_body["source"], format!("http://{mock}/models"));
+    assert!(sync_body["fetched_at"].as_str().is_some());
+
+    let catalog: Value = client
+        .get(url("/api/v1/models/catalog"))
+        .header("cookie", &cookie)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(catalog["source"], format!("http://{mock}/models"));
+    let models = catalog["models"].as_array().unwrap();
+    assert_eq!(models.len(), 3);
+    let plain = &models[0];
+    assert_eq!(plain["model"], "gpt-x");
+    assert_eq!(plain["metadata"]["source_id"], "openai/gpt-x");
+    let dated = &models[1];
+    assert_eq!(dated["model"], "gpt-x-2024-08-06");
+    assert_eq!(dated["base_model"], "gpt-x");
+    assert_eq!(dated["metadata"]["source_id"], "openai/gpt-x-2024-08-06");
+    assert_eq!(dated["metadata"]["display_name"], "GPT-X (dated)");
+    assert_eq!(dated["metadata"]["context_length"], 128000);
+    assert_eq!(dated["metadata"]["input_price_nanos"], 1_000);
+    assert_eq!(dated["metadata"]["output_price_nanos"], 2_000);
+    assert_eq!(
+        dated["metadata"]["capabilities"],
+        json!(["tools", "reasoning", "vision"])
+    );
+    let kimi = &models[2];
+    assert_eq!(kimi["model"], "kimi-k3");
+    assert_eq!(kimi["metadata"]["source_id"], "vendor/kimi-k3:free");
+    assert_eq!(kimi["metadata"]["context_length"], 262144);
+    assert!(kimi["metadata"]["input_price_nanos"].is_null());
+
+    // Sync replaces the previous snapshot instead of accumulating rows.
+    let again = client
+        .post(url("/api/v1/models/metadata/sync"))
+        .header("cookie", &cookie)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(again.status(), 200);
+    let stored = store.model_metadata().await.unwrap();
+    assert_eq!(stored.len(), 3);
+
+    let anonymous = client
+        .post(url("/api/v1/models/metadata/sync"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(anonymous.status(), 401);
+}
+
+#[tokio::test]
+async fn metadata_sync_reports_unreachable_source() {
+    let directory = tempfile::tempdir().unwrap();
+    let store = Store::connect(&directory.path().join("metadata-fail.db"))
+        .await
+        .unwrap();
+    let mut state = AppState::for_testing(store.clone()).await;
+    let dead = {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        drop(listener);
+        address
+    };
+    state.metadata_source = format!("http://{dead}/models");
+    let address = {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        tokio::spawn(
+            axum::serve(
+                listener,
+                sepia_gateway::server::app(state.clone())
+                    .into_make_service_with_connect_info::<std::net::SocketAddr>(),
+            )
+            .into_future(),
+        );
+        address
+    };
+    let client = reqwest::Client::new();
+    let url = |path: &str| format!("http://{address}{path}");
+    client
+        .post(url("/api/v1/auth/bootstrap"))
+        .json(&json!({"username":"admin","password":"correct horse","token":state.bootstrap_token}))
+        .send()
+        .await
+        .unwrap();
+    let login = client
+        .post(url("/api/v1/auth/login"))
+        .json(&json!({"username":"admin","password":"correct horse"}))
+        .send()
+        .await
+        .unwrap();
+    let cookie = login
+        .headers()
+        .get("set-cookie")
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .split(';')
+        .next()
+        .unwrap()
+        .to_string();
+    let sync = client
+        .post(url("/api/v1/models/metadata/sync"))
+        .header("cookie", &cookie)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(sync.status(), 502);
+    let (source, fetched_at) = store.catalog_meta().await.unwrap();
+    assert!(source.is_none());
+    assert!(fetched_at.is_none());
 }

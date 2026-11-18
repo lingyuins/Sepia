@@ -11,9 +11,51 @@ export type PlazaChannel = {
   outputPriceMicros: number | null
   routes: { slug: string; name: string }[]
 }
-export type PlazaModel = { model: string; channels: PlazaChannel[] }
+
+export type ModelMeta = {
+  sourceId: string
+  baseModel: string
+  displayName: string
+  description: string
+  contextLength: number
+  inputModalities: string[]
+  outputModalities: string[]
+  capabilities: string[]
+  inputPriceNanos: number | null
+  outputPriceNanos: number | null
+}
+
+export type PlazaModel = {
+  model: string
+  baseModel: string
+  metadata: ModelMeta | null
+  channels: PlazaChannel[]
+}
+
+export type PlazaFamily = {
+  base: string
+  displayName: string
+  description: string
+  metadata: ModelMeta | null
+  variants: PlazaModel[]
+  channels: PlazaChannel[]
+}
+
 export type ApiCatalogModel = {
   model: string
+  base_model: string
+  metadata: {
+    source_id: string
+    base_model: string
+    display_name: string
+    description: string
+    context_length: number
+    input_modalities: string[]
+    output_modalities: string[]
+    capabilities: string[]
+    input_price_nanos: number | null
+    output_price_nanos: number | null
+  } | null
   channels: {
     provider_id: number
     provider: string
@@ -27,9 +69,30 @@ export type ApiCatalogModel = {
   }[]
 }
 
+export type CatalogResponse = {
+  source: string | null
+  fetched_at: string | null
+  models: ApiCatalogModel[]
+}
+
 export function mapCatalog(entries: ApiCatalogModel[]): PlazaModel[] {
   return entries.map((entry) => ({
     model: entry.model,
+    baseModel: entry.base_model,
+    metadata: entry.metadata
+      ? {
+          sourceId: entry.metadata.source_id,
+          baseModel: entry.metadata.base_model,
+          displayName: entry.metadata.display_name,
+          description: entry.metadata.description,
+          contextLength: entry.metadata.context_length,
+          inputModalities: entry.metadata.input_modalities,
+          outputModalities: entry.metadata.output_modalities,
+          capabilities: entry.metadata.capabilities,
+          inputPriceNanos: entry.metadata.input_price_nanos,
+          outputPriceNanos: entry.metadata.output_price_nanos,
+        }
+      : null,
     channels: entry.channels.map((channel) => ({
       providerId: channel.provider_id,
       provider: channel.provider,
@@ -44,86 +107,155 @@ export function mapCatalog(entries: ApiCatalogModel[]): PlazaModel[] {
   }))
 }
 
-// Mirrors backend/src/server.rs `glob`: '*' is the only wildcard.
+// Group local models into families by the backend-normalized base id so dated /
+// free / preview variants of one model collapse into a single plaza card.
+export function groupFamilies(models: PlazaModel[]): PlazaFamily[] {
+  const byBase = new Map<string, PlazaModel[]>()
+  for (const model of models) {
+    const list = byBase.get(model.baseModel) ?? []
+    list.push(model)
+    byBase.set(model.baseModel, list)
+  }
+  const families: PlazaFamily[] = []
+  for (const [base, variants] of byBase) {
+    variants.sort((a, b) => a.model.localeCompare(b.model))
+    const withMeta = variants.find((v) => v.metadata) ?? null
+    const metadata = withMeta?.metadata ?? null
+    const channels = variants.flatMap((v) => v.channels)
+    families.push({
+      base,
+      displayName: metadata?.displayName || base,
+      description: metadata?.description ?? '',
+      metadata,
+      variants,
+      channels,
+    })
+  }
+  families.sort((a, b) => a.base.localeCompare(b.base))
+  return families
+}
+
 export function globMatch(pattern: string, value: string): boolean {
+  if (pattern === '*') return true
   let p = 0
   let v = 0
   let star = -1
-  let retry = 0
+  let mark = 0
   while (v < value.length) {
-    if (p < pattern.length && pattern[p] === value[v]) { p += 1; v += 1 }
-    else if (p < pattern.length && pattern[p] === '*') { star = p; p += 1; retry = v }
-    else if (star >= 0) { retry += 1; v = retry; p = star + 1 }
-    else return false
+    if (p < pattern.length && pattern[p] === '*') {
+      star = p
+      mark = v
+      p += 1
+    } else if (p < pattern.length && pattern[p] === value[v]) {
+      p += 1
+      v += 1
+    } else if (star >= 0) {
+      p = star + 1
+      v = mark + 1
+      mark = v
+    } else return false
   }
   while (p < pattern.length && pattern[p] === '*') p += 1
   return p === pattern.length
 }
 
-// Mirrors backend/src/server.rs `route_for_model`: slug, exact candidate,
-// pattern, then default route. Only enabled routes participate.
-export function routeForModel(routes: RouteRule[], model: string): RouteRule | undefined {
-  const active = routes.filter((route) => route.active)
-  const candidatesOf = (route: RouteRule) => route.candidates || []
-  return active.find((route) => route.slug === model)
-    || active.find((route) => candidatesOf(route).some((candidate) => candidate.enabled && candidate.model === model))
-    || active.find((route) => (route.patterns || [route.match]).some((pattern) => globMatch(pattern, model)))
-    || active.find((route) => route.isDefault)
+export function routeForModel(routes: RouteRule[], model: string): RouteRule | null {
+  const enabled = routes.filter((route) => route.active)
+  const exact = enabled.find((route) => route.slug === model)
+  if (exact) return exact
+  const candidate = enabled.find((route) =>
+    route.candidates?.some((c) => c.enabled && c.model === model),
+  )
+  if (candidate) return candidate
+  for (const route of enabled) {
+    if (route.patterns?.some((pattern) => globMatch(pattern, model))) return route
+  }
+  return enabled.find((route) => route.isDefault) ?? null
 }
 
-export function modelRoutable(routes: RouteRule[], model: string): boolean {
-  return routeForModel(routes, model) !== undefined
+export function modelRoutable(routes: RouteRule[], model: PlazaModel): boolean {
+  return routeForModel(routes, model.model) !== null
+}
+export function familyRoutable(routes: RouteRule[], family: PlazaFamily): boolean {
+  return family.variants.some((v) => modelRoutable(routes, v))
+}
+
+export function modelKind(model: string): PlazaKind {
+  const id = model.toLowerCase()
+  if (/rerank|reranker/.test(id)) return 'rerank'
+  if (/embed|embedding|text-embedding/.test(id)) return 'embedding'
+  if (/moderation|omni-moderation/.test(id)) return 'moderation'
+  if (/suno|music|lyrics/.test(id)) return 'music'
+  if (/^dall-e|image|flux|stable-diffusion|midjourney|sd-|sdxl|gpt-image/.test(id)) return 'image'
+  if (/^whisper|tts|speech|audio|transcrib/.test(id)) return 'audio'
+  if (/^sora|video|kling|runway|gen-|luma|veo/.test(id)) return 'video'
+  return 'chat'
 }
 
 export type PlazaKind = 'chat' | 'image' | 'audio' | 'video' | 'embedding' | 'rerank' | 'moderation' | 'music' | 'other'
 
-// Heuristic naming conventions only; Sepia stores no capability metadata.
-export function modelKind(model: string): PlazaKind {
-  const id = model.toLowerCase()
-  if (/(rerank)/.test(id)) return 'rerank'
-  if (/(embedding|embed-|bge-|text-embedding)/.test(id)) return 'embedding'
-  if (/(moderation|omni-moderation)/.test(id)) return 'moderation'
-  if (/(suno|music|lyrics)/.test(id)) return 'music'
-  if (/(sora|video|kling|veo|cogvideo|wan-|hunyuan-video)/.test(id)) return 'video'
-  if (/(whisper|tts|audio|speech|transcrib|realtime)/.test(id)) return 'audio'
-  if (/(image|dall-e|dalle|flux|midjourney|stable-diffusion|sd-|imagen|gpt-image|seedream|cogview)/.test(id)) return 'image'
-  if (/(gpt|claude|gemini|grok|deepseek|qwen|glm|llama|mistral|o[134](-|$)|chat|command|kimi|moonshot|doubao|ernie|hunyuan|minimax|yi-|phi-|gemma)/.test(id)) return 'chat'
-  return 'other'
-}
-
 export type PlazaFilters = {
   query: string
-  kind: 'all' | PlazaKind
+  kind: string
   groupId: string
-  providerId: number | 'all'
+  providerId: string
   routableOnly: boolean
   availableOnly: boolean
 }
 
-export function filterPlaza(models: PlazaModel[], routes: RouteRule[], filters: PlazaFilters): PlazaModel[] {
-  const query = filters.query.trim().toLowerCase()
-  return models.filter((entry) => {
-    if (query && !entry.model.toLowerCase().includes(query) && !entry.channels.some((channel) => channel.provider.toLowerCase().includes(query))) return false
-    if (filters.kind !== 'all' && modelKind(entry.model) !== filters.kind) return false
-    if (filters.routableOnly && !modelRoutable(routes, entry.model)) return false
-    const channels = entry.channels.filter((channel) =>
-      (filters.groupId === 'all' || channel.groupId === filters.groupId)
-      && (filters.providerId === 'all' || channel.providerId === filters.providerId))
-    if (!channels.length) return false
-    if (filters.availableOnly && !channels.some((channel) => channel.enabled && channel.keyCount > 0)) return false
-    return true
-  })
+export function plazaChannelVisible(channel: PlazaChannel, filters: PlazaFilters): boolean {
+  if (filters.groupId && filters.groupId !== 'all' && String(channel.groupId ?? '') !== filters.groupId) return false
+  if (filters.providerId && filters.providerId !== 'all' && String(channel.providerId) !== filters.providerId) return false
+  if (filters.availableOnly && !(channel.enabled && channel.keyCount > 0)) return false
+  return true
 }
 
-export function plazaChannelVisible(channel: PlazaChannel, filters: PlazaFilters): boolean {
-  return (filters.groupId === 'all' || channel.groupId === filters.groupId)
-    && (filters.providerId === 'all' || channel.providerId === filters.providerId)
+export function filterFamilies(
+  families: PlazaFamily[],
+  routes: RouteRule[],
+  filters: PlazaFilters,
+): PlazaFamily[] {
+  const query = filters.query.trim().toLowerCase()
+  return families
+    .map((family) => {
+      const variants = family.variants.filter((variant) => {
+        if (filters.kind && filters.kind !== 'all' && modelKind(variant.model) !== filters.kind) return false
+        if (filters.routableOnly && !modelRoutable(routes, variant)) return false
+        const channels = variant.channels.filter((c) => plazaChannelVisible(c, filters))
+        if (channels.length === 0) return false
+        if (query) {
+          const names = [variant.model, variant.baseModel, family.displayName, ...channels.map((c) => c.provider)]
+          if (!names.some((n) => n.toLowerCase().includes(query))) return false
+        }
+        return true
+      })
+      if (variants.length === 0) return null
+      return { ...family, variants, channels: variants.flatMap((v) => v.channels) }
+    })
+    .filter((f): f is PlazaFamily => f !== null)
 }
 
 export function formatPrice(micros: number | null): string {
   if (micros === null) return '—'
-  const value = micros / 1_000_000
-  if (value >= 100) return `$${value.toFixed(0)}`
-  if (value >= 1) return `$${value.toFixed(2)}`
-  return `$${value.toFixed(4).replace(/0+$/, '').replace(/\.$/, '.0')}`
+  const perMillion = micros / 1_000_000
+  if (perMillion >= 100) return `$${perMillion.toFixed(0)}`
+  if (perMillion >= 1) return `$${perMillion.toFixed(2)}`
+  return `$${perMillion.toFixed(4).replace(/0+$/, '').replace(/\.$/, '')}`
+}
+
+// Reference prices from the metadata source are nanos per token (1e9 nanos per
+// USD), so per-million USD = nanos / 1000, with up to 3 decimals.
+export function formatReferencePrice(nanos: number | null): string {
+  if (nanos === null) return '—'
+  const perMillion = nanos / 1_000
+  if (perMillion >= 100) return `$${perMillion.toFixed(0)}`
+  if (perMillion >= 1) return `$${perMillion.toFixed(2)}`
+  return `$${perMillion.toFixed(3).replace(/0+$/, '').replace(/\.$/, '')}`
+}
+
+export function formatContext(length: number): string {
+  if (length <= 0) return '—'
+  if (length >= 1_000_000) return `${(length / 1_000_000).toFixed(1).replace(/\.0$/, '')}M`
+  if (length >= 1_000) return `${Math.round(length / 1_000)}K`
+  return String(length)
 }
