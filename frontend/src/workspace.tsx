@@ -13,7 +13,7 @@ export function useTranslation() {
   }
 }
 
-export type Page = 'Overview' | 'Providers' | 'Routing' | 'Plugins' | 'Requests' | 'Analytics' | 'Settings'
+export type Page = 'Overview' | 'Providers' | 'Plaza' | 'Routing' | 'Plugins' | 'Requests' | 'Analytics' | 'Settings'
 export type ProviderKeyScope = { id: number; models: string[] | null }
 export type Provider = {
   id: number

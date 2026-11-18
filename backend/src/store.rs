@@ -391,6 +391,23 @@ impl Store {
             })
             .collect()
     }
+    pub async fn model_prices(&self) -> Result<Vec<(i64, String, i64, i64)>, String> {
+        let rows = sqlx::query("SELECT provider_id, model, input_price_micros, output_price_micros FROM provider_models WHERE input_price_micros > 0 AND output_price_micros > 0")
+            .fetch_all(&self.pool)
+            .await
+            .map_err(|e| e.to_string())?;
+        Ok(rows
+            .into_iter()
+            .map(|row| {
+                (
+                    row.get("provider_id"),
+                    row.get("model"),
+                    row.get("input_price_micros"),
+                    row.get("output_price_micros"),
+                )
+            })
+            .collect())
+    }
     pub async fn set_provider_key_models(
         &self,
         provider_id: i64,

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Activity, ArrowUpRight, BarChart3, Blocks, ChevronRight, CircleHelp, Command, ExternalLink, Gauge, GitBranch, Inbox, Layers3, LayoutDashboard, Menu as MenuIcon, Plus, RefreshCw, Search, Settings, ShieldCheck, X } from 'lucide-react'
+import { Activity, ArrowUpRight, BarChart3, Blocks, ChevronRight, CircleHelp, Command, ExternalLink, Gauge, GitBranch, Inbox, Layers3, LayoutDashboard, Menu as MenuIcon, Plus, RefreshCw, Search, Settings, ShieldCheck, Store, X } from 'lucide-react'
 import { Dialog } from '@headlessui/react'
 import { Area, AreaChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 import { useWorkspace, useTranslation, type Provider, type RequestRecord } from './workspace'
@@ -12,6 +12,7 @@ import { RouteChain } from './components/RouteChain'
 import { chartTimeLabel } from './analytics'
 import { latestSuccessfulRouteRequest, selectOverviewRoute } from './route-display'
 import { ProvidersView } from './views/ProvidersView'
+import { PlazaView } from './views/PlazaView'
 import { RoutingView } from './views/RoutingView'
 import { PluginsView } from './views/PluginsView'
 import { RequestsView, RequestsTable } from './views/RequestsView'
@@ -20,9 +21,9 @@ import SettingsView from './components/SettingsView'
 import { HelpDialog, WorkspaceDialog } from './components/ShellDialogs'
 import { RequestDetails } from './components/RequestDetails'
 
-type Page = 'Overview' | 'Providers' | 'Routing' | 'Plugins' | 'Requests' | 'Analytics' | 'Settings'
+type Page = 'Overview' | 'Providers' | 'Plaza' | 'Routing' | 'Plugins' | 'Requests' | 'Analytics' | 'Settings'
 type Period = '24 hours' | '7 days' | '30 days'
-const navItems = [{ label: 'Overview', icon: LayoutDashboard }, { label: 'Providers', icon: Layers3 }, { label: 'Routing', icon: GitBranch }, { label: 'Plugins', icon: Blocks }] as const
+const navItems = [{ label: 'Overview', icon: LayoutDashboard }, { label: 'Providers', icon: Layers3 }, { label: 'Plaza', icon: Store }, { label: 'Routing', icon: GitBranch }, { label: 'Plugins', icon: Blocks }] as const
 const insightItems = [{ label: 'Requests', icon: Inbox }, { label: 'Analytics', icon: BarChart3 }] as const
 
 function Logo({ compact = false }: { compact?: boolean }) {
@@ -88,7 +89,7 @@ function App() {
     <aside className={`sidebar ${mobileNav ? 'mobile-open' : ''}`}><div className="sidebar-top"><Logo /><button className="mobile-close icon-button" onClick={() => setMobileNav(false)} aria-label={t('closeNavigation')}><X size={18} /></button></div><div className="sidebar-workspace"><StatusDot /><div><strong>{settings.workspace}</strong><span>{t('browserWorkspace')}</span></div></div><nav className="sidebar-nav"><span className="nav-label">{t('workspace')}</span>{navItems.map(({ label, icon: Icon }) => <button key={label} className={`nav-item ${page === label ? 'active' : ''}`} onClick={() => navigate(label)}><Icon size={17} /><span>{t(label.toLowerCase() as 'overview')}</span>{label === 'Providers' && <span className="nav-count">{providers.length}</span>}{label === 'Plugins' && <span className="nav-count">{plugins.length}</span>}</button>)}<span className="nav-label insights-label">{t('insights')}</span>{insightItems.map(({ label, icon: Icon }) => <button key={label} className={`nav-item ${page === label ? 'active' : ''}`} onClick={() => navigate(label)}><Icon size={17} /><span>{t(label.toLowerCase() as 'overview')}</span>{label === 'Requests' && <span className="nav-live-dot" />}</button>)}</nav><div className="sidebar-bottom"><button className="nav-item" onClick={() => setHelpOpen(true)}><CircleHelp size={17} /><span>{t('helpDocs')}</span><ExternalLink size={12} /></button><button className={`nav-item ${page === 'Settings' ? 'active' : ''}`} onClick={() => navigate('Settings')}><Settings size={17} /><span>{t('settings')}</span></button><div className="gateway-card"><span className="live-pill"><StatusDot />{t('gatewayOperational')}</span><code>{settings.host}:{settings.port}</code><small>{providers.filter((provider) => provider.enabled).length} / {providers.length} {t('providersEnabledShort')}</small></div></div></aside>
     <main className="main-content"><header className="topbar"><div className="topbar-left"><button className="mobile-menu icon-button" onClick={() => setMobileNav(true)} aria-label={t('openNavigation')}><MenuIcon size={20} /></button><span className="breadcrumb">{t('workspace')}<ChevronRight size={12} /><strong>{t(page.toLowerCase() as 'overview')}</strong></span></div><div className="topbar-actions"><button className="top-search" onClick={() => setSearchOpen(true)}><Search size={16} /><span>{t('searchAnything')}</span><kbd><Command size={11} /> K</kbd></button><button className="top-avatar" onClick={() => setWorkspaceOpen(true)} aria-label={t('workspaceProfile')}>{settings.workspace.charAt(0)}</button></div></header><div className="page-content">
       {page === 'Overview' && <Overview providers={providers} navigate={navigate} onAdd={() => setAddProvider(true)} onNotify={notify} onRequest={setSelectedRequest} />}
-      {page === 'Providers' && <ProvidersView />}{page === 'Routing' && <RoutingView />}{page === 'Plugins' && <PluginsView />}{page === 'Requests' && <RequestsView onSelect={setSelectedRequest} />}{page === 'Analytics' && <AnalyticsView />}{page === 'Settings' && <SettingsView />}
+      {page === 'Providers' && <ProvidersView />}{page === 'Plaza' && <PlazaView />}{page === 'Routing' && <RoutingView />}{page === 'Plugins' && <PluginsView />}{page === 'Requests' && <RequestsView onSelect={setSelectedRequest} />}{page === 'Analytics' && <AnalyticsView />}{page === 'Settings' && <SettingsView />}
       <footer className="page-footer"><span><Logo compact />{t('footer')}</span><span>Sepia v0.1.0</span></footer>
     </div></main>
     <ProviderDialog open={addProvider} onClose={() => setAddProvider(false)} onSave={async (provider, keys) => { await run(() => api('/api/v1/providers', { method: 'POST', body: JSON.stringify(providerInput(provider, keys)) })); setAddProvider(false); notify(t('providerConnected', { name: provider.name })) }} />

@@ -233,6 +233,55 @@ async fn providers(State(state): State<AppState>) -> Response {
     }
     Json(output).into_response()
 }
+async fn model_catalog(State(state): State<AppState>) -> Response {
+    let providers = match state.store.providers().await {
+        Ok(providers) => providers,
+        Err(message) => return error(StatusCode::INTERNAL_SERVER_ERROR, message),
+    };
+    let routes = match state.store.routes().await {
+        Ok(routes) => routes,
+        Err(message) => return error(StatusCode::INTERNAL_SERVER_ERROR, message),
+    };
+    let prices = match state.store.model_prices().await {
+        Ok(prices) => prices,
+        Err(message) => return error(StatusCode::INTERNAL_SERVER_ERROR, message),
+    };
+    let mut models: Vec<(String, serde_json::Value)> = Vec::new();
+    for provider in &providers {
+        let keys = match state.store.provider_keys(provider.id).await {
+            Ok(keys) => keys,
+            Err(message) => return error(StatusCode::INTERNAL_SERVER_ERROR, message),
+        };
+        for model in &provider.models {
+            let price = prices
+                .iter()
+                .find(|(provider_id, priced, _, _)| *provider_id == provider.id && priced == model);
+            let entry = json!({
+                "provider_id": provider.id,
+                "provider": provider.name,
+                "group_id": provider.group_id,
+                "protocol": provider.protocol,
+                "enabled": provider.enabled,
+                "key_count": keys.iter().filter(|key| key.models.as_ref().is_none_or(|models| models.iter().any(|item| item == model))).count(),
+                "input_price_micros": price.map(|(_, _, input, _)| *input),
+                "output_price_micros": price.map(|(_, _, _, output)| *output),
+                "routes": routes.iter().filter(|route| route.enabled && route.candidates.iter().any(|(_, candidate)| candidate == model)).map(|route| json!({"slug":route.slug,"name":route.name})).collect::<Vec<_>>(),
+            });
+            match models.iter_mut().find(|(name, _)| name == model) {
+                Some((_, serde_json::Value::Array(channels))) => channels.push(entry),
+                _ => models.push((model.clone(), json!([entry]))),
+            }
+        }
+    }
+    models.sort_by(|(left, _), (right, _)| left.cmp(right));
+    Json(
+        models
+            .into_iter()
+            .map(|(model, channels)| json!({"model":model,"channels":channels}))
+            .collect::<Vec<_>>(),
+    )
+    .into_response()
+}
 async fn preview_provider_models(
     State(state): State<AppState>,
     Json(input): Json<ProviderPreviewInput>,
@@ -891,6 +940,7 @@ pub fn router(state: AppState) -> Router<AppState> {
         .route("/routes/{id}/enabled", post(route_enabled))
         .route("/routes/{id}", axum::routing::delete(delete_route))
         .route("/models/pricing", post(set_price))
+        .route("/models/catalog", get(model_catalog))
         .route("/routes", get(routes).post(create_route))
         .route("/keys", get(keys).post(create_key))
         .route("/keys/{id}/revoke", post(revoke_key))
