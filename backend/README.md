@@ -1,6 +1,6 @@
 # Sepia gateway backend
 
-Rust/Axum service for native OpenAI, Anthropic and Gemini text APIs. The React app remains a separate preview until its API integration change.
+Rust/Axum service for native OpenAI, Anthropic and Gemini text APIs plus OpenAI-compatible auxiliary endpoints. The React console is fully integrated through the same-origin `/api/v1` management API.
 
 ## Requirements
 
@@ -26,6 +26,7 @@ Useful environment variables:
 - `SEPIA_HTTP_LOOPBACK_COOKIE=true`: only for local HTTP access to a container published on loopback at `0.0.0.0:5000`; remove for remote/LAN deployment
 - `SEPIA_TRUSTED_PROXY=true`: required for non-loopback listening; TLS is terminated by a trusted proxy
 - `SEPIA_DEV_INSECURE_KEYSTORE=1`: debug builds only; uses a file test key and must not protect production secrets
+- `SEPIA_METADATA_SOURCE`: Model Plaza metadata sync source (OpenAI-style model list); defaults to `https://openrouter.ai/api/v1/models`
 
 The service serves `frontend/dist/` as a same-origin SPA when built. Run `npm run build --prefix frontend` and start the gateway from the repository root before using the production UI. At startup the console path is resolved before the process changes to `SEPIA_DATA_DIR`: an existing working-directory `frontend/dist` wins, otherwise packaged `bin/sepia-gateway` resolves the sibling package-root `frontend/dist`. `SEPIA_FRONTEND_DIR` overrides both. The root `Dockerfile` embeds migrations in the release binary, serves `/opt/sepia/frontend/dist`, and stores runtime state in `/data`.
 
@@ -33,12 +34,16 @@ Provider keys are AES-GCM encrypted with an OS-keyring master key, or with expli
 
 ## API surfaces
 
-- OpenAI: `GET /v1/models`, `POST /v1/chat/completions`, `POST /v1/responses` with Bearer Key. Responses accepts string/message-array text input, `input_text`, assistant `output_text` history, `instructions` and `max_output_tokens`; it returns native response JSON and lifecycle SSE. Tools, media, file input, conversation chaining and background execution are rejected rather than silently discarded. Existing Provider protocols continue to forward through Chat Completions, Anthropic Messages or Gemini generation.
+- OpenAI: `GET /v1/models`, `POST /v1/chat/completions`, `POST /v1/responses` with Bearer key. Responses accepts string/message-array input, `input_text`, assistant `output_text` history, function tools and tool outputs, images/audio/files, `instructions` and `max_output_tokens`, response retrieval, input-item listing, `previous_response_id` history, background polling/cancellation and stream-event replay (migration `0007_responses.sql`). Non-background `store:false` responses cannot be retrieved.
 - Anthropic: `GET /v1/models` with `x-api-key`; `anthropic-version: 2023-06-01` is optional for model listing but required by `POST /v1/messages`
 - Gemini: `GET /v1/models` or `/v1beta/models`, `POST /v1/models/{model}:generateContent` or `/v1beta/models/{model}:generateContent`, and `:streamGenerateContent` with `x-goog-api-key` or `?key=`. Both stable and beta paths share protocol conversion; `/v1/models` selects Gemini listing when `x-goog-api-key` is supplied. Current `@google/genai` default stable-v1 listing, JSON and streaming are covered by local SDK verification.
-- Management: `/api/v1/auth/*`, `/providers`, `/routes`, `/keys`, `/groups`, `/settings`, `/requests`, `/analytics`; session cookie required except bootstrap/login
+- Auxiliary passthrough (`auxiliary.rs`, OpenAI/OpenAI Responses providers only): `POST /v1/embeddings|rerank|moderations|images/generations|audio/speech|videos|video/generations|search|alpha/search|tools/search|tools/fetch`, multipart `POST /v1/images/edits|audio/transcriptions|audio/translations`, `GET /v1/videos/:task_id` and `GET /v1/video/generations/:task_id`, and the Suno-style proxy `POST /suno/submit/:action`, `POST /suno/fetch`, `GET /suno/fetch/:task_id`. Bodies pass through verbatim; terminal upstream errors return the upstream status/body and binary responses keep their content type. Client-key auth, model scopes, routing, quotas (1024-token reservation settled from usage) and `max_attempts` failover are shared with inference. Async tasks (`0011_auxiliary_tasks.sql`) are client-key scoped; polls/fetches pin the submitting provider/key.
+- Management: `/api/v1/auth/*`, `/providers` (incl. per-key model scopes and `/providers/:id/test` catalog discovery), `/routes` (incl. `POST /routes/:id/test` real per-candidate probes), `/keys`, `/groups`, `/settings`, `/requests` (incl. `/requests/:id/bodies`), `/analytics`, `/models/catalog`, `/models/metadata/sync`, `/models/pricing`, `/plugins/*`; session cookie required except bootstrap/login
+- Plugins: local `.zip` install (`POST /api/v1/plugins/install`, multipart), enable/disable, config, uninstall, sandboxed UI bundle and RPC. Runtime is `wasmtime` (`plugin.rs`): fuel + epoch timeouts, memory caps, no WASI; manifest-validated permissions gate relay/route/strategy/response/observation/provider/RPC hooks and kv/secret/http/log host capabilities. Plugin-backed providers (`providers.plugin_id`) discover models via `provider.models` and serve inference via `provider.fetch`. Guest SDK: `backend/plugin-sdk` (no_std, wasm32-unknown-unknown); examples in `backend/plugin-examples`.
 
-Redirects are not followed. Client keys are returned only once at creation and stored as SHA-256 hashes. Routing is ordered failover, with bounded attempts, key cooldowns and no retry after client output.
+OpenAI providers are universal dual-endpoint: `server.rs` `candidate_protocols` picks Chat Completions or Responses first from the inbound request and tries the other endpoint once per provider before advancing candidates; protocol `openai-responses` pins Responses-first with Chat fallback. 401/403 rotate provider keys within one leg (bounded by the eligible key count for the requested model); 404/405/501 mark the endpoint unsupported and advance. Redirects are not followed. Client keys are returned only once at creation and stored as SHA-256 hashes. Routing is ordered failover, with bounded attempts, key cooldowns and no retry after client output.
+
+Request logs record client IP, time-to-first-byte, cached/reasoning token detail and real total latency (`0010_request_details.sql`). Body capture is opt-in via the `log_bodies` workspace setting (default off), stored in `request_bodies` with a 1 MiB cap and cascade-deleted with history.
 
 ## Verification
 
@@ -50,4 +55,4 @@ npm run build --prefix frontend
 npm test --prefix frontend
 ```
 
-Tests use local mock HTTP upstreams. They cover native/cross-protocol JSON and SSE, failover, secrets, quotas, lifecycle cleanup and management. They do not claim live third-party provider verification; that requires separately supplied credentials.
+Tests use local mock HTTP upstreams. They cover native/cross-protocol JSON and SSE, auxiliary passthrough endpoints, failover, secrets, per-key model scopes, quotas, Responses lifecycle, model metadata, the WASM plugin runtime and management. They do not claim live third-party provider verification; that requires separately supplied credentials.

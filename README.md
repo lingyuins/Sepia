@@ -4,28 +4,32 @@
 
 面向个人与小团队的多供应商 AI 网关及运行控制台。Sepia 将不同供应商的模型统一为 OpenAI、Anthropic 和 Gemini 客户端接口，并提供有序故障转移、访问控制、配额、请求观测与费用统计。
 
-当前仓库包含可运行的 React 18 + TypeScript 控制台、Rust/Axum 网关、SQLite 持久化及协议集成测试。没有预置供应商、演示请求或虚构监控数据；WASM 插件运行时尚未实现，控制台会明确显示不可用状态。
+当前仓库包含可运行的 React 18 + TypeScript 控制台、Rust/Axum 网关、SQLite 持久化及协议集成测试。没有预置供应商、演示请求或虚构监控数据。本地 WASM 插件运行时已实现（wasmtime 沙箱），插件通过本地 `.zip` 包安装；没有公共插件市场或自动更新。
 
 ## 功能现状
 
-- **供应商与模型**：管理 OpenAI、Anthropic、Gemini 兼容上游，支持多个上游密钥、模型发现、启停和分组。
-- **智能路由**：按模型或模式选择路由，保留候选顺序并执行有界故障转移；支持多密钥轮换、失败冷却和最终上游模型记录。
+- **供应商与模型**：管理 OpenAI、Anthropic、Gemini 兼容上游，支持多个上游密钥、逐密钥模型范围限定、模型发现、启停和分组。OpenAI 上游为通用双端点：按入站协议优先选择 Chat Completions 或 Responses，首腿失败在同一供应商内换另一端点一次后再推进候选。
+- **模型广场**：`#Plaza` 按变体家族聚合各供应商模型，展示真实渠道、可用性与已配置价格；可一键同步 OpenAI 风格模型元数据（默认 OpenRouter，`SEPIA_METADATA_SOURCE` 可覆盖），参考价与配置价分离标注，并支持逐模型改价。
+- **智能路由**：按模型或模式选择路由，保留候选顺序并执行有界故障转移；支持多密钥轮换、失败冷却和最终上游模型记录。路由测试对每个候选发送一次真实最小推理探测并逐候选报告结果。
 - **统一协议**：原生及跨协议 JSON/SSE 转换，支持文本、函数工具、工具调用/结果以及图像、音频和文件内容的显式映射。
 - **OpenAI Responses**：支持函数工具、多模态输入、`previous_response_id`、会话、输入项目分页、后台轮询/取消及流事件回放。
+- **辅助端点**：OpenAI 兼容的 embeddings、rerank、moderations、图像生成/编辑、语音合成/转写/翻译、视频生成与轮询、搜索（含 `alpha/search`、`tools/search`、`tools/fetch` 别名）及 Suno 风格代理，原样透传至 OpenAI 上游并复用鉴权、路由、配额与故障转移；异步任务按客户端密钥隔离。
 - **客户端密钥**：明文仅在创建时返回一次；支持模型/路由范围、金额与 Token 额度、RPM/TPM、IP/CIDR、分组和供应商限制、有效期及撤销。
-- **运行控制台**：管理员初始化与登录、供应商/路由/密钥配置、请求日志、Token/费用分析和运行参数设置；提供中文、English、日本語及明暗主题。
-- **安全与持久化**：SQLite 存储配置和观测数据，上游密钥加密，管理员使用 HttpOnly 会话 Cookie，上游重定向不会转发凭据。
+- **请求观测**：记录客户端 IP、首字延迟、缓存输入与推理输出 Token 明细和真实总延迟；可选正文记录（默认关闭，1 MiB 截断）；Token/费用分析按真实请求日志聚合。
+- **插件系统**：本地 `.zip` 包安装（manifest 权限校验、SHA256 记录、semver 拒降级），wasmtime 沙箱执行（fuel/epoch 超时、内存上限、无 WASI），提供请求改写、路由过滤/策略、响应改写、观测、插件供应商与 RPC 钩子及 kv/secret/http/log 宿主能力；控制台支持启停、配置编辑、沙箱 iframe 插件 UI 与卸载。
+- **运行控制台**：管理员初始化与登录、供应商/路由/密钥/插件配置、模型广场、请求日志、Token/费用分析和运行参数设置；提供中文、English、日本語及明暗主题。
+- **安全与持久化**：SQLite 存储配置和观测数据，上游密钥与插件 secret 加密，管理员使用 HttpOnly 会话 Cookie，上游重定向不会转发凭据。
 
-当前不支持多候选输出、自动供应商同步、会话亲和、WASM 插件执行或任意供应商内置工具的通用转换。上游 Provider 的 Responses 请求仍通过其 Chat Completions、Anthropic Messages 或 Gemini Generation 接口完成。
+当前不支持多候选输出、自动供应商同步、会话亲和、公共插件市场/自动更新或任意供应商内置工具的通用转换；内置路由策略仅有有序故障转移（插件可通过策略钩子重排/排除候选）。
 
 ## 技术栈
 
 | 模块 | 实现 |
 | --- | --- |
 | 控制台 | React 18、TypeScript、Vite、Recharts、Headless UI、Lucide |
-| 网关 | Rust stable、Axum、Tokio、Reqwest |
+| 网关 | Rust stable、Axum、Tokio、Reqwest、wasmtime |
 | 数据 | SQLite、SQLx、版本化迁移 |
-| 安全 | AES-GCM、Argon2、SHA-256、操作系统 Keyring、HttpOnly Cookie |
+| 安全 | AES-GCM、Argon2、SHA-256、操作系统 Keyring、HttpOnly Cookie、WASM 沙箱 |
 
 ## 环境要求
 
@@ -139,6 +143,7 @@ cargo run --release --manifest-path backend/Cargo.toml
 | `SEPIA_TRUSTED_PROXY=true` | 非回环监听所必需；由受信代理终止 TLS |
 | `SEPIA_DEV_INSECURE_KEYSTORE=1` | 仅 debug 构建使用文件测试密钥；禁止用于生产 |
 | `SEPIA_GATEWAY_URL` | Vite 开发代理目标，不是浏览器管理 API 的跨域地址 |
+| `SEPIA_METADATA_SOURCE` | 模型广场元数据同步源（OpenAI 风格模型列表），默认 `https://openrouter.ai/api/v1/models` |
 
 ## 客户端接入
 
@@ -187,12 +192,34 @@ curl "http://127.0.0.1:5000/v1/models/your-route:generateContent" \
 
 同时支持 `/v1beta` 和 `:streamGenerateContent`。共用模型列表入口根据凭据选择格式：`x-goog-api-key` 返回 Gemini 格式，Bearer 返回 OpenAI 格式，`x-api-key` 返回 Anthropic 格式。
 
+### 辅助端点（OpenAI 兼容透传）
+
+以下端点将请求体原样转发到 OpenAI/OpenAI Responses 上游（Anthropic/Gemini 供应商不参与），复用客户端密钥鉴权、模型范围、路由匹配、配额与故障转移；上游终态错误按原状态码和正文返回，二进制响应保留上游 Content-Type：
+
+- `POST /v1/embeddings`、`/v1/rerank`、`/v1/moderations`
+- `POST /v1/images/generations`、`/v1/images/edits`（multipart）
+- `POST /v1/audio/speech`、`/v1/audio/transcriptions`、`/v1/audio/translations`（后两者 multipart）
+- `POST /v1/videos`、`/v1/video/generations`；轮询 `GET /v1/videos/:task_id`、`GET /v1/video/generations/:task_id`
+- `POST /v1/search` 及别名 `/v1/alpha/search`、`/v1/tools/search`、`/v1/tools/fetch`
+- Suno 风格代理：`POST /suno/submit/:action`、`POST /suno/fetch`、`GET /suno/fetch/:task_id`
+
+```sh
+curl http://127.0.0.1:5000/v1/embeddings \
+  -H "Authorization: Bearer $SEPIA_CLIENT_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"model":"your-embedding-model","input":"Hello"}'
+```
+
+异步提交任务按客户端密钥隔离：视频轮询与 Suno fetch 固定使用提交时的供应商/密钥，其他密钥不可见。
+
 ## 目录结构
 
 ```text
 frontend/                 React 控制台、样式、测试与 Vite 配置
 backend/                  Rust 网关与集成测试
 backend/migrations/       SQLite 版本化迁移（编译进发布二进制）
+backend/plugin-sdk/       no_std WASM 插件 SDK（wasm32-unknown-unknown）
+backend/plugin-examples/  示例插件源码
 Dockerfile                双架构、非 root 容器构建
 compose.yaml              本机回环端口与命名卷部署
 scripts/                  原生包打包与解压启动检查
@@ -215,7 +242,7 @@ cargo clippy --manifest-path backend/Cargo.toml --all-targets -- -D warnings
 cargo test --manifest-path backend/Cargo.toml
 ```
 
-后端测试覆盖原生/跨协议 JSON 与 SSE、工具与多模态、Responses 状态、故障转移、配额、凭据和管理 API，使用本地可控 HTTP 上游。它们不替代使用真实供应商账户的兼容性验证。
+后端测试覆盖原生/跨协议 JSON 与 SSE、工具与多模态、Responses 状态、辅助端点、故障转移、配额、凭据、管理 API、模型元数据与 WASM 插件运行时，使用本地可控 HTTP 上游。它们不替代使用真实供应商账户的兼容性验证。
 
 ## 安全说明
 
@@ -223,6 +250,7 @@ cargo test --manifest-path backend/Cargo.toml
 - 管理员密码使用 Argon2 哈希，会话通过 HttpOnly Cookie 保存。
 - 上游密钥使用 AES-GCM 加密；桌面条目的生产主密钥默认由操作系统 Keyring 保护，容器使用显式 `SEPIA_MASTER_KEY`。数据库中的加密校验标记会在监听前拒绝更换后的主密钥。
 - 网关不跟随上游重定向，避免凭据被转发到其他主机。
+- WASM 插件在 wasmtime 沙箱内执行：无 WASI，出站 HTTP 仅允许 manifest 声明的 origin，敏感请求头对插件隐藏且不可写；插件 secret 与上游密钥同样加密存储。
 - 非回环部署应置于启用 TLS 的受信反向代理之后，并显式设置 `SEPIA_TRUSTED_PROXY=true`。
 
 ## 许可证
@@ -235,28 +263,32 @@ Sepia 依据 [GNU General Public License v3.0](./LICENSE) 发布。完整许可�
 
 A multi-provider AI gateway and operations console for individuals and small teams. Sepia exposes OpenAI, Anthropic, and Gemini client interfaces over different upstream providers, with ordered failover, access controls, quotas, request observability, and cost analytics.
 
-The repository contains a working React 18 + TypeScript console, a Rust/Axum gateway, SQLite persistence, and protocol integration tests. It does not seed providers, demo requests, or fabricated monitoring data. The WASM plugin runtime is not implemented and is explicitly shown as unavailable in the console.
+The repository contains a working React 18 + TypeScript console, a Rust/Axum gateway, SQLite persistence, and protocol integration tests. It does not seed providers, demo requests, or fabricated monitoring data. A local WASM plugin runtime is implemented (wasmtime sandbox); plugins install from local `.zip` packages. There is no public plugin marketplace or auto-update.
 
 ## Current capabilities
 
-- **Providers and models**: manage OpenAI-, Anthropic-, and Gemini-compatible upstreams, multiple upstream keys, model discovery, enablement, and groups.
-- **Routing**: select routes by model or pattern, preserve candidate order, and run bounded ordered failover with multi-key rotation, failure cooldowns, and final upstream-model recording.
+- **Providers and models**: manage OpenAI-, Anthropic-, and Gemini-compatible upstreams with multiple upstream keys, per-key model scopes, model discovery, enablement, and groups. OpenAI upstreams are universal dual-endpoint: the primary API is chosen from the inbound protocol (Chat Completions or Responses), and a failed first leg tries the other endpoint once within the same provider before advancing candidates.
+- **Model Plaza**: `#Plaza` groups provider models into variant families with real channels, availability, and configured prices. One action syncs OpenAI-style model metadata (OpenRouter by default, overridable via `SEPIA_METADATA_SOURCE`); reference prices are labeled separately from configured prices, which are editable per model.
+- **Routing**: select routes by model or pattern, preserve candidate order, and run bounded ordered failover with multi-key rotation, failure cooldowns, and final upstream-model recording. Route tests send one real minimal inference probe per candidate and report per-candidate results.
 - **Unified protocols**: native and cross-protocol JSON/SSE conversion for text, function tools, tool calls/results, and explicit image, audio, and file mappings.
 - **OpenAI Responses**: function tools, multimodal input, `previous_response_id`, conversations, input-item pagination, background polling/cancellation, and stream-event replay.
+- **Auxiliary endpoints**: OpenAI-compatible embeddings, rerank, moderations, image generation/edits, speech/transcription/translation, video generation with polling, search (including `alpha/search`, `tools/search`, `tools/fetch` aliases), and a Suno-style proxy pass bodies through verbatim to OpenAI upstreams, reusing auth, routing, quotas, and failover; async tasks are scoped to the submitting client key.
 - **Client keys**: plaintext is returned only once at creation. Scope keys by model/route, amount/token budgets, RPM/TPM, IP/CIDR, groups, excluded providers, expiration, and revocation.
-- **Operations console**: administrator bootstrap/login, provider/route/key management, request logs, token/cost analytics, and runtime settings, with Chinese, English, Japanese, and light/dark themes.
-- **Security and persistence**: SQLite configuration and observability, encrypted upstream keys, HttpOnly administrator sessions, and no credential forwarding through upstream redirects.
+- **Request observation**: client IP, time-to-first-byte, cached-input and reasoning-output token detail, and real total latency are recorded per request. Optional body capture (off by default, capped at 1 MiB); token/cost analytics aggregate real request logs.
+- **Plugin system**: local `.zip` install with manifest-validated permissions, SHA256 recording, and semver downgrade rejection; wasmtime sandboxed execution (fuel/epoch timeouts, memory caps, no WASI); relay rewrite, route filter/strategy, response rewrite, observation, plugin-backed provider, and RPC hooks plus kv/secret/http/log host capabilities; console enable/disable, config editing, sandboxed iframe plugin UI, and uninstall.
+- **Operations console**: administrator bootstrap/login, provider/route/key/plugin management, Model Plaza, request logs, token/cost analytics, and runtime settings, with Chinese, English, Japanese, and light/dark themes.
+- **Security and persistence**: SQLite configuration and observability, encrypted upstream keys and plugin secrets, HttpOnly administrator sessions, and no credential forwarding through upstream redirects.
 
-Multiple candidate outputs, automatic provider synchronization, session affinity, WASM plugin execution, and generic conversion of arbitrary provider-specific built-in tools are not supported. Upstream Responses requests are still executed through Chat Completions, Anthropic Messages, or Gemini Generation; native upstream Responses is not implied.
+Multiple candidate outputs, automatic provider synchronization, session affinity, a public plugin marketplace/auto-update, and generic conversion of arbitrary provider-specific built-in tools are not supported. Ordered failover is the only built-in routing strategy; plugins may reorder or exclude candidates through the strategy hook.
 
 ## Stack
 
 | Component | Implementation |
 | --- | --- |
 | Console | React 18, TypeScript, Vite, Recharts, Headless UI, Lucide |
-| Gateway | Rust stable, Axum, Tokio, Reqwest |
+| Gateway | Rust stable, Axum, Tokio, Reqwest, wasmtime |
 | Data | SQLite, SQLx, versioned migrations |
-| Security | AES-GCM, Argon2, SHA-256, OS keyring, HttpOnly cookies |
+| Security | AES-GCM, Argon2, SHA-256, OS keyring, HttpOnly cookies, WASM sandbox |
 
 ## Requirements
 
@@ -370,6 +402,7 @@ The gateway serves `frontend/dist/`, keeping the console, management API, and in
 | `SEPIA_TRUSTED_PROXY=true` | Required for non-loopback listening; TLS terminates at a trusted proxy |
 | `SEPIA_DEV_INSECURE_KEYSTORE=1` | Debug builds only; uses a file test key and must never protect production secrets |
 | `SEPIA_GATEWAY_URL` | Vite development proxy target, not a cross-origin browser management API setting |
+| `SEPIA_METADATA_SOURCE` | Model Plaza metadata sync source (OpenAI-style model list); defaults to `https://openrouter.ai/api/v1/models` |
 
 ## Client usage
 
@@ -418,12 +451,34 @@ curl "http://127.0.0.1:5000/v1/models/your-route:generateContent" \
 
 `/v1beta` and `:streamGenerateContent` are also supported. The shared model-list endpoint selects its format from credentials: `x-goog-api-key` returns Gemini, Bearer returns OpenAI, and `x-api-key` returns Anthropic.
 
+### Auxiliary endpoints (OpenAI-compatible passthrough)
+
+These endpoints forward request bodies verbatim to OpenAI/OpenAI Responses upstreams (Anthropic/Gemini providers are skipped), reusing client-key auth, model scopes, route matching, quotas, and failover. Terminal upstream errors are returned with the upstream status and body; binary responses keep their upstream Content-Type:
+
+- `POST /v1/embeddings`, `/v1/rerank`, `/v1/moderations`
+- `POST /v1/images/generations`, `/v1/images/edits` (multipart)
+- `POST /v1/audio/speech`, `/v1/audio/transcriptions`, `/v1/audio/translations` (the latter two multipart)
+- `POST /v1/videos`, `/v1/video/generations`; polling via `GET /v1/videos/:task_id`, `GET /v1/video/generations/:task_id`
+- `POST /v1/search` plus aliases `/v1/alpha/search`, `/v1/tools/search`, `/v1/tools/fetch`
+- Suno-style proxy: `POST /suno/submit/:action`, `POST /suno/fetch`, `GET /suno/fetch/:task_id`
+
+```sh
+curl http://127.0.0.1:5000/v1/embeddings \
+  -H "Authorization: Bearer $SEPIA_CLIENT_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"model":"your-embedding-model","input":"Hello"}'
+```
+
+Async submitted tasks are scoped to the submitting client key: video polls and Suno fetches pin the submitting provider/key and are invisible to other keys.
+
 ## Project layout
 
 ```text
 frontend/                 React console, styles, tests, and Vite configuration
 backend/                  Rust gateway and integration tests
 backend/migrations/       Versioned SQLite migrations embedded in release binaries
+backend/plugin-sdk/       no_std WASM plugin SDK (wasm32-unknown-unknown)
+backend/plugin-examples/  Example plugin sources
 Dockerfile                Multi-architecture non-root container build
 compose.yaml              Loopback-only port and named-volume deployment
 scripts/                  Native archive packaging and extracted-startup checks
@@ -446,7 +501,7 @@ cargo clippy --manifest-path backend/Cargo.toml --all-targets -- -D warnings
 cargo test --manifest-path backend/Cargo.toml
 ```
 
-Backend tests cover native/cross-protocol JSON and SSE, tools and multimodal content, Responses state, failover, quotas, credentials, and management APIs using controllable local HTTP upstreams. They do not replace compatibility testing with real provider accounts.
+Backend tests cover native/cross-protocol JSON and SSE, tools and multimodal content, Responses state, auxiliary endpoints, failover, quotas, credentials, management APIs, model metadata, and the WASM plugin runtime using controllable local HTTP upstreams. They do not replace compatibility testing with real provider accounts.
 
 ## Security notes
 
@@ -454,6 +509,7 @@ Backend tests cover native/cross-protocol JSON and SSE, tools and multimodal con
 - Administrator passwords use Argon2 hashes; sessions use HttpOnly cookies.
 - Upstream keys use AES-GCM encryption. Desktop production master keys use the OS keyring by default; containers use an explicit `SEPIA_MASTER_KEY`. An encrypted database marker rejects a changed master key before the gateway starts listening.
 - Upstream redirects are not followed, preventing credential forwarding to another host.
+- WASM plugins run in a wasmtime sandbox: no WASI, outbound HTTP restricted to manifest-declared origins, sensitive request headers hidden and unwritable; plugin secrets are encrypted like upstream keys.
 - Deploy non-loopback instances behind a TLS-enabled trusted reverse proxy and explicitly set `SEPIA_TRUSTED_PROXY=true`.
 
 ## License
