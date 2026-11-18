@@ -42,6 +42,81 @@ fn upstream_detail(body: &str) -> String {
         .unwrap_or_else(|| body.chars().take(200).collect())
 }
 
+/// Probe entry that routes plugin-backed providers through the plugin fetch
+/// hook so route tests exercise the same path as inference.
+pub async fn probe_model_for(
+    state: &crate::server::AppState,
+    provider: &Provider,
+    secret: &str,
+    model: &str,
+    legs: &[Protocol],
+) -> ProbeOutcome {
+    if provider.plugin_id.is_none() {
+        return probe_model(&state.http, provider, secret, model, legs).await;
+    }
+    let request = ChatRequest {
+        model: model.to_string(),
+        messages: vec![Message::new(Role::User, "ping")],
+        max_tokens: Some(512),
+        ..Default::default()
+    };
+    let mut last: Option<ProbeOutcome> = None;
+    for protocol in legs {
+        let endpoint = crate::relay::endpoint_label(*protocol);
+        let started = Instant::now();
+        let response = match crate::plugin::provider_fetch(
+            state, provider, secret, &request, model, *protocol,
+        )
+        .await
+        {
+            Ok(response) => response,
+            Err(message) => {
+                last = Some(failure(started, endpoint, message));
+                continue;
+            }
+        };
+        let latency_ms = started.elapsed().as_millis() as i64;
+        let status = response.status();
+        if !status.is_success() {
+            let detail = upstream_detail(&response.text().await.unwrap_or_default());
+            last = Some(ProbeOutcome {
+                ok: false,
+                latency_ms,
+                endpoint,
+                error: Some(format!("upstream HTTP {status} ({endpoint}): {detail}")),
+                reply: None,
+            });
+            return last.unwrap();
+        }
+        let value = match response.json::<serde_json::Value>().await {
+            Ok(value) => value,
+            Err(_) => {
+                last = Some(failure(
+                    started,
+                    endpoint,
+                    format!("invalid upstream JSON ({endpoint})"),
+                ));
+                continue;
+            }
+        };
+        match crate::protocol::decode_response(*protocol, value) {
+            Ok(decoded) => {
+                return ProbeOutcome {
+                    ok: true,
+                    latency_ms,
+                    endpoint,
+                    error: None,
+                    reply: Some(decoded.text.chars().take(200).collect()),
+                };
+            }
+            Err(message) => {
+                last = Some(failure(started, endpoint, message));
+            }
+        }
+    }
+    last.unwrap_or_else(|| failure(Instant::now(), "plugin", "no probe leg".into()))
+}
+
 pub async fn probe_model(
     client: &reqwest::Client,
     provider: &Provider,

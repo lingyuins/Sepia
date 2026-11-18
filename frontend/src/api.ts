@@ -1,5 +1,5 @@
 import type { KeyPolicy } from './key-policy'
-import type { Provider, RequestRecord, RouteRule } from './workspace'
+import type { Plugin, Provider, RequestRecord, RouteRule } from './workspace'
 type ProviderProtocol = 'openai' | 'anthropic' | 'gemini' | 'openai-responses'
 
 export type ApiProvider = { id: number; name: string; protocol: ProviderProtocol; endpoint: string; models: string[]; key_count: number; enabled: boolean; group_id: string; keys?: { id: number; models: string[] | null }[] }
@@ -7,6 +7,7 @@ export type ApiRoute = { id: number; slug: string; name: string; description: st
 export type ApiRequest = { id: string; protocol: string; model: string; route?: string; status: string; input_tokens: number; output_tokens: number; cost_micros: number; latency_ms: number; created_at: string; provider?: string; key?: string; client_ip?: string | null; first_byte_ms?: number | null; cached_tokens?: number; reasoning_tokens?: number; has_body?: boolean }
 export type ApiClientKey = { id: number; name: string; models: string[]; token_limit: number; max_amount_micros: number; rpm: number; tpm: number; expires_at: string | null }
 export type ApiGroup = { id: string; name: string; description: string }
+export type ApiPlugin = { id: string; name: string; version: string; enabled: boolean; status: string; description: string; events: string[]; permissions: string[]; priority: number; has_ui: boolean; ui_title: string; config_schema: Record<string, unknown>; config: Record<string, unknown>; sha256: string; installed_at: string; updated_at: string }
 export type ApiSettings = Partial<{ connect_timeout_seconds: number; first_byte_timeout_seconds: number; stream_idle_timeout_seconds: number; max_attempts: number; retry_after_cap_seconds: number; log_bodies: boolean; body_retention_days: number }>
 export type ApiAnalytics = { requests: number; successful: number; input_tokens: number; output_tokens: number; cost_micros: number; latency_ms?: number; series?: { time: string; requests: number; successful: number; cost_micros: number; latency_ms: number }[]; by_model?: { model: string; requests: number }[]; by_provider?: { provider_id: number; requests: number; successful: number; latency_ms: number }[] }
 
@@ -22,7 +23,8 @@ export class ApiError extends Error {
 
 export function apiClient(fetcher: typeof fetch = fetch) {
   return async <T>(url: string, options: RequestInit = {}): Promise<T> => {
-    const response = await fetcher(url, { credentials: 'same-origin', ...options, headers: { ...(options.body ? { 'content-type': 'application/json' } : {}), ...options.headers } })
+    const isForm = typeof FormData !== 'undefined' && options.body instanceof FormData
+    const response = await fetcher(url, { credentials: 'same-origin', ...options, headers: { ...(options.body && !isForm ? { 'content-type': 'application/json' } : {}), ...options.headers } })
     const body = await response.json().catch(() => ({}))
     if (!response.ok) throw new ApiError(body.error?.message || `Request failed (${response.status})`, response.status)
     return body as T
@@ -42,6 +44,9 @@ export function mapRequest(request: ApiRequest): RequestRecord {
   const total = request.input_tokens + request.output_tokens
   const time = new Date(request.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false })
   return { id: request.id, createdAt: request.created_at, time, model: request.model || 'unknown', provider: request.provider || '—', tokens: total.toLocaleString('en-US'), inputTokens: request.input_tokens, outputTokens: request.output_tokens, latency: `${request.latency_ms} ms`, latencyMs: request.latency_ms, status: request.status === 'success' ? '200 OK' : request.status === 'failed' ? 'Failed' : request.status, key: request.key || '—', cost: `$${(request.cost_micros / 1000000).toFixed(6)}`, route: request.route || '—', clientIp: request.client_ip ?? null, firstByteMs: request.first_byte_ms ?? null, cachedTokens: request.cached_tokens ?? 0, reasoningTokens: request.reasoning_tokens ?? 0, protocol: request.protocol, hasBody: request.has_body === true }
+}
+export function mapPlugin(plugin: ApiPlugin): Plugin {
+  return { id: plugin.id, name: plugin.name, description: plugin.description, version: plugin.version, enabled: plugin.enabled, status: plugin.status, events: plugin.events, permissions: plugin.permissions, priority: plugin.priority, hasUi: plugin.has_ui, uiTitle: plugin.ui_title, configSchema: plugin.config_schema || {}, config: plugin.config || {}, sha256: plugin.sha256, installedAt: plugin.installed_at, updatedAt: plugin.updated_at }
 }
 export type ProviderKeyDraft = { value: string; models: string[] | null }
 export function providerInput(provider: Provider, keyDrafts: ProviderKeyDraft[] = []) {

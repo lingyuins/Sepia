@@ -9,7 +9,7 @@ use axum::{
     routing::{get, post},
 };
 use serde::Deserialize;
-use serde_json::json;
+use serde_json::{Value, json};
 
 fn default_true() -> bool {
     true
@@ -43,6 +43,8 @@ pub struct ProviderInput {
     group_id: String,
     #[serde(default = "default_true")]
     enabled: bool,
+    #[serde(default)]
+    plugin_id: Option<String>,
 }
 #[derive(Deserialize)]
 pub struct ProviderPreviewInput {
@@ -52,6 +54,8 @@ pub struct ProviderPreviewInput {
     secret: String,
     #[serde(default)]
     secrets: Vec<String>,
+    #[serde(default)]
+    plugin_id: Option<String>,
 }
 #[derive(Deserialize)]
 pub struct KeyModelsInput {
@@ -69,6 +73,8 @@ pub struct ProviderTestInput {
     secret: Option<String>,
     #[serde(default)]
     key_index: Option<usize>,
+    #[serde(default)]
+    plugin_id: Option<String>,
 }
 #[derive(Deserialize)]
 pub struct RouteInput {
@@ -229,7 +235,7 @@ async fn providers(State(state): State<AppState>) -> Response {
             Ok(keys) => keys,
             Err(message) => return error(StatusCode::INTERNAL_SERVER_ERROR, message),
         };
-        output.push(json!({"id":provider.id,"name":provider.name,"protocol":provider.protocol,"endpoint":provider.endpoint,"models":provider.models,"key_count":provider.key_count,"group_id":provider.group_id,"enabled":provider.enabled,"keys":keys.iter().map(|key| json!({"id":key.id,"models":key.models})).collect::<Vec<_>>()}));
+        output.push(json!({"id":provider.id,"name":provider.name,"protocol":provider.protocol,"endpoint":provider.endpoint,"models":provider.models,"key_count":provider.key_count,"group_id":provider.group_id,"enabled":provider.enabled,"plugin_id":provider.plugin_id,"keys":keys.iter().map(|key| json!({"id":key.id,"models":key.models})).collect::<Vec<_>>()}));
     }
     Json(output).into_response()
 }
@@ -362,8 +368,14 @@ async fn preview_provider_models(
         key_count: 0,
         group_id: String::new(),
         enabled: false,
+        plugin_id: input.plugin_id.clone(),
     };
-    match crate::discovery::discover_models(&state.http, &provider, secret).await {
+    let result = if provider.plugin_id.is_some() {
+        crate::plugin::provider_models(&state, &provider, secret).await
+    } else {
+        crate::discovery::discover_models(&state.http, &provider, secret).await
+    };
+    match result {
         Ok(models) => Json(json!({"models":models})).into_response(),
         Err(message) => error(StatusCode::BAD_GATEWAY, message),
     }
@@ -382,6 +394,7 @@ async fn create_provider(
         key_models,
         group_id,
         enabled,
+        plugin_id,
     } = input;
     let key_scopes: Vec<(String, Vec<String>)> = key_models
         .into_iter()
@@ -397,6 +410,7 @@ async fn create_provider(
             key_count: 0,
             group_id: group_id.clone(),
             enabled,
+            plugin_id: plugin_id.clone(),
         };
         let mut discovered = Vec::new();
         let mut first_error = None;
@@ -409,8 +423,12 @@ async fn create_provider(
                 continue;
             }
             seen.push(candidate_secret);
-            match crate::discovery::discover_models(&state.http, &candidate, candidate_secret).await
-            {
+            let discovery = if candidate.plugin_id.is_some() {
+                crate::plugin::provider_models(&state, &candidate, candidate_secret).await
+            } else {
+                crate::discovery::discover_models(&state.http, &candidate, candidate_secret).await
+            };
+            match discovery {
                 Ok(models) => {
                     for model in models {
                         if !discovered.contains(&model) {
@@ -439,6 +457,7 @@ async fn create_provider(
                 protocol,
                 endpoint,
                 models,
+                plugin_id: plugin_id.clone(),
             },
             &secret,
             &key_scopes,
@@ -457,6 +476,7 @@ async fn create_provider(
                     models: &provider.models,
                     group: &group_id,
                     enabled,
+                    plugin_id: plugin_id.as_deref(),
                 })
                 .await
             {
@@ -534,6 +554,7 @@ async fn update_provider(
             models: &input.models,
             group: &input.group_id,
             enabled: input.enabled,
+            plugin_id: input.plugin_id.as_deref(),
         })
         .await
     {
@@ -670,11 +691,19 @@ async fn test_provider(
     {
         provider.endpoint = endpoint;
     }
+    if input.plugin_id.is_some() {
+        provider.plugin_id = input.plugin_id.clone();
+    }
     let secret = match resolve_test_secret(&state, id, input.secret, input.key_index).await {
         Ok(secret) => secret,
         Err(response) => return *response,
     };
-    match crate::discovery::discover_models(&state.http, &provider, &secret).await {
+    let result = if provider.plugin_id.is_some() {
+        crate::plugin::provider_models(&state, &provider, &secret).await
+    } else {
+        crate::discovery::discover_models(&state.http, &provider, &secret).await
+    };
+    match result {
         Ok(models) => Json(json!({"models":models})).into_response(),
         Err(message) => error(StatusCode::BAD_GATEWAY, message),
     }
@@ -758,7 +787,7 @@ async fn test_route(State(state): State<AppState>, Path(id): Path<i64>) -> Respo
             provider,
             &crate::server::InboundProtocol::Provider(crate::protocol::Protocol::OpenAI),
         );
-        let outcome = crate::probe::probe_model(&state.http, provider, &secret, model, &legs).await;
+        let outcome = crate::probe::probe_model_for(&state, provider, &secret, model, &legs).await;
         results.push(json!({"provider_id":provider.id,"provider":provider.name,"model":model,"enabled":true,"result":outcome.to_json()}));
     }
     Json(json!({"route":route.slug,"candidates":results})).into_response()
@@ -977,6 +1006,244 @@ async fn clear_requests(State(state): State<AppState>) -> Response {
         Err(message) => error(StatusCode::INTERNAL_SERVER_ERROR, message),
     }
 }
+async fn list_plugins(State(state): State<AppState>) -> Response {
+    match state.store.plugin_records().await {
+        Ok(records) => Json(json!(
+            records
+                .into_iter()
+                .map(|record| {
+                    json!({
+                        "id": record.id,
+                        "name": record.name,
+                        "version": record.version,
+                        "enabled": record.enabled,
+                        "status": record.status,
+                        "description": record.manifest.description,
+                        "events": record.manifest.events,
+                        "permissions": record.manifest.permissions,
+                        "priority": record.manifest.priority,
+                        "has_ui": record.manifest.ui.is_some(),
+                        "ui_title": record.manifest.ui.as_ref().map(|ui| ui.title.clone()).unwrap_or_default(),
+                        "config_schema": record.manifest.config_schema,
+                        "config": record.config,
+                        "sha256": record.sha256,
+                        "installed_at": record.installed_at,
+                        "updated_at": record.updated_at,
+                    })
+                })
+                .collect::<Vec<_>>()
+        ))
+        .into_response(),
+        Err(message) => error(StatusCode::INTERNAL_SERVER_ERROR, message),
+    }
+}
+async fn install_plugin(
+    State(state): State<AppState>,
+    mut multipart: axum::extract::Multipart,
+) -> Response {
+    let mut package: Option<Vec<u8>> = None;
+    while let Ok(Some(field)) = multipart.next_field().await {
+        if field.name() == Some("package") {
+            match field.bytes().await {
+                Ok(bytes) => package = Some(bytes.to_vec()),
+                Err(message) => return error(StatusCode::BAD_REQUEST, message.to_string()),
+            }
+        }
+    }
+    let Some(package) = package else {
+        return error(StatusCode::BAD_REQUEST, "package field required");
+    };
+    let parsed = match crate::plugin::parse_package(&package) {
+        Ok(parsed) => parsed,
+        Err(message) => return error(StatusCode::BAD_REQUEST, message),
+    };
+    let existing = match state.store.plugin(&parsed.manifest.id).await {
+        Ok(existing) => existing,
+        Err(message) => return error(StatusCode::INTERNAL_SERVER_ERROR, message),
+    };
+    let now = chrono::Utc::now().to_rfc3339();
+    let mut ui_bundle = serde_json::Map::new();
+    for (path, bytes) in &parsed.ui {
+        use base64::Engine;
+        ui_bundle.insert(
+            path.clone(),
+            json!(base64::engine::general_purpose::STANDARD.encode(bytes)),
+        );
+    }
+    let previous_version = existing.as_ref().map(|record| record.version.clone());
+    let (record, replace) = match existing {
+        Some(existing) => {
+            let old = semver::Version::parse(&existing.version).ok();
+            let new = semver::Version::parse(&parsed.manifest.version).ok();
+            if let (Some(old), Some(new)) = (old, new)
+                && new < old
+            {
+                return error(StatusCode::BAD_REQUEST, "downgrade not allowed");
+            }
+            let mut record = existing.clone();
+            record.name = parsed.manifest.name.clone();
+            record.version = parsed.manifest.version.clone();
+            record.manifest = parsed.manifest.clone();
+            record.wasm = parsed.wasm.clone();
+            record.ui_bundle = Value::Object(ui_bundle);
+            record.sha256 = parsed.sha256.clone();
+            record.updated_at = now.clone();
+            record.status = if record.enabled {
+                "enabled"
+            } else {
+                "disabled"
+            }
+            .into();
+            (record, true)
+        }
+        None => (
+            crate::store::PluginRecord {
+                id: parsed.manifest.id.clone(),
+                name: parsed.manifest.name.clone(),
+                version: parsed.manifest.version.clone(),
+                enabled: false,
+                status: "disabled".into(),
+                manifest: parsed.manifest.clone(),
+                config: json!({}),
+                wasm: parsed.wasm.clone(),
+                ui_bundle: Value::Object(ui_bundle),
+                sha256: parsed.sha256.clone(),
+                installed_at: now.clone(),
+                updated_at: now.clone(),
+            },
+            false,
+        ),
+    };
+    if let Err(message) = state.store.insert_plugin(&record, replace).await {
+        return error(StatusCode::BAD_REQUEST, message);
+    }
+    if replace && record.enabled {
+        let runtime = state.plugins.read().await;
+        let _ = runtime
+            .invoke(
+                &state.store,
+                &state.keys,
+                &state.http,
+                &record,
+                "plugin.migrate",
+                json!({"from_version": previous_version.clone().unwrap_or_default()}),
+            )
+            .await;
+    }
+    if let Err(message) = state.plugins.write().await.reload(&state.store).await {
+        return error(StatusCode::INTERNAL_SERVER_ERROR, message);
+    }
+    Json(json!({"id": record.id, "version": record.version})).into_response()
+}
+async fn set_plugin_enabled(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(input): Json<serde_json::Value>,
+) -> Response {
+    let enabled = input
+        .get("enabled")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false);
+    let Some(record) = state.store.plugin(&id).await.ok().flatten() else {
+        return error(StatusCode::NOT_FOUND, "plugin not found");
+    };
+    if record.status == "uninstalling" {
+        return error(StatusCode::CONFLICT, "plugin is uninstalling");
+    }
+    let status = if enabled { "enabled" } else { "disabled" };
+    if let Err(message) = state.store.set_plugin_enabled(&id, enabled, status).await {
+        return error(StatusCode::BAD_REQUEST, message);
+    }
+    if let Err(message) = state.plugins.write().await.reload(&state.store).await {
+        return error(StatusCode::INTERNAL_SERVER_ERROR, message);
+    }
+    StatusCode::OK.into_response()
+}
+async fn set_plugin_config(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(config): Json<serde_json::Value>,
+) -> Response {
+    if !config.is_object() {
+        return error(StatusCode::BAD_REQUEST, "config must be an object");
+    }
+    if let Err(message) = state.store.set_plugin_config(&id, &config).await {
+        return error(StatusCode::BAD_REQUEST, message);
+    }
+    StatusCode::OK.into_response()
+}
+async fn delete_plugin(State(state): State<AppState>, Path(id): Path<String>) -> Response {
+    if let Err(message) = state
+        .store
+        .set_plugin_enabled(&id, false, "uninstalling")
+        .await
+    {
+        return error(StatusCode::BAD_REQUEST, message);
+    }
+    if let Err(message) = state.plugins.write().await.reload(&state.store).await {
+        return error(StatusCode::INTERNAL_SERVER_ERROR, message);
+    }
+    if let Err(message) = state.store.delete_plugin(&id).await {
+        return error(StatusCode::BAD_REQUEST, message);
+    }
+    StatusCode::OK.into_response()
+}
+async fn plugin_ui_bundle(State(state): State<AppState>, Path(id): Path<String>) -> Response {
+    let Some(record) = state.store.plugin(&id).await.ok().flatten() else {
+        return error(StatusCode::NOT_FOUND, "plugin not found");
+    };
+    if record.manifest.ui.is_none() {
+        return error(StatusCode::NOT_FOUND, "plugin has no ui");
+    }
+    let session = crate::crypto::random_token("sepia_plugin_");
+    let document = match crate::plugin::ui_document(&record, &session) {
+        Ok(document) => document,
+        Err(message) => return error(StatusCode::INTERNAL_SERVER_ERROR, message),
+    };
+    (
+        StatusCode::OK,
+        [
+            (header::CONTENT_TYPE, "application/json"),
+            (header::CACHE_CONTROL, "no-store"),
+            (
+                header::HeaderName::from_static("x-content-type-options"),
+                "nosniff",
+            ),
+        ],
+        Json(json!({"session": session, "document": document})),
+    )
+        .into_response()
+}
+async fn plugin_rpc(
+    State(state): State<AppState>,
+    Path((id, path)): Path<(String, String)>,
+    Json(input): Json<serde_json::Value>,
+) -> Response {
+    let Some(record) = state.store.plugin(&id).await.ok().flatten() else {
+        return error(StatusCode::NOT_FOUND, "plugin not found");
+    };
+    if !record.enabled {
+        return error(StatusCode::CONFLICT, "plugin is disabled");
+    }
+    if !record.manifest.has_event("http.rpc") {
+        return error(StatusCode::FORBIDDEN, "plugin does not expose rpc");
+    }
+    let runtime = state.plugins.read().await;
+    match runtime
+        .invoke(
+            &state.store,
+            &state.keys,
+            &state.http,
+            &record,
+            "http.rpc",
+            json!({"path": path, "body": input}),
+        )
+        .await
+    {
+        Ok(value) => Json(value).into_response(),
+        Err(message) => error(StatusCode::BAD_GATEWAY, message),
+    }
+}
 pub fn router(state: AppState) -> Router<AppState> {
     let protected = Router::new()
         .route("/providers", get(providers).post(create_provider))
@@ -1010,6 +1277,16 @@ pub fn router(state: AppState) -> Router<AppState> {
         .route("/requests", get(requests).delete(clear_requests))
         .route("/requests/{id}/attempts", get(attempts))
         .route("/requests/{id}/bodies", get(request_bodies))
+        .route("/plugins", get(list_plugins))
+        .route("/plugins/install", post(install_plugin))
+        .route("/plugins/{id}/enabled", post(set_plugin_enabled))
+        .route(
+            "/plugins/{id}/config",
+            axum::routing::put(set_plugin_config),
+        )
+        .route("/plugins/{id}", axum::routing::delete(delete_plugin))
+        .route("/plugins/{id}/ui-bundle", get(plugin_ui_bundle))
+        .route("/plugins/{id}/rpc/{*path}", post(plugin_rpc))
         .route_layer(middleware::from_fn_with_state(state.clone(), auth));
     Router::new()
         .route("/auth/status", get(status))

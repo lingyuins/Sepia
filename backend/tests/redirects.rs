@@ -22,6 +22,7 @@ async fn upstream_redirects_do_not_forward_provider_credentials() {
         key_count: 1,
         group_id: "official".into(),
         enabled: true,
+        plugin_id: None,
     };
     let request = ChatRequest {
         model: "x".into(),

@@ -16,6 +16,7 @@ async fn provider_and_route_updates_round_trip_and_analytics_are_real() {
                 protocol: sepia_gateway::ProviderProtocol::OpenAI,
                 endpoint: "http://localhost/v1".into(),
                 models: vec!["one".into()],
+                plugin_id: None,
             },
             "secret",
             &[],
@@ -32,6 +33,7 @@ async fn provider_and_route_updates_round_trip_and_analytics_are_real() {
             models: &["two".into()],
             group: "team",
             enabled: true,
+            plugin_id: None,
         })
         .await
         .unwrap();

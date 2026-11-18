@@ -1,7 +1,7 @@
 use crate::{
     KeyStore, ProviderProtocol, Store,
     protocol::{ChatResponse, Protocol, StreamEvent, decode_request, decode_response},
-    relay::{call, json_response, stream_response},
+    relay::{json_response, stream_response},
 };
 use axum::{
     Router,
@@ -29,6 +29,7 @@ pub struct AppState {
     pub key_health: std::sync::Arc<tokio::sync::Mutex<KeyHealth>>,
     pub secure_cookie: bool,
     pub metadata_source: String,
+    pub plugins: crate::plugin::SharedRuntime,
 }
 impl AppState {
     pub async fn for_testing(store: Store) -> Self {
@@ -43,6 +44,7 @@ impl AppState {
             key_health: Default::default(),
             secure_cookie: false,
             metadata_source: crate::metadata::DEFAULT_SOURCE.into(),
+            plugins: crate::plugin::shared(crate::plugin::PluginRuntime::new().unwrap()),
         }
     }
 }
@@ -58,6 +60,9 @@ pub enum InboundProtocol {
 }
 
 pub fn candidate_protocols(provider: &crate::Provider, inbound: &InboundProtocol) -> Vec<Protocol> {
+    if provider.plugin_id.is_some() {
+        return vec![crate::relay::outbound_protocol(provider)];
+    }
     match provider.protocol {
         ProviderProtocol::OpenAI => {
             if matches!(inbound, InboundProtocol::OpenAIResponses) {
@@ -491,6 +496,16 @@ pub async fn relay(
     if path.is_some_and(|p| p.1) {
         request.stream = true;
     }
+    match crate::plugin::rewrite_request(&state, &request).await {
+        Ok(rewritten) => request = rewritten,
+        Err(message) => {
+            let _ = state
+                .store
+                .finish_request(&request_id, "failed", 0, 0, 0)
+                .await;
+            return error(StatusCode::BAD_GATEWAY, message);
+        }
+    }
     let snapshot = state.snapshots.get();
     if !model_allowed(&client, &snapshot.routes, &request.model) {
         let _ = state
@@ -511,6 +526,17 @@ pub async fn relay(
             .await;
         return error(StatusCode::NOT_FOUND, "no route for model");
     };
+    let candidates =
+        match crate::plugin::filter_candidates(&state, &request.model, &route.candidates).await {
+            Ok(candidates) => candidates,
+            Err(message) => {
+                let _ = state
+                    .store
+                    .finish_request(&request_id, "failed", 0, 0, 0)
+                    .await;
+                return error(StatusCode::BAD_GATEWAY, message);
+            }
+        };
     let quota_model = route
         .candidates
         .first()
@@ -560,7 +586,7 @@ pub async fn relay(
         crate::lifecycle::RequestGuard::new(state.store.clone(), request_id.clone(), reservation);
     let providers = &snapshot.providers;
     let mut attempts_used = 0;
-    'candidates: for (provider_id, model) in &route.candidates {
+    'candidates: for (provider_id, model) in &candidates {
         let Some(provider) = providers
             .iter()
             .find(|provider| provider.id == *provider_id)
@@ -631,40 +657,76 @@ pub async fn relay(
                 };
                 attempts_used += 1;
                 let attempt_started = Instant::now();
-                let response =
-                    match call(&state.http, provider, &secret, &request, model, *protocol).await {
-                        Ok(response) => response,
-                        Err(message) => {
-                            state
-                                .key_health
-                                .lock()
-                                .await
-                                .cooldowns
-                                .insert(key_id, chrono::Utc::now() + chrono::Duration::seconds(60));
-                            if let Some(response) = record_attempt(
-                                &state,
-                                crate::observability::NewAttempt {
-                                    request_id: &request_id,
-                                    provider_id: Some(provider.id),
-                                    provider_key_id: Some(key_id),
-                                    model,
-                                    status: "retry",
-                                    error: Some(&format!("{message} ({endpoint})")),
-                                    input_tokens: 0,
-                                    output_tokens: 0,
-                                    latency_ms: attempt_started.elapsed().as_millis() as i64,
-                                },
-                            )
+                let encoded_body = crate::protocol::encode_request(*protocol, &request, model)
+                    .unwrap_or_else(|_| json!({}));
+                let (out_body, out_headers) = match crate::plugin::rewrite_upstream(
+                    &state,
+                    provider,
+                    model,
+                    &encoded_body,
+                    &[],
+                )
+                .await
+                {
+                    Ok(value) => value,
+                    Err(message) => {
+                        let _ = guard.complete("failed", 0, 0, 0).await;
+                        return error(StatusCode::BAD_GATEWAY, message);
+                    }
+                };
+                let upstream = if provider.plugin_id.is_some() {
+                    crate::plugin::provider_fetch(
+                        &state, provider, &secret, &request, model, *protocol,
+                    )
+                    .await
+                } else {
+                    crate::relay::call_with_overrides(
+                        &state.http,
+                        provider,
+                        &secret,
+                        &request,
+                        model,
+                        *protocol,
+                        &crate::relay::Overrides {
+                            body: Some(out_body),
+                            headers: out_headers,
+                        },
+                    )
+                    .await
+                };
+                let response = match upstream {
+                    Ok(response) => response,
+                    Err(message) => {
+                        state
+                            .key_health
+                            .lock()
                             .await
-                            {
-                                return response;
-                            }
-                            if last_leg {
-                                continue 'candidates;
-                            }
-                            continue 'legs;
+                            .cooldowns
+                            .insert(key_id, chrono::Utc::now() + chrono::Duration::seconds(60));
+                        if let Some(response) = record_attempt(
+                            &state,
+                            crate::observability::NewAttempt {
+                                request_id: &request_id,
+                                provider_id: Some(provider.id),
+                                provider_key_id: Some(key_id),
+                                model,
+                                status: "retry",
+                                error: Some(&format!("{message} ({endpoint})")),
+                                input_tokens: 0,
+                                output_tokens: 0,
+                                latency_ms: attempt_started.elapsed().as_millis() as i64,
+                            },
+                        )
+                        .await
+                        {
+                            return response;
                         }
-                    };
+                        if last_leg {
+                            continue 'candidates;
+                        }
+                        continue 'legs;
+                    }
+                };
                 let first_byte_ms = attempt_started.elapsed().as_millis() as i64;
                 if !response.status().is_success() {
                     let status = response.status();
@@ -741,6 +803,16 @@ pub async fn relay(
                     let _ = guard.complete("failed", 0, 0, 0).await;
                     return error(StatusCode::BAD_GATEWAY, "upstream request failed");
                 }
+                crate::plugin::observe_completion(
+                    &state,
+                    json!({
+                        "request_id": request_id,
+                        "model": model,
+                        "provider_id": provider.id,
+                        "success": true,
+                        "stream": request.stream,
+                    }),
+                );
                 if request.stream {
                     let start = StreamEvent::Start {
                         id: request_id.clone(),
@@ -794,6 +866,13 @@ pub async fn relay(
                             continue 'legs;
                         }
                         continue;
+                    }
+                };
+                let value = match crate::plugin::rewrite_response(&state, model, &value).await {
+                    Ok(value) => value,
+                    Err(message) => {
+                        let _ = guard.complete("failed", 0, 0, 0).await;
+                        return error(StatusCode::BAD_GATEWAY, message);
                     }
                 };
                 let decoded: ChatResponse = match decode_response(*protocol, value) {

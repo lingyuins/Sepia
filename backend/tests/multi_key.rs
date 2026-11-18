@@ -15,6 +15,7 @@ async fn second_provider_key_is_used_after_authentication_failure() {
                 protocol: ProviderProtocol::OpenAI,
                 endpoint: "http://localhost/v1".into(),
                 models: vec!["x".into()],
+                plugin_id: None,
             },
             "first",
             &[],

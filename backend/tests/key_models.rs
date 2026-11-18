@@ -86,6 +86,7 @@ async fn store_with_scoped_provider(db: &str, address: SocketAddr) -> (Store, i6
                 protocol: ProviderProtocol::OpenAI,
                 endpoint: format!("http://{address}"),
                 models: vec!["claude-a".into(), "claude-b".into(), "gpt-a".into()],
+                plugin_id: None,
             },
             "claude-key",
             &[(
@@ -225,6 +226,7 @@ async fn auth_rotation_stays_within_eligible_scoped_keys() {
                 protocol: ProviderProtocol::OpenAI,
                 endpoint: format!("http://{upstream}"),
                 models: vec!["claude-a".into()],
+                plugin_id: None,
             },
             "bad-claude",
             &[("bad-claude".into(), vec!["claude-a".into()])],
@@ -306,6 +308,7 @@ async fn unscoped_keys_still_serve_every_model() {
                 protocol: ProviderProtocol::OpenAI,
                 endpoint: format!("http://{upstream}"),
                 models: vec!["gpt-a".into()],
+                plugin_id: None,
             },
             "gpt-key",
             &[],

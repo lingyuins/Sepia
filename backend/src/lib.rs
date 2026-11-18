@@ -8,6 +8,7 @@ pub mod discovery;
 pub mod lifecycle;
 pub mod metadata;
 pub mod observability;
+pub mod plugin;
 pub mod policy;
 pub mod probe;
 pub mod protocol;

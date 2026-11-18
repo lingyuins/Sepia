@@ -34,6 +34,7 @@ async fn bootstrap_authenticates_sessions_and_persists_configuration() {
         protocol: ProviderProtocol::OpenAI,
         endpoint: "https://example.test/v1".into(),
         models: vec!["example-1".into()],
+        plugin_id: None,
     };
     let provider = store
         .create_provider(provider, "sk-upstream-secret", &[], &key_store)

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { ApiError, api, mapProvider, mapRequest, mapRoute, type ApiAnalytics, type ApiProvider, type ApiRequest, type ApiRoute, type ApiClientKey, type ApiGroup, type ApiSettings } from './api'
+import { ApiError, api, mapProvider, mapRequest, mapRoute, mapPlugin, type ApiAnalytics, type ApiProvider, type ApiRequest, type ApiRoute, type ApiClientKey, type ApiGroup, type ApiSettings, type ApiPlugin } from './api'
 import { defaultSettings } from './settings'
 import { applyTheme } from './theme'
 import { type ChannelGroup, type Plugin, type Provider, type RequestRecord, type RouteRule, type Settings } from './workspace'
@@ -18,7 +18,7 @@ export function useGatewayWorkspace(): GatewayWorkspace {
   const [settings, setSettings] = useState<Settings>(() => { try { const stored = JSON.parse(localStorage.getItem('sepia.workspace.v1') || '{}'); const merged = { ...defaultSettings, ...stored.settings }; return stored.settings?.port === '3425' ? { ...merged, port: defaultSettings.port } : merged } catch { return defaultSettings } })
   const applyServerSettings = useCallback((server: ApiSettings) => { setSettings((current) => ({ ...current, retries: String(server.max_attempts ?? current.retries), logBodies: server.log_bodies ?? current.logBodies })) }, [])
   const [channelGroups, setChannelGroups] = useState<ChannelGroup[]>([])
-  const [plugins] = useState<Plugin[]>([])
+  const [plugins, setPlugins] = useState<Plugin[]>([])
   const [toast, setToast] = useState('')
   const sequence = useRef(0)
   const periodRef = useRef('30 days')
@@ -26,15 +26,15 @@ export function useGatewayWorkspace(): GatewayWorkspace {
     periodRef.current = period
     const current = ++sequence.current
     try {
-      const [providerData, routeData, requestData, analyticsData, keyData, groupData, serverSettings] = await Promise.all([
-        api<ApiProvider[]>('/api/v1/providers'), api<ApiRoute[]>('/api/v1/routes'), api<ApiRequest[]>('/api/v1/requests'), api<ApiAnalytics>(`/api/v1/analytics?period=${encodeURIComponent(period)}`), api<ApiClientKey[]>('/api/v1/keys'), api<ApiGroup[]>('/api/v1/groups'), api<ApiSettings>('/api/v1/settings'),
+      const [providerData, routeData, requestData, analyticsData, keyData, groupData, serverSettings, pluginData] = await Promise.all([
+        api<ApiProvider[]>('/api/v1/providers'), api<ApiRoute[]>('/api/v1/routes'), api<ApiRequest[]>('/api/v1/requests'), api<ApiAnalytics>(`/api/v1/analytics?period=${encodeURIComponent(period)}`), api<ApiClientKey[]>('/api/v1/keys'), api<ApiGroup[]>('/api/v1/groups'), api<ApiSettings>('/api/v1/settings'), api<ApiPlugin[]>('/api/v1/plugins'),
       ])
       if (current !== sequence.current) return
       const mappedProviders = providerData.map(mapProvider)
       const providerStats = analyticsData.by_provider || []
       setProviders(mappedProviders.map((provider) => { const stat = providerStats.find((item) => item.provider_id === provider.id); return { ...provider, latency: Math.round(stat?.latency_ms || 0), requests: String(stat?.requests || 0), success: stat?.requests ? `${(stat.successful / stat.requests * 100).toFixed(2)}%` : '—' } }))
       setRoutes(routeData.map((route) => mapRoute(route, mappedProviders)))
-      setRequests(requestData.map(mapRequest)); setAnalytics(analyticsData); setClientKeys(keyData); setChannelGroups(groupData); applyServerSettings(serverSettings); setStatus('ready'); setError('')
+      setRequests(requestData.map(mapRequest)); setAnalytics(analyticsData); setClientKeys(keyData); setChannelGroups(groupData); setPlugins(pluginData.map(mapPlugin)); applyServerSettings(serverSettings); setStatus('ready'); setError('')
     } catch (cause) {
       if (current !== sequence.current) return
       setError(cause instanceof Error ? cause.message : 'Gateway unavailable')

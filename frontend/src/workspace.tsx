@@ -68,17 +68,22 @@ export type RouteRule = {
   isDefault?: boolean
 }
 export type Plugin = {
-  id: number
+  id: string
   name: string
   description: string
   version: string
-  type: string
-  icon: string
   enabled: boolean
-  color: string
-  author: string
+  status: string
+  events: string[]
   permissions: string[]
-  installed: string
+  priority: number
+  hasUi: boolean
+  uiTitle: string
+  configSchema: Record<string, unknown>
+  config: Record<string, unknown>
+  sha256: string
+  installedAt: string
+  updatedAt: string
 }
 export type RequestRecord = {
   id: string

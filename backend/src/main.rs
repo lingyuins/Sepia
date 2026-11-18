@@ -57,6 +57,10 @@ async fn main() -> Result<(), String> {
             .await
             .map_err(|error| format!("configuration snapshot: {error}"))?,
     );
+    let mut plugin_runtime = sepia_gateway::plugin::PluginRuntime::new()?;
+    plugin_runtime.reload(&store).await?;
+    let _epoch_ticker = plugin_runtime.spawn_epoch_ticker();
+    let plugins = sepia_gateway::plugin::shared(plugin_runtime);
     let bootstrap_token = std::env::var("SEPIA_BOOTSTRAP_TOKEN")
         .unwrap_or_else(|_| sepia_gateway::crypto::random_token("sepia_bootstrap_"));
     if !store.initialized().await? {
@@ -78,6 +82,7 @@ async fn main() -> Result<(), String> {
             secure_cookie,
             metadata_source: std::env::var("SEPIA_METADATA_SOURCE")
                 .unwrap_or_else(|_| sepia_gateway::metadata::DEFAULT_SOURCE.into()),
+            plugins,
         })
         .into_make_service_with_connect_info::<std::net::SocketAddr>(),
     )

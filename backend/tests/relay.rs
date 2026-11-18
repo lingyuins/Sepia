@@ -136,6 +136,7 @@ async fn all_native_protocols_relay_to_all_provider_protocols() {
                     protocol,
                     endpoint: base,
                     models: vec!["example".into()],
+                    plugin_id: None,
                 },
                 "upstream-secret",
                 &[],

@@ -74,10 +74,43 @@ pub async fn call(
     model: &str,
     protocol: Protocol,
 ) -> Result<reqwest::Response, String> {
-    let body = encode_request(protocol, request, model)?;
-    let outgoing = client
+    call_with_overrides(
+        client,
+        provider,
+        secret,
+        request,
+        model,
+        protocol,
+        &Overrides::default(),
+    )
+    .await
+}
+/// Plugin upstream-rewrite hook output: an optional replacement outbound JSON
+/// body and non-sensitive headers. Auth and URL always derive from the leg protocol.
+#[derive(Default)]
+pub struct Overrides {
+    pub body: Option<serde_json::Value>,
+    pub headers: Vec<(String, String)>,
+}
+pub async fn call_with_overrides(
+    client: &reqwest::Client,
+    provider: &Provider,
+    secret: &str,
+    request: &ChatRequest,
+    model: &str,
+    protocol: Protocol,
+    overrides: &Overrides,
+) -> Result<reqwest::Response, String> {
+    let body = match &overrides.body {
+        Some(value) => value.clone(),
+        None => encode_request(protocol, request, model)?,
+    };
+    let mut outgoing = client
         .post(upstream_url(protocol, provider, model, request.stream))
         .json(&body);
+    for (name, value) in &overrides.headers {
+        outgoing = outgoing.header(name.as_str(), value.as_str());
+    }
     authorize(outgoing, protocol, secret)
         .timeout(std::time::Duration::from_secs(60))
         .send()

@@ -4,6 +4,7 @@ use crate::{
 };
 use chrono::{DateTime, NaiveDateTime, Utc};
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use sqlx::{
     Row, SqlitePool,
     sqlite::{SqliteConnectOptions, SqlitePoolOptions},
@@ -56,6 +57,7 @@ pub struct NewProvider {
     pub protocol: ProviderProtocol,
     pub endpoint: String,
     pub models: Vec<String>,
+    pub plugin_id: Option<String>,
 }
 #[derive(Debug, Clone)]
 pub struct Provider {
@@ -67,6 +69,7 @@ pub struct Provider {
     pub key_count: i64,
     pub group_id: String,
     pub enabled: bool,
+    pub plugin_id: Option<String>,
 }
 #[derive(Debug, Clone)]
 pub struct ProviderKeyInfo {
@@ -119,6 +122,21 @@ pub struct CreatedClientKey {
 }
 pub struct AdminSession {
     pub username: String,
+}
+#[derive(Debug, Clone)]
+pub struct PluginRecord {
+    pub id: String,
+    pub name: String,
+    pub version: String,
+    pub enabled: bool,
+    pub status: String,
+    pub manifest: crate::plugin::Manifest,
+    pub config: Value,
+    pub wasm: Vec<u8>,
+    pub ui_bundle: Value,
+    pub sha256: String,
+    pub installed_at: String,
+    pub updated_at: String,
 }
 #[derive(Clone)]
 pub struct Store {
@@ -287,23 +305,28 @@ impl Store {
         if input.name.trim().is_empty() || input.models.is_empty() {
             return Err("provider name and models required".into());
         }
-        let parsed = url::Url::parse(&input.endpoint).map_err(|e| e.to_string())?;
-        if !matches!(parsed.scheme(), "http" | "https") {
-            return Err("provider endpoint must be HTTP(S)".into());
+        if input.plugin_id.is_none() {
+            let parsed = url::Url::parse(&input.endpoint).map_err(|e| e.to_string())?;
+            if !matches!(parsed.scheme(), "http" | "https") {
+                return Err("provider endpoint must be HTTP(S)".into());
+            }
         }
         let mut transaction = self.pool.begin().await.map_err(|e| e.to_string())?;
         sqlx::query("INSERT INTO channel_groups (id, name, description) VALUES ('official', 'Official', 'Built-in provider group') ON CONFLICT(id) DO NOTHING")
             .execute(&mut *transaction)
             .await
             .map_err(|e| e.to_string())?;
-        let id = sqlx::query("INSERT INTO providers (name, protocol, endpoint) VALUES (?, ?, ?)")
-            .bind(input.name)
-            .bind(input.protocol.as_str())
-            .bind(input.endpoint.trim_end_matches('/'))
-            .execute(&mut *transaction)
-            .await
-            .map_err(|e| e.to_string())?
-            .last_insert_rowid();
+        let id = sqlx::query(
+            "INSERT INTO providers (name, protocol, endpoint, plugin_id) VALUES (?, ?, ?, ?)",
+        )
+        .bind(input.name)
+        .bind(input.protocol.as_str())
+        .bind(input.endpoint.trim_end_matches('/'))
+        .bind(input.plugin_id)
+        .execute(&mut *transaction)
+        .await
+        .map_err(|e| e.to_string())?
+        .last_insert_rowid();
         for model in input.models {
             sqlx::query("INSERT INTO provider_models (provider_id, model) VALUES (?, ?)")
                 .bind(id)
@@ -329,7 +352,7 @@ impl Store {
             .ok_or("provider not saved".into())
     }
     pub async fn providers(&self) -> Result<Vec<Provider>, String> {
-        let rows = sqlx::query("SELECT p.id, p.name, p.protocol, p.endpoint, p.group_id, p.enabled, COUNT(k.id) key_count FROM providers p LEFT JOIN provider_keys k ON k.provider_id = p.id AND k.disabled = 0 GROUP BY p.id ORDER BY p.id").fetch_all(&self.pool).await.map_err(|e| e.to_string())?;
+        let rows = sqlx::query("SELECT p.id, p.name, p.protocol, p.endpoint, p.group_id, p.enabled, p.plugin_id, COUNT(k.id) key_count FROM providers p LEFT JOIN provider_keys k ON k.provider_id = p.id AND k.disabled = 0 GROUP BY p.id ORDER BY p.id").fetch_all(&self.pool).await.map_err(|e| e.to_string())?;
         let mut providers = Vec::new();
         for row in rows {
             let id = row.get("id");
@@ -352,6 +375,7 @@ impl Store {
                 key_count: row.get("key_count"),
                 group_id: row.get("group_id"),
                 enabled: row.get("enabled"),
+                plugin_id: row.get("plugin_id"),
             });
         }
         Ok(providers)
@@ -623,6 +647,194 @@ impl Store {
                 })
             })
             .collect()
+    }
+    pub async fn plugin_records(&self) -> Result<Vec<PluginRecord>, String> {
+        let rows = sqlx::query("SELECT id, name, version, enabled, status, manifest, config, wasm, ui_bundle, sha256, installed_at, updated_at FROM plugins ORDER BY id").fetch_all(&self.pool).await.map_err(|e| e.to_string())?;
+        rows.into_iter()
+            .map(|row| {
+                Ok(PluginRecord {
+                    id: row.get("id"),
+                    name: row.get("name"),
+                    version: row.get("version"),
+                    enabled: row.get::<i64, _>("enabled") != 0,
+                    status: row.get("status"),
+                    manifest: serde_json::from_str(row.get("manifest"))
+                        .map_err(|e| e.to_string())?,
+                    config: serde_json::from_str(row.get("config")).map_err(|e| e.to_string())?,
+                    wasm: row.get("wasm"),
+                    ui_bundle: serde_json::from_str(row.get("ui_bundle"))
+                        .map_err(|e| e.to_string())?,
+                    sha256: row.get("sha256"),
+                    installed_at: row.get("installed_at"),
+                    updated_at: row.get("updated_at"),
+                })
+            })
+            .collect()
+    }
+    pub async fn plugin(&self, id: &str) -> Result<Option<PluginRecord>, String> {
+        Ok(self
+            .plugin_records()
+            .await?
+            .into_iter()
+            .find(|record| record.id == id))
+    }
+    pub async fn insert_plugin(&self, record: &PluginRecord, replace: bool) -> Result<(), String> {
+        let manifest = serde_json::to_string(&record.manifest).map_err(|e| e.to_string())?;
+        let config = serde_json::to_string(&record.config).map_err(|e| e.to_string())?;
+        let ui_bundle = serde_json::to_string(&record.ui_bundle).map_err(|e| e.to_string())?;
+        if replace {
+            sqlx::query("UPDATE plugins SET name = ?, version = ?, status = ?, manifest = ?, wasm = ?, ui_bundle = ?, sha256 = ?, updated_at = ? WHERE id = ?")
+                .bind(&record.name)
+                .bind(&record.version)
+                .bind(&record.status)
+                .bind(&manifest)
+                .bind(&record.wasm)
+                .bind(&ui_bundle)
+                .bind(&record.sha256)
+                .bind(&record.updated_at)
+                .bind(&record.id)
+                .execute(&self.pool)
+                .await
+                .map_err(|e| e.to_string())?;
+        } else {
+            sqlx::query("INSERT INTO plugins (id, name, version, enabled, status, manifest, config, wasm, ui_bundle, sha256, installed_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+                .bind(&record.id)
+                .bind(&record.name)
+                .bind(&record.version)
+                .bind(record.enabled as i64)
+                .bind(&record.status)
+                .bind(&manifest)
+                .bind(&config)
+                .bind(&record.wasm)
+                .bind(&ui_bundle)
+                .bind(&record.sha256)
+                .bind(&record.installed_at)
+                .bind(&record.updated_at)
+                .execute(&self.pool)
+                .await
+                .map_err(|e| e.to_string())?;
+        }
+        Ok(())
+    }
+    pub async fn set_plugin_enabled(
+        &self,
+        id: &str,
+        enabled: bool,
+        status: &str,
+    ) -> Result<(), String> {
+        sqlx::query("UPDATE plugins SET enabled = ?, status = ?, updated_at = ? WHERE id = ?")
+            .bind(enabled as i64)
+            .bind(status)
+            .bind(Utc::now().to_rfc3339())
+            .bind(id)
+            .execute(&self.pool)
+            .await
+            .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+    pub async fn set_plugin_config(&self, id: &str, config: &Value) -> Result<(), String> {
+        sqlx::query("UPDATE plugins SET config = ?, updated_at = ? WHERE id = ?")
+            .bind(serde_json::to_string(config).map_err(|e| e.to_string())?)
+            .bind(Utc::now().to_rfc3339())
+            .bind(id)
+            .execute(&self.pool)
+            .await
+            .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+    pub async fn delete_plugin(&self, id: &str) -> Result<(), String> {
+        sqlx::query("DELETE FROM plugins WHERE id = ?")
+            .bind(id)
+            .execute(&self.pool)
+            .await
+            .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+    pub async fn plugin_kv_get(
+        &self,
+        plugin_id: &str,
+        key: &str,
+    ) -> Result<Option<String>, String> {
+        let row = sqlx::query("SELECT value FROM plugin_kv WHERE plugin_id = ? AND key = ?")
+            .bind(plugin_id)
+            .bind(key)
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(|e| e.to_string())?;
+        Ok(row.map(|row| row.get("value")))
+    }
+    pub async fn plugin_kv_set(
+        &self,
+        plugin_id: &str,
+        key: &str,
+        value: &str,
+    ) -> Result<(), String> {
+        sqlx::query("INSERT INTO plugin_kv (plugin_id, key, value) VALUES (?, ?, ?) ON CONFLICT(plugin_id, key) DO UPDATE SET value = excluded.value")
+            .bind(plugin_id)
+            .bind(key)
+            .bind(value)
+            .execute(&self.pool)
+            .await
+            .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+    pub async fn plugin_kv_delete(&self, plugin_id: &str, key: &str) -> Result<(), String> {
+        sqlx::query("DELETE FROM plugin_kv WHERE plugin_id = ? AND key = ?")
+            .bind(plugin_id)
+            .bind(key)
+            .execute(&self.pool)
+            .await
+            .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+    pub async fn plugin_kv_keys(&self, plugin_id: &str) -> Result<Vec<String>, String> {
+        let rows = sqlx::query("SELECT key FROM plugin_kv WHERE plugin_id = ? ORDER BY key")
+            .bind(plugin_id)
+            .fetch_all(&self.pool)
+            .await
+            .map_err(|e| e.to_string())?;
+        Ok(rows.into_iter().map(|row| row.get("key")).collect())
+    }
+    pub async fn plugin_secret_set(
+        &self,
+        plugin_id: &str,
+        key: &str,
+        nonce: &str,
+        ciphertext: &str,
+    ) -> Result<(), String> {
+        sqlx::query("INSERT INTO plugin_secrets (plugin_id, key, nonce, ciphertext) VALUES (?, ?, ?, ?) ON CONFLICT(plugin_id, key) DO UPDATE SET nonce = excluded.nonce, ciphertext = excluded.ciphertext")
+            .bind(plugin_id)
+            .bind(key)
+            .bind(nonce)
+            .bind(ciphertext)
+            .execute(&self.pool)
+            .await
+            .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+    pub async fn plugin_secret_get(
+        &self,
+        plugin_id: &str,
+        key: &str,
+    ) -> Result<Option<(String, String)>, String> {
+        let row = sqlx::query(
+            "SELECT nonce, ciphertext FROM plugin_secrets WHERE plugin_id = ? AND key = ?",
+        )
+        .bind(plugin_id)
+        .bind(key)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|e| e.to_string())?;
+        Ok(row.map(|row| (row.get("nonce"), row.get("ciphertext"))))
+    }
+    pub async fn plugin_secret_delete(&self, plugin_id: &str, key: &str) -> Result<(), String> {
+        sqlx::query("DELETE FROM plugin_secrets WHERE plugin_id = ? AND key = ?")
+            .bind(plugin_id)
+            .bind(key)
+            .execute(&self.pool)
+            .await
+            .map_err(|e| e.to_string())?;
+        Ok(())
     }
 }
 

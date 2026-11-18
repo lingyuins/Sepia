@@ -72,6 +72,7 @@ async fn seeded(db: &str, address: SocketAddr) -> (Store, String) {
                 protocol: ProviderProtocol::OpenAI,
                 endpoint: format!("http://{address}/v1"),
                 models: vec!["gpt-test".into()],
+                plugin_id: None,
             },
             "upstream-secret",
             &[],

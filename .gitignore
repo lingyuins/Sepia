@@ -5,3 +5,5 @@ dist
 .vite
 .ryugi/
 .memory/
+backend/plugin-sdk/target/
+backend/plugin-examples/target/
