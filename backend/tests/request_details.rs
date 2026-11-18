@@ -61,7 +61,9 @@ async fn upstream() -> SocketAddr {
     serve(Router::new().fallback(any(handler))).await
 }
 
-async fn seeded(db: &str, address: SocketAddr) -> (Store, String) {
+// Keep the TempDir alive in the caller: dropping it deletes the SQLite files
+// while pooled connections still reference them (disk I/O errors on Linux).
+async fn seeded(db: &str, address: SocketAddr) -> (Store, String, tempfile::TempDir) {
     let directory = tempfile::tempdir().unwrap();
     let store = Store::connect(&directory.path().join(db)).await.unwrap();
     let keys = KeyStore::testing();
@@ -107,7 +109,7 @@ async fn seeded(db: &str, address: SocketAddr) -> (Store, String) {
         .await
         .unwrap()
         .plaintext;
-    (store, key)
+    (store, key, directory)
 }
 
 async fn gateway(store: &Store) -> SocketAddr {
@@ -155,7 +157,7 @@ async fn admin_cookie(client: &reqwest::Client, address: SocketAddr, store: &Sto
 #[tokio::test]
 async fn records_ip_first_byte_and_token_details_without_bodies_by_default() {
     let upstream = upstream().await;
-    let (store, key) = seeded("details-default.db", upstream).await;
+    let (store, key, _directory) = seeded("details-default.db", upstream).await;
     let address = gateway(&store).await;
     let response = chat(address, &key, false, "hi").await;
     assert_eq!(response.status(), 200);
@@ -195,7 +197,7 @@ async fn records_ip_first_byte_and_token_details_without_bodies_by_default() {
 #[tokio::test]
 async fn stores_json_bodies_when_enabled_and_stops_when_disabled() {
     let upstream = upstream().await;
-    let (store, key) = seeded("details-bodies.db", upstream).await;
+    let (store, key, _directory) = seeded("details-bodies.db", upstream).await;
     store.set_setting("log_bodies", &json!(true)).await.unwrap();
     let address = gateway(&store).await;
     let response = chat(address, &key, false, "secret prompt").await;
@@ -260,7 +262,7 @@ async fn stores_json_bodies_when_enabled_and_stops_when_disabled() {
 #[tokio::test]
 async fn streams_record_token_details_and_reconstructed_response_body() {
     let upstream = upstream().await;
-    let (store, key) = seeded("details-stream.db", upstream).await;
+    let (store, key, _directory) = seeded("details-stream.db", upstream).await;
     store.set_setting("log_bodies", &json!(true)).await.unwrap();
     let address = gateway(&store).await;
     let response = chat(address, &key, true, "streamed prompt").await;

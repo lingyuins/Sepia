@@ -75,7 +75,12 @@ async fn relay_upstream() -> (SocketAddr, Hits) {
 
 use axum::response::IntoResponse;
 
-async fn store_with_scoped_provider(db: &str, address: SocketAddr) -> (Store, i64, String) {
+// Keep the TempDir alive in the caller: dropping it deletes the SQLite files
+// while pooled connections still reference them (disk I/O errors on Linux).
+async fn store_with_scoped_provider(
+    db: &str,
+    address: SocketAddr,
+) -> (Store, i64, String, tempfile::TempDir) {
     let directory = tempfile::tempdir().unwrap();
     let store = Store::connect(&directory.path().join(db)).await.unwrap();
     let keys = KeyStore::testing();
@@ -142,7 +147,7 @@ async fn store_with_scoped_provider(db: &str, address: SocketAddr) -> (Store, i6
         .await
         .unwrap()
         .plaintext;
-    (store, provider.id, key)
+    (store, provider.id, key, directory)
 }
 
 async fn gateway(store: &Store) -> SocketAddr {
@@ -152,7 +157,7 @@ async fn gateway(store: &Store) -> SocketAddr {
 #[tokio::test]
 async fn requests_only_use_keys_whose_scope_contains_the_model() {
     let (upstream, hits) = relay_upstream().await;
-    let (store, _, key) = store_with_scoped_provider("scoped.db", upstream).await;
+    let (store, _, key, _directory) = store_with_scoped_provider("scoped.db", upstream).await;
     let address = gateway(&store).await;
     for model in ["claude-a", "gpt-a"] {
         let response = reqwest::Client::new()

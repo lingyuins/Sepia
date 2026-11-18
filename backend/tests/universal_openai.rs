@@ -56,11 +56,13 @@ async fn dual_upstream(working: &'static str) -> (SocketAddr, Hits) {
 
 use axum::response::IntoResponse;
 
+// Keep the TempDir alive in the caller: dropping it deletes the SQLite files
+// while pooled connections still reference them (disk I/O errors on Linux).
 async fn store_with_route(
     db: &str,
     protocol: ProviderProtocol,
     address: SocketAddr,
-) -> (Store, String) {
+) -> (Store, String, tempfile::TempDir) {
     let directory = tempfile::tempdir().unwrap();
     let store = Store::connect(&directory.path().join(db)).await.unwrap();
     let provider = store
@@ -105,7 +107,7 @@ async fn store_with_route(
         .await
         .unwrap()
         .plaintext;
-    (store, key)
+    (store, key, directory)
 }
 
 async fn gateway(store: &Store) -> SocketAddr {
@@ -115,7 +117,7 @@ async fn gateway(store: &Store) -> SocketAddr {
 #[tokio::test]
 async fn chat_request_retries_to_responses_on_responses_only_upstream() {
     let (upstream, hits) = dual_upstream("/responses").await;
-    let (store, key) =
+    let (store, key, _directory) =
         store_with_route("chat-to-responses.db", ProviderProtocol::OpenAI, upstream).await;
     let address = gateway(&store).await;
     let response = reqwest::Client::new()
@@ -157,7 +159,7 @@ async fn chat_request_retries_to_responses_on_responses_only_upstream() {
 #[tokio::test]
 async fn responses_request_retries_to_chat_on_chat_only_upstream() {
     let (upstream, hits) = dual_upstream("/chat/completions").await;
-    let (store, key) =
+    let (store, key, _directory) =
         store_with_route("responses-to-chat.db", ProviderProtocol::OpenAI, upstream).await;
     let address = gateway(&store).await;
     let response = reqwest::Client::new()
@@ -190,7 +192,7 @@ async fn responses_request_retries_to_chat_on_chat_only_upstream() {
 #[tokio::test]
 async fn responses_request_targets_responses_endpoint_first_when_available() {
     let (upstream, hits) = dual_upstream("/responses").await;
-    let (store, key) =
+    let (store, key, _directory) =
         store_with_route("responses-direct.db", ProviderProtocol::OpenAI, upstream).await;
     let address = gateway(&store).await;
     let response = reqwest::Client::new()
@@ -214,7 +216,7 @@ async fn responses_request_targets_responses_endpoint_first_when_available() {
 #[tokio::test]
 async fn anthropic_request_converts_to_responses_when_chat_unavailable() {
     let (upstream, hits) = dual_upstream("/responses").await;
-    let (store, key) = store_with_route(
+    let (store, key, _directory) = store_with_route(
         "anthropic-to-responses.db",
         ProviderProtocol::OpenAI,
         upstream,
@@ -248,7 +250,7 @@ async fn anthropic_request_converts_to_responses_when_chat_unavailable() {
 #[tokio::test]
 async fn gemini_request_converts_to_responses_when_chat_unavailable() {
     let (upstream, hits) = dual_upstream("/responses").await;
-    let (store, key) =
+    let (store, key, _directory) =
         store_with_route("gemini-to-responses.db", ProviderProtocol::OpenAI, upstream).await;
     let address = gateway(&store).await;
     let response = reqwest::Client::new()
