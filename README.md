@@ -94,19 +94,6 @@ curl http://127.0.0.1:5000/api/v1/auth/status
 
 远程或局域网部署必须使用 HTTPS 反向代理，设置 `SEPIA_TRUSTED_PROXY=true`，并在容器环境中移除 `SEPIA_HTTP_LOOPBACK_COOKIE`，使管理员 Cookie 保持 `Secure`。不要把容器的 5000 端口直接暴露到不受信网络。镜像不内置主密钥、管理员密码、初始化令牌或供应商凭据。
 
-### 发布流程
-
-`.github/workflows/release.yml` 是唯一的发布 workflow。推送 `v*` 标签会验证代码、构建五种原生包、构建双架构镜像并执行容器启动/持久化/错误主密钥测试，然后发布 GHCR、Docker Hub 和 GitHub Release。手动 **Run workflow** 只构建和测试，不登录 registry、不推送镜像，也不创建 Release；可下载五组原生包及校验和 artifact。
-
-发布前先在 GitHub 仓库 **Settings → Secrets and variables → Actions** 配置 variable `DOCKERHUB_USERNAME=lingyuins` 和 secret `DOCKERHUB_TOKEN`。`backend/Cargo.toml` 的 `version` 必须与标签去掉 `v` 后完全一致；不匹配会在 `verify` 失败，不产生公开产物。确认后由维护者执行：
-
-```sh
-git tag v<version>
-git push origin v<version>
-```
-
-Release job 依赖原生包与镜像全部成功。若最后仅 Release API 失败，保留已推送镜像，不删除或重建标签；修复后重跑同一标签的 workflow。
-
 ### 手动开发启动
 
 在仓库根目录分别执行：
@@ -352,19 +339,6 @@ curl http://127.0.0.1:5000/api/v1/auth/status
 Open `http://127.0.0.1:5000` and use the bootstrap token shown on the page to initialize the administrator. Compose binds the port only to the local loopback address and fails immediately when `SEPIA_MASTER_KEY` is missing. The `sepia-data` named volume stores the database and initialization state. Back up that volume and the same master key together; losing or rotating the key makes existing upstream credentials undecryptable. Existing desktop data and OS-keyring keys are not imported automatically.
 
 For remote or LAN deployment, use an HTTPS reverse proxy, set `SEPIA_TRUSTED_PROXY=true`, and remove `SEPIA_HTTP_LOOPBACK_COOKIE` from the container environment so administrator cookies remain `Secure`. Do not expose port 5000 directly to untrusted networks. Images contain no master key, administrator password, bootstrap token, or provider credentials.
-
-### Release process
-
-`.github/workflows/release.yml` is the only release workflow. Pushing a `v*` tag verifies the code, builds five native packages and both container architectures, runs container startup/persistence/wrong-key checks, then publishes GHCR, Docker Hub, and the GitHub Release. A manual **Run workflow** only builds and tests: it does not log in to registries, push images, or create a Release. Five native archive/checksum artifacts remain downloadable.
-
-Before tagging, configure the GitHub repository Actions variable `DOCKERHUB_USERNAME=lingyuins` and secret `DOCKERHUB_TOKEN` under **Settings → Secrets and variables → Actions**. The `version` in `backend/Cargo.toml` must exactly match the tag without its `v`; a mismatch fails `verify` before any public artifacts are produced. A maintainer can then run:
-
-```sh
-git tag v<version>
-git push origin v<version>
-```
-
-The Release job requires both native packages and image publication to succeed. If only the final Release API call fails, keep the published images and do not delete or recreate the tag; fix the issue and rerun the workflow for that tag.
 
 ### Manual development
 
