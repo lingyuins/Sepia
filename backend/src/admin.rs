@@ -368,11 +368,12 @@ async fn sync_model_metadata(State(state): State<AppState>) -> Response {
             "metadata source returned no models".to_string(),
         );
     }
-    if let Err(message) = state.store.replace_model_metadata(&source, &entries).await {
-        return error(StatusCode::INTERNAL_SERVER_ERROR, message);
-    }
+    let prices_filled = match state.store.replace_model_metadata(&source, &entries).await {
+        Ok(filled) => filled,
+        Err(message) => return error(StatusCode::INTERNAL_SERVER_ERROR, message),
+    };
     let (_, fetched_at) = state.store.catalog_meta().await.unwrap_or((None, None));
-    Json(json!({"count": entries.len(), "source": source, "fetched_at": fetched_at}))
+    Json(json!({"count": entries.len(), "prices_filled": prices_filled, "source": source, "fetched_at": fetched_at}))
         .into_response()
 }
 async fn model_catalog(State(state): State<AppState>) -> Response {

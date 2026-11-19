@@ -184,7 +184,7 @@ async fn metadata_sync_fetches_source_and_matches_variants() {
     };
     state.metadata_source = format!("http://{mock}/models");
     let keys = state.keys.clone();
-    store
+    let alpha = store
         .create_provider(
             NewProvider {
                 name: "alpha".into(),
@@ -197,6 +197,10 @@ async fn metadata_sync_fetches_source_and_matches_variants() {
             &[],
             &keys,
         )
+        .await
+        .unwrap();
+    store
+        .set_model_price(alpha.id, "gpt-x", 5_000_000, 6_000_000)
         .await
         .unwrap();
     let address = {
@@ -261,6 +265,8 @@ async fn metadata_sync_fetches_source_and_matches_variants() {
     assert_eq!(sync_body["count"], 3);
     assert_eq!(sync_body["source"], format!("http://{mock}/models"));
     assert!(sync_body["fetched_at"].as_str().is_some());
+    // Sync fills only unset channel prices; configured prices stay untouched.
+    assert_eq!(sync_body["prices_filled"], 1);
 
     let catalog: Value = client
         .get(url("/api/v1/models/catalog"))
@@ -294,6 +300,11 @@ async fn metadata_sync_fetches_source_and_matches_variants() {
     assert_eq!(kimi["metadata"]["source_id"], "vendor/kimi-k3:free");
     assert_eq!(kimi["metadata"]["context_length"], 262144);
     assert!(kimi["metadata"]["input_price_nanos"].is_null());
+    assert_eq!(plain["channels"][0]["input_price_micros"], 5_000_000);
+    assert_eq!(plain["channels"][0]["output_price_micros"], 6_000_000);
+    assert_eq!(dated["channels"][0]["input_price_micros"], 1_000_000);
+    assert_eq!(dated["channels"][0]["output_price_micros"], 2_000_000);
+    assert!(kimi["channels"][0]["input_price_micros"].is_null());
 
     // Sync replaces the previous snapshot instead of accumulating rows.
     let again = client
@@ -303,6 +314,8 @@ async fn metadata_sync_fetches_source_and_matches_variants() {
         .await
         .unwrap();
     assert_eq!(again.status(), 200);
+    let again_body: Value = again.json().await.unwrap();
+    assert_eq!(again_body["prices_filled"], 0);
     let stored = store.model_metadata().await.unwrap();
     assert_eq!(stored.len(), 3);
 
