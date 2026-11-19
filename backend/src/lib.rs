@@ -23,6 +23,7 @@ pub mod settings;
 pub mod snapshot;
 pub mod store;
 pub mod updates;
+pub mod webauthn;
 
 pub static MIGRATIONS: sqlx::migrate::Migrator = sqlx::migrate!("./migrations");
 

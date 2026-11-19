@@ -23,7 +23,7 @@ async fn bootstrap_authenticates_sessions_and_persists_configuration() {
         .unwrap();
     assert!(store.login("other", "password").await.is_err());
     assert!(store.login("admin", "wrong").await.is_err());
-    let session = store.login("admin", "correct horse").await.unwrap();
+    let (session, _) = store.login("admin", "correct horse").await.unwrap();
     assert_eq!(
         store.session(&session).await.unwrap().unwrap().username,
         "admin"
