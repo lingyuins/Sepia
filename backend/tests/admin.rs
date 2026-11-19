@@ -230,7 +230,7 @@ async fn provider_creation_discovers_models_before_persisting() {
         .bootstrap("admin", "correct horse", "bootstrap", "bootstrap")
         .await
         .unwrap();
-    let session = store.login("admin", "correct horse").await.unwrap();
+    let (session, _) = store.login("admin", "correct horse").await.unwrap();
     let upstream = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let upstream_url = format!("http://{}/v1", upstream.local_addr().unwrap());
     let request_count = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));

@@ -1,3 +1,4 @@
+use crate::store::UserRole;
 use crate::updates::ProviderUpdate;
 use crate::{NewProvider, NewRoute, UpsertClientKey, server::AppState};
 use axum::{
@@ -10,6 +11,20 @@ use axum::{
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
+#[derive(Deserialize)]
+struct UserInput {
+    username: String,
+    password: String,
+    role: UserRole,
+}
+#[derive(Deserialize)]
+struct RoleInput {
+    role: UserRole,
+}
+#[derive(Deserialize)]
+struct PasswordInput {
+    password: String,
+}
 
 fn default_true() -> bool {
     true
@@ -150,7 +165,7 @@ async fn bootstrap(State(state): State<AppState>, Json(input): Json<Bootstrap>) 
 }
 async fn login(State(state): State<AppState>, Json(input): Json<Credentials>) -> Response {
     match state.store.login(&input.username, &input.password).await {
-        Ok(token) => Response::builder()
+        Ok((token, role)) => Response::builder()
             .header(
                 header::SET_COOKIE,
                 format!(
@@ -159,7 +174,7 @@ async fn login(State(state): State<AppState>, Json(input): Json<Credentials>) ->
                 ),
             )
             .body(
-                Json(json!({"authenticated":true}))
+                Json(json!({"authenticated":true,"username":input.username,"role":role}))
                     .into_response()
                     .into_body(),
             )
@@ -185,7 +200,12 @@ async fn logout(State(state): State<AppState>, headers: HeaderMap) -> Response {
 async fn session(State(state): State<AppState>, headers: HeaderMap) -> Response {
     match session_cookie(&headers) {
         Some(token) => match state.store.session(token).await {
-            Ok(Some(session)) => Json(json!({"username":session.username})).into_response(),
+            Ok(Some(session)) => Json(json!({
+                "username":session.username,
+                "role":session.role,
+                "can_edit":session.role.can_edit()
+            }))
+            .into_response(),
             _ => error(StatusCode::UNAUTHORIZED, "invalid session"),
         },
         None => error(StatusCode::UNAUTHORIZED, "missing session"),
@@ -220,8 +240,82 @@ async fn auth(
         return error(StatusCode::UNAUTHORIZED, "missing session");
     };
     match state.store.session(token).await {
-        Ok(Some(_)) => next.run(request).await,
+        Ok(Some(session)) => {
+            if request.method() != axum::http::Method::GET {
+                // The router is nested under /api/v1, so axum strips that prefix
+                // from the URI seen here; accept both forms defensively.
+                let raw = request.uri().path();
+                let path = raw.strip_prefix("/api/v1").unwrap_or(raw);
+                let admin_only = path.starts_with("/users")
+                    || path.starts_with("/settings")
+                    || path.starts_with("/update")
+                    || path == "/keys"
+                    || path.starts_with("/keys/")
+                    || path.starts_with("/plugins/")
+                    || (path.starts_with("/requests")
+                        && request.method() == axum::http::Method::DELETE);
+                if admin_only && session.role != UserRole::Admin {
+                    return error(StatusCode::FORBIDDEN, "administrator role required");
+                }
+                if !admin_only && !session.role.can_edit() {
+                    return error(StatusCode::FORBIDDEN, "read-only role");
+                }
+            }
+            let mut request = request;
+            request.extensions_mut().insert(session);
+            next.run(request).await
+        }
         _ => error(StatusCode::UNAUTHORIZED, "invalid session"),
+    }
+}
+async fn users(State(state): State<AppState>) -> Response {
+    match state.store.users().await {
+        Ok(users) => Json(json!({
+            "users": users.iter().map(|user| json!({
+                "id":user.id,"username":user.username,"role":user.role,"created_at":user.created_at
+            })).collect::<Vec<_>>()
+        }))
+        .into_response(),
+        Err(message) => error(StatusCode::INTERNAL_SERVER_ERROR, message),
+    }
+}
+async fn create_user(State(state): State<AppState>, Json(input): Json<UserInput>) -> Response {
+    match state
+        .store
+        .create_user(&input.username, &input.password, input.role)
+        .await
+    {
+        Ok(user) => Json(json!({
+            "id":user.id,"username":user.username,"role":user.role,"created_at":user.created_at
+        }))
+        .into_response(),
+        Err(message) => error(StatusCode::BAD_REQUEST, message),
+    }
+}
+async fn set_user_role(
+    State(state): State<AppState>,
+    Path(id): Path<i64>,
+    Json(input): Json<RoleInput>,
+) -> Response {
+    match state.store.set_user_role(id, input.role).await {
+        Ok(()) => Json(json!({"updated":true})).into_response(),
+        Err(message) => error(StatusCode::BAD_REQUEST, message),
+    }
+}
+async fn reset_user_password(
+    State(state): State<AppState>,
+    Path(id): Path<i64>,
+    Json(input): Json<PasswordInput>,
+) -> Response {
+    match state.store.reset_user_password(id, &input.password).await {
+        Ok(()) => Json(json!({"updated":true})).into_response(),
+        Err(message) => error(StatusCode::BAD_REQUEST, message),
+    }
+}
+async fn delete_user(State(state): State<AppState>, Path(id): Path<i64>) -> Response {
+    match state.store.delete_user(id).await {
+        Ok(()) => Json(json!({"deleted":true})).into_response(),
+        Err(message) => error(StatusCode::BAD_REQUEST, message),
     }
 }
 async fn providers(State(state): State<AppState>) -> Response {
@@ -1289,6 +1383,11 @@ pub fn router(state: AppState) -> Router<AppState> {
         .route("/plugins/{id}/rpc/{*path}", post(plugin_rpc))
         .route("/update/check", get(crate::self_update::check_update))
         .route("/update", post(crate::self_update::apply_update))
+        .route("/users", get(users).post(create_user))
+        .route("/users/{id}/role", post(set_user_role))
+        .route("/users/{id}/password", post(reset_user_password))
+        .route("/users/{id}", axum::routing::delete(delete_user))
+        .merge(crate::webauthn::protected_routes())
         .route_layer(middleware::from_fn_with_state(state.clone(), auth));
     Router::new()
         .route("/auth/status", get(status))
@@ -1297,6 +1396,14 @@ pub fn router(state: AppState) -> Router<AppState> {
         .route("/auth/logout", post(logout))
         .route("/auth/session", get(session))
         .route("/version", get(crate::self_update::version))
+        .route(
+            "/auth/passkey/login/options",
+            post(crate::webauthn::login_options),
+        )
+        .route(
+            "/auth/passkey/login/finish",
+            post(crate::webauthn::login_finish),
+        )
         .layer(middleware::from_fn(public_origin))
         .merge(protected)
 }

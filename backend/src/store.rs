@@ -120,8 +120,51 @@ pub struct CreatedClientKey {
     pub id: i64,
     pub plaintext: String,
 }
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum UserRole {
+    Admin,
+    Editor,
+    Viewer,
+}
+impl UserRole {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Admin => "admin",
+            Self::Editor => "editor",
+            Self::Viewer => "viewer",
+        }
+    }
+    fn parse(value: &str) -> Result<Self, String> {
+        match value {
+            "admin" => Ok(Self::Admin),
+            "editor" => Ok(Self::Editor),
+            "viewer" => Ok(Self::Viewer),
+            _ => Err("unknown user role".into()),
+        }
+    }
+    pub fn can_edit(self) -> bool {
+        matches!(self, Self::Admin | Self::Editor)
+    }
+}
+#[derive(Debug, Clone)]
+pub struct User {
+    pub id: i64,
+    pub username: String,
+    pub role: UserRole,
+    pub created_at: String,
+}
+#[derive(Debug, Clone)]
+pub struct PasskeyInfo {
+    pub id: i64,
+    pub name: String,
+    pub created_at: String,
+    pub last_used_at: Option<String>,
+}
+#[derive(Debug, Clone)]
 pub struct AdminSession {
     pub username: String,
+    pub role: UserRole,
 }
 #[derive(Debug, Clone)]
 pub struct PluginRecord {
@@ -224,8 +267,8 @@ impl Store {
         if supplied_token != expected_token {
             return Err("invalid bootstrap token".into());
         }
-        if username.trim().is_empty() || password.len() < 12 {
-            return Err("username and a password of at least 12 characters required".into());
+        if username.trim().is_empty() || password.len() < 8 {
+            return Err("username and a password of at least 8 characters required".into());
         }
         let mut transaction = self.pool.begin().await.map_err(|e| e.to_string())?;
         if sqlx::query("SELECT 1 FROM admins LIMIT 1")
@@ -236,19 +279,35 @@ impl Store {
         {
             return Ok(());
         }
+        let hash = password_hash(password)?;
+        let created_at = Utc::now().to_rfc3339();
         sqlx::query(
             "INSERT INTO admins (id, username, password_hash, created_at) VALUES (1, ?, ?, ?)",
         )
         .bind(username)
-        .bind(password_hash(password)?)
-        .bind(Utc::now().to_rfc3339())
+        .bind(&hash)
+        .bind(&created_at)
+        .execute(&mut *transaction)
+        .await
+        .map_err(|e| e.to_string())?;
+        sqlx::query(
+            "INSERT INTO users (username, password_hash, role, webauthn_user_id, created_at) VALUES (?, ?, 'admin', ?, ?)",
+        )
+        .bind(username)
+        .bind(&hash)
+        .bind(uuid::Uuid::new_v4().to_string())
+        .bind(&created_at)
         .execute(&mut *transaction)
         .await
         .map_err(|e| e.to_string())?;
         transaction.commit().await.map_err(|e| e.to_string())
     }
-    pub async fn login(&self, username: &str, password: &str) -> Result<String, String> {
-        let row = sqlx::query("SELECT password_hash FROM admins WHERE username = ?")
+    pub async fn login(
+        &self,
+        username: &str,
+        password: &str,
+    ) -> Result<(String, UserRole), String> {
+        let row = sqlx::query("SELECT password_hash, role FROM users WHERE username = ?")
             .bind(username)
             .fetch_optional(&self.pool)
             .await
@@ -257,23 +316,17 @@ impl Store {
         if !verify_password(row.get("password_hash"), password) {
             return Err("invalid credentials".into());
         }
-        let token = random_token("sepia_session_");
-        sqlx::query("INSERT INTO sessions (token_hash, username, expires_at) VALUES (?, ?, ?)")
-            .bind(token_hash(&token))
-            .bind(username)
-            .bind((Utc::now() + chrono::Duration::hours(12)).to_rfc3339())
-            .execute(&self.pool)
-            .await
-            .map_err(|e| e.to_string())?;
-        Ok(token)
+        let role = UserRole::parse(&row.get::<String, _>("role"))?;
+        Ok((self.login_token(username).await?, role))
     }
     pub async fn session(&self, token: &str) -> Result<Option<AdminSession>, String> {
-        let Some(row) =
-            sqlx::query("SELECT username, expires_at FROM sessions WHERE token_hash = ?")
-                .bind(token_hash(token))
-                .fetch_optional(&self.pool)
-                .await
-                .map_err(|e| e.to_string())?
+        let Some(row) = sqlx::query(
+            "SELECT sessions.username, sessions.expires_at, users.role FROM sessions JOIN users ON users.username = sessions.username WHERE sessions.token_hash = ?",
+        )
+        .bind(token_hash(token))
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|e| e.to_string())?
         else {
             return Ok(None);
         };
@@ -285,6 +338,7 @@ impl Store {
         }
         Ok(Some(AdminSession {
             username: row.get("username"),
+            role: UserRole::parse(&row.get::<String, _>("role"))?,
         }))
     }
     pub async fn logout(&self, token: &str) -> Result<(), String> {
@@ -294,6 +348,345 @@ impl Store {
             .await
             .map_err(|e| e.to_string())?;
         Ok(())
+    }
+    pub async fn users(&self) -> Result<Vec<User>, String> {
+        let rows = sqlx::query("SELECT id, username, role, created_at FROM users ORDER BY id")
+            .fetch_all(&self.pool)
+            .await
+            .map_err(|e| e.to_string())?;
+        rows.iter()
+            .map(|row| {
+                Ok(User {
+                    id: row.get("id"),
+                    username: row.get("username"),
+                    role: UserRole::parse(&row.get::<String, _>("role"))?,
+                    created_at: row.get("created_at"),
+                })
+            })
+            .collect()
+    }
+    pub async fn create_user(
+        &self,
+        username: &str,
+        password: &str,
+        role: UserRole,
+    ) -> Result<User, String> {
+        let username = username.trim();
+        if username.is_empty() || password.len() < 8 {
+            return Err("username and a password of at least 8 characters required".into());
+        }
+        if sqlx::query("SELECT 1 FROM users WHERE username = ?")
+            .bind(username)
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(|e| e.to_string())?
+            .is_some()
+        {
+            return Err("username already exists".into());
+        }
+        let created_at = Utc::now().to_rfc3339();
+        let id = sqlx::query(
+            "INSERT INTO users (username, password_hash, role, webauthn_user_id, created_at) VALUES (?, ?, ?, ?, ?)",
+        )
+        .bind(username)
+        .bind(password_hash(password)?)
+        .bind(role.as_str())
+        .bind(uuid::Uuid::new_v4().to_string())
+        .bind(&created_at)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| e.to_string())?
+        .last_insert_rowid();
+        Ok(User {
+            id,
+            username: username.into(),
+            role,
+            created_at,
+        })
+    }
+    async fn last_admin_guard(&self, id: i64) -> Result<(), String> {
+        let row = sqlx::query(
+            "SELECT role, (SELECT COUNT(*) FROM users WHERE role = 'admin') AS admins FROM users WHERE id = ?",
+        )
+        .bind(id)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|e| e.to_string())?
+        .ok_or("user not found")?;
+        if row.get::<String, _>("role") == "admin" && row.get::<i64, _>("admins") <= 1 {
+            return Err("cannot remove the last administrator".into());
+        }
+        Ok(())
+    }
+    pub async fn set_user_role(&self, id: i64, role: UserRole) -> Result<(), String> {
+        if role != UserRole::Admin {
+            self.last_admin_guard(id).await?;
+        }
+        let result = sqlx::query("UPDATE users SET role = ? WHERE id = ?")
+            .bind(role.as_str())
+            .bind(id)
+            .execute(&self.pool)
+            .await
+            .map_err(|e| e.to_string())?;
+        if result.rows_affected() == 0 {
+            return Err("user not found".into());
+        }
+        Ok(())
+    }
+    pub async fn reset_user_password(&self, id: i64, password: &str) -> Result<(), String> {
+        if password.len() < 8 {
+            return Err("a password of at least 8 characters required".into());
+        }
+        let result = sqlx::query("UPDATE users SET password_hash = ? WHERE id = ?")
+            .bind(password_hash(password)?)
+            .bind(id)
+            .execute(&self.pool)
+            .await
+            .map_err(|e| e.to_string())?;
+        if result.rows_affected() == 0 {
+            return Err("user not found".into());
+        }
+        Ok(())
+    }
+    pub async fn delete_user(&self, id: i64) -> Result<(), String> {
+        self.last_admin_guard(id).await?;
+        let username: String = sqlx::query("SELECT username FROM users WHERE id = ?")
+            .bind(id)
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(|e| e.to_string())?
+            .ok_or("user not found")?
+            .get("username");
+        let mut transaction = self.pool.begin().await.map_err(|e| e.to_string())?;
+        sqlx::query("DELETE FROM sessions WHERE username = ?")
+            .bind(&username)
+            .execute(&mut *transaction)
+            .await
+            .map_err(|e| e.to_string())?;
+        sqlx::query("DELETE FROM users WHERE id = ?")
+            .bind(id)
+            .execute(&mut *transaction)
+            .await
+            .map_err(|e| e.to_string())?;
+        transaction.commit().await.map_err(|e| e.to_string())
+    }
+    pub async fn user_by_name(&self, username: &str) -> Result<Option<User>, String> {
+        let Some(row) =
+            sqlx::query("SELECT id, username, role, created_at FROM users WHERE username = ?")
+                .bind(username)
+                .fetch_optional(&self.pool)
+                .await
+                .map_err(|e| e.to_string())?
+        else {
+            return Ok(None);
+        };
+        Ok(Some(User {
+            id: row.get("id"),
+            username: row.get("username"),
+            role: UserRole::parse(&row.get::<String, _>("role"))?,
+            created_at: row.get("created_at"),
+        }))
+    }
+    pub async fn passkey_user(&self, id: i64) -> Result<(String, String, Vec<Vec<u8>>), String> {
+        let row = sqlx::query("SELECT username, webauthn_user_id FROM users WHERE id = ?")
+            .bind(id)
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(|e| e.to_string())?
+            .ok_or("user not found")?;
+        let username: String = row.get("username");
+        let handle: String = row.get("webauthn_user_id");
+        let credentials =
+            sqlx::query("SELECT credential FROM webauthn_credentials WHERE user_id = ?")
+                .bind(id)
+                .fetch_all(&self.pool)
+                .await
+                .map_err(|e| e.to_string())?;
+        let mut ids = Vec::new();
+        for row in &credentials {
+            let value: serde_json::Value =
+                serde_json::from_str(&row.get::<String, _>("credential"))
+                    .map_err(|e| e.to_string())?;
+            let encoded = value["cred_id"]
+                .as_str()
+                .ok_or("stored passkey is malformed")?;
+            ids.push(
+                base64::Engine::decode(&base64::engine::general_purpose::URL_SAFE_NO_PAD, encoded)
+                    .map_err(|e| e.to_string())?,
+            );
+        }
+        Ok((username, handle, ids))
+    }
+    pub async fn passkey_user_by_handle(
+        &self,
+        handle: &str,
+    ) -> Result<Option<(User, Vec<String>)>, String> {
+        let Some(row) = sqlx::query(
+            "SELECT id, username, role, created_at FROM users WHERE webauthn_user_id = ?",
+        )
+        .bind(handle)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|e| e.to_string())?
+        else {
+            return Ok(None);
+        };
+        let user = User {
+            id: row.get("id"),
+            username: row.get("username"),
+            role: UserRole::parse(&row.get::<String, _>("role"))?,
+            created_at: row.get("created_at"),
+        };
+        let rows = sqlx::query("SELECT credential FROM webauthn_credentials WHERE user_id = ?")
+            .bind(user.id)
+            .fetch_all(&self.pool)
+            .await
+            .map_err(|e| e.to_string())?;
+        Ok(Some((
+            user,
+            rows.iter().map(|row| row.get("credential")).collect(),
+        )))
+    }
+    pub async fn passkeys(&self, user_id: i64) -> Result<Vec<PasskeyInfo>, String> {
+        let rows = sqlx::query(
+            "SELECT id, name, created_at, last_used_at FROM webauthn_credentials WHERE user_id = ? ORDER BY id",
+        )
+        .bind(user_id)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| e.to_string())?;
+        Ok(rows
+            .iter()
+            .map(|row| PasskeyInfo {
+                id: row.get("id"),
+                name: row.get("name"),
+                created_at: row.get("created_at"),
+                last_used_at: row.get("last_used_at"),
+            })
+            .collect())
+    }
+    pub async fn add_passkey(
+        &self,
+        user_id: i64,
+        name: &str,
+        credential: &str,
+    ) -> Result<PasskeyInfo, String> {
+        let created_at = Utc::now().to_rfc3339();
+        let id = sqlx::query(
+            "INSERT INTO webauthn_credentials (user_id, name, credential, created_at) VALUES (?, ?, ?, ?)",
+        )
+        .bind(user_id)
+        .bind(name)
+        .bind(credential)
+        .bind(&created_at)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| e.to_string())?
+        .last_insert_rowid();
+        Ok(PasskeyInfo {
+            id,
+            name: name.into(),
+            created_at,
+            last_used_at: None,
+        })
+    }
+    pub async fn delete_passkey(&self, user_id: i64, id: i64) -> Result<(), String> {
+        let result = sqlx::query("DELETE FROM webauthn_credentials WHERE id = ? AND user_id = ?")
+            .bind(id)
+            .bind(user_id)
+            .execute(&self.pool)
+            .await
+            .map_err(|e| e.to_string())?;
+        if result.rows_affected() == 0 {
+            return Err("passkey not found".into());
+        }
+        Ok(())
+    }
+    pub async fn update_passkey(
+        &self,
+        user_id: i64,
+        cred_id: &[u8],
+        credential: &str,
+    ) -> Result<(), String> {
+        let result = sqlx::query(
+            "UPDATE webauthn_credentials SET credential = ?, last_used_at = ? WHERE user_id = ? AND json_extract(credential, '$.cred_id') = ?",
+        )
+        .bind(credential)
+        .bind(Utc::now().to_rfc3339())
+        .bind(user_id)
+        .bind(base64::Engine::encode(
+            &base64::engine::general_purpose::URL_SAFE_NO_PAD,
+            cred_id,
+        ))
+        .execute(&self.pool)
+        .await
+        .map_err(|e| e.to_string())?;
+        if result.rows_affected() == 0 {
+            return Err("passkey not found".into());
+        }
+        Ok(())
+    }
+    pub async fn create_passkey_challenge(
+        &self,
+        kind: &str,
+        user_id: Option<i64>,
+        state: &str,
+    ) -> Result<String, String> {
+        let token = random_token("sepia_wa_");
+        sqlx::query(
+            "INSERT INTO webauthn_challenges (token_hash, kind, user_id, state, expires_at) VALUES (?, ?, ?, ?, ?)",
+        )
+        .bind(token_hash(&token))
+        .bind(kind)
+        .bind(user_id)
+        .bind(state)
+        .bind((Utc::now() + chrono::Duration::minutes(5)).to_rfc3339())
+        .execute(&self.pool)
+        .await
+        .map_err(|e| e.to_string())?;
+        Ok(token)
+    }
+    pub async fn take_passkey_challenge(
+        &self,
+        token: &str,
+        kind: &str,
+    ) -> Result<Option<(Option<i64>, String)>, String> {
+        let mut transaction = self.pool.begin().await.map_err(|e| e.to_string())?;
+        let Some(row) = sqlx::query(
+            "SELECT kind, user_id, state, expires_at FROM webauthn_challenges WHERE token_hash = ?",
+        )
+        .bind(token_hash(token))
+        .fetch_optional(&mut *transaction)
+        .await
+        .map_err(|e| e.to_string())?
+        else {
+            return Ok(None);
+        };
+        sqlx::query("DELETE FROM webauthn_challenges WHERE token_hash = ?")
+            .bind(token_hash(token))
+            .execute(&mut *transaction)
+            .await
+            .map_err(|e| e.to_string())?;
+        transaction.commit().await.map_err(|e| e.to_string())?;
+        if row.get::<String, _>("kind") != kind
+            || DateTime::parse_from_rfc3339(&row.get::<String, _>("expires_at"))
+                .map_err(|e| e.to_string())?
+                < Utc::now()
+        {
+            return Ok(None);
+        }
+        Ok(Some((row.get("user_id"), row.get("state"))))
+    }
+    pub async fn login_token(&self, username: &str) -> Result<String, String> {
+        let token = random_token("sepia_session_");
+        sqlx::query("INSERT INTO sessions (token_hash, username, expires_at) VALUES (?, ?, ?)")
+            .bind(token_hash(&token))
+            .bind(username)
+            .bind((Utc::now() + chrono::Duration::hours(12)).to_rfc3339())
+            .execute(&self.pool)
+            .await
+            .map_err(|e| e.to_string())?;
+        Ok(token)
     }
     pub async fn create_provider(
         &self,

@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from 'react'
-import { ArrowRight, Box, Check, ChevronDown, Eye, EyeOff, LoaderCircle, LockKeyhole, Network, RefreshCw, Route, ShieldCheck, TriangleAlert } from 'lucide-react'
+import { ArrowRight, Box, Check, ChevronDown, Eye, EyeOff, Fingerprint, LoaderCircle, LockKeyhole, Network, RefreshCw, Route, ShieldCheck, TriangleAlert } from 'lucide-react'
 import { api, ApiError } from '../api'
 import type { Language } from '../i18n'
 import { useWorkspace, useTranslation } from '../workspace'
+import { authenticationRequest, authenticationResponse, passkeySupported } from '../passkey'
 
 const languages: Language[] = ['English', '简体中文', '日本語']
 
@@ -24,14 +25,14 @@ function PasswordField({ id, label, value, onChange, autoComplete, disabled, vis
   return <div className="gateway-setup-field">
     <label htmlFor={id}>{label}</label>
     <div className="gateway-setup-password">
-      <input id={id} className="field" type={visible ? 'text' : 'password'} required minLength={12} value={value} onChange={(event) => onChange(event.target.value)} autoComplete={autoComplete} disabled={disabled} />
+      <input id={id} className="field" type={visible ? 'text' : 'password'} required minLength={8} value={value} onChange={(event) => onChange(event.target.value)} autoComplete={autoComplete} disabled={disabled} />
       <button type="button" className="icon-button" aria-label={visible ? t('gatewayHidePassword') : t('gatewayShowPassword')} title={visible ? t('gatewayHidePassword') : t('gatewayShowPassword')} aria-pressed={visible} onClick={onToggle} disabled={disabled}>{visible ? <EyeOff size={18} /> : <Eye size={18} />}</button>
     </div>
   </div>
 }
 
 export function GatewayGate({ children }: { children: React.ReactNode }) {
-  const { status, initialization, error, login, checkGateway, settings, setSettings } = useWorkspace()
+  const { status, initialization, error, login, loginWithPasskey, checkGateway, settings, setSettings } = useWorkspace()
   const t = useTranslation()
   const [username, setUsername] = useState('admin')
   const [password, setPassword] = useState('')
@@ -41,6 +42,7 @@ export function GatewayGate({ children }: { children: React.ReactNode }) {
   const [confirmationVisible, setConfirmationVisible] = useState(false)
   const [busy, setBusy] = useState(false)
   const [retrying, setRetrying] = useState(false)
+  const [passkeyBusy, setPasskeyBusy] = useState(false)
   const [message, setMessage] = useState('')
   const headingRef = useRef<HTMLHeadingElement>(null)
   const confirmationRef = useRef<HTMLInputElement>(null)
@@ -91,6 +93,19 @@ export function GatewayGate({ children }: { children: React.ReactNode }) {
       }
     } finally { setBusy(false) }
   }
+  const signInWithPasskey = async () => {
+    setPasskeyBusy(true)
+    setMessage('')
+    try {
+      const start = await api<{ challenge: string; options: { publicKey: Parameters<typeof authenticationRequest>[0] } }>('/api/v1/auth/passkey/login/options', { method: 'POST', body: '{}' })
+      const credential = await navigator.credentials.get({ publicKey: authenticationRequest(start.options.publicKey) })
+      if (!credential) throw new Error(t('passkeyCancelled'))
+      await loginWithPasskey(authenticationResponse(credential as PublicKeyCredential), start.challenge)
+    } catch (cause) {
+      if (cause instanceof DOMException && cause.name === 'NotAllowedError') setMessage(t('passkeyCancelled'))
+      else setMessage(cause instanceof Error ? cause.message : String(cause))
+    } finally { setPasskeyBusy(false) }
+  }
 
   if (status === 'ready') return children
 
@@ -140,10 +155,11 @@ export function GatewayGate({ children }: { children: React.ReactNode }) {
             <div className="gateway-setup-field"><label htmlFor="gateway-username">{t('gatewayUsername')}</label><input id="gateway-username" className="field" required value={username} onChange={(event) => setUsername(event.target.value)} autoComplete="username" disabled={busy} /></div>
             {initialize && <div className="gateway-setup-field"><label htmlFor="gateway-token">{t('gatewayBootstrapToken')}</label><input id="gateway-token" className="field" required value={token} onChange={(event) => setToken(event.target.value)} autoComplete="off" disabled={busy} /><small>{t('gatewayBootstrapTokenHint')}</small></div>}
             <PasswordField id="gateway-password" label={initialize ? t('gatewayNewPassword') : t('gatewayPassword')} value={password} onChange={(value) => { setPassword(value); confirmationRef.current?.setCustomValidity('') }} autoComplete={initialize ? 'new-password' : 'current-password'} disabled={busy} visible={passwordVisible} onToggle={() => setPasswordVisible((value) => !value)} />
-            {initialize && <><div className="gateway-setup-field"><label htmlFor="gateway-confirmation">{t('gatewayConfirmPassword')}</label><input ref={confirmationRef} id="gateway-confirmation" className="field" type={confirmationVisible ? 'text' : 'password'} required minLength={12} value={confirmation} onChange={(event) => { setConfirmation(event.target.value); event.target.setCustomValidity('') }} autoComplete="new-password" disabled={busy} /><small>{t('gatewayPasswordHint')}</small></div><button type="button" className="button text-button gateway-setup-confirm-toggle" aria-label={confirmationVisible ? t('gatewayHidePassword') : t('gatewayShowPassword')} aria-pressed={confirmationVisible} onClick={() => setConfirmationVisible((value) => !value)} disabled={busy}>{confirmationVisible ? <EyeOff size={16} /> : <Eye size={16} />}{confirmationVisible ? t('gatewayHidePassword') : t('gatewayShowPassword')}</button></>}
+            {initialize && <><div className="gateway-setup-field"><label htmlFor="gateway-confirmation">{t('gatewayConfirmPassword')}</label><input ref={confirmationRef} id="gateway-confirmation" className="field" type={confirmationVisible ? 'text' : 'password'} required minLength={8} value={confirmation} onChange={(event) => { setConfirmation(event.target.value); event.target.setCustomValidity('') }} autoComplete="new-password" disabled={busy} /><small>{t('gatewayPasswordHint')}</small></div><button type="button" className="button text-button gateway-setup-confirm-toggle" aria-label={confirmationVisible ? t('gatewayHidePassword') : t('gatewayShowPassword')} aria-pressed={confirmationVisible} onClick={() => setConfirmationVisible((value) => !value)} disabled={busy}>{confirmationVisible ? <EyeOff size={16} /> : <Eye size={16} />}{confirmationVisible ? t('gatewayHidePassword') : t('gatewayShowPassword')}</button></>}
             {message && <p className="gateway-setup-error" role="alert">{message}</p>}
             <button type="submit" className="button primary gateway-setup-submit" disabled={busy}>{busy ? <LoaderCircle className="gateway-setup-spinner" size={17} /> : initialize ? <ShieldCheck size={17} /> : <LockKeyhole size={17} />}{busy ? t('gatewayAuthenticating') : initialize ? t('gatewayInitialize') : t('gatewaySignIn')}</button>
             <span className="sr-only" aria-live="polite">{busy ? t('gatewayAuthenticating') : ''}</span>
+            {!initialize && passkeySupported() && <button type="button" className="button secondary gateway-setup-submit" onClick={() => void signInWithPasskey()} disabled={busy || passkeyBusy}>{passkeyBusy ? <LoaderCircle className="gateway-setup-spinner" size={17} /> : <Fingerprint size={17} />}{passkeyBusy ? t('passkeyWaiting') : t('passkeySignIn')}</button>}
           </form>}
         </div>
       </section>
