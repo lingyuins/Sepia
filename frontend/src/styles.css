@@ -760,6 +760,11 @@ kbd { font-family: inherit; }
 .normalize-preview { margin-top: 4px; }
 .normalize-preview-row code { flex-shrink: 0; max-width: 50%; overflow-wrap: anywhere; color: var(--accent); font-size: 13px; }
 @media (max-width: 640px) { .normalize-mapping-input, .normalize-preview-row { flex-wrap: wrap; } .normalize-mapping-input .field, .normalize-preview-row .field { flex-basis: 100%; } .normalize-preview-row code { max-width: 100%; } }
+.normalize-workflow { margin-top: 20px; padding-top: 16px; border-top: 1px solid var(--border); }
+.normalize-workflow .settings-card-title { margin-bottom: 14px; }
+.normalize-import-preview { display: flex; flex-direction: column; gap: 10px; margin-top: 12px; padding: 12px; border: 1px solid var(--border); border-radius: 7px; background: var(--surface-recessed); }
+.normalize-import-preview > strong { font-size: 13px; }
+.normalize-import-error { margin: 0; font-size: 12px; overflow-wrap: anywhere; }
 .key-quota-input { resize: vertical; min-height: 80px; font-family: monospace; line-height: 1.6; }
 .key-never-expiry { display: flex; align-items: center; gap: 8px; align-self: start; margin-top: 26px; min-height: 42px; padding: 10px 12px; border: 1px solid var(--accent-border); border-radius: 6px; background: var(--accent-soft); color: var(--accent); font-size: 13px; }
 .key-selection-actions { display: flex; align-items: center; gap: 12px; margin-bottom: 10px; }
