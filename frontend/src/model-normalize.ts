@@ -23,9 +23,21 @@ export type NormalizeRulesInput = {
   explicitMappings?: ExplicitMapping[] | null
 }
 
-export const BUILTIN_ROUTER_PREFIXES = ['dmxapi-', 'agent-', 'openai-', 'anthropic-']
+export const BUILTIN_ROUTER_PREFIXES = [
+  'dmxapi-', 'dmxapl-', 'agent-', 'openai-', 'anthropic-',
+  'aihub-', 'aihubmix-', 'ahm-', 'bai-', 'auto-',
+  'group-', 'copilot-', 'kilo-auto-', 'cc-', 'cloudflare-',
+  'deepinfra-', 'siliconflow-', 'nvidia-', 'zai-', 'xiaomi-',
+  'mm-',
+  // Channel tags such as [官B]claude-opus-4-6 or [满血A]-gpt-5.
+  '\\[[^\\]]+\\]-?',
+]
 
-export const BUILTIN_FUNCTIONAL_SUFFIXES = ['-cc', '-free', '-:free', '-(free)', '-vip', '-ssvip', '-latest']
+export const BUILTIN_FUNCTIONAL_SUFFIXES = [
+  '-cc', '-free', '-:free', '-(free)', '-vip', '-ssvip', '-latest',
+  // Official-channel marker, batch tier, discount and dated snapshots.
+  '-guan', '-all', '-:batch', '-\\d+off', '-\\d{8}', '-\\d{4}-\\d{2}-\\d{2}',
+]
 
 // Tokens that identify model families, capabilities or execution modes.
 // A cleanup suffix containing one of them would merge distinct models
@@ -104,6 +116,15 @@ function stripPathAndRouterPrefix(name: string, prefixes: string[]): string {
   for (const prefix of prefixes) {
     const p = prefix.trim()
     if (!p) continue
+    if (isRegexSuffix(p)) {
+      const re = getPrefixRegex(p)
+      const match = re?.exec(lower)
+      if (match && match[0].length > 0 && match[0].length < result.length) {
+        result = result.slice(match[0].length)
+        break
+      }
+      continue
+    }
     if (lower.startsWith(p.toLowerCase())) {
       result = result.slice(p.length)
       break
@@ -187,10 +208,26 @@ function getSuffixRegex(pattern: string): RegExp | null {
   return re
 }
 
-// A suffix is an explicit regex only when it contains one of \ d w { } * + ? |
-// (octopus heuristic: bare d/w letters count, 'cc' stays literal).
+const prefixRegexCache = new Map<string, RegExp | null>()
+
+function getPrefixRegex(pattern: string): RegExp | null {
+  const cached = prefixRegexCache.get(pattern)
+  if (cached !== undefined) return cached
+  let re: RegExp | null = null
+  try {
+    re = new RegExp('^(?:' + pattern + ')', 'i')
+  } catch {
+    re = null
+  }
+  prefixRegexCache.set(pattern, re)
+  return re
+}
+
+// A rule is an explicit regex only when it contains regex metacharacters
+// (backslash, { } * + ? |). Bare letters stay literal: 'dmxapi-' must not be
+// treated as the pattern 'd|w' just because it contains d or w.
 function isRegexSuffix(suffix: string): boolean {
-  return /[\\dw{}*+?|]/.test(suffix)
+  return /[\\{}*+?|]/.test(suffix)
 }
 
 export type RuleError = { key: string; params?: Record<string, string | number> }
@@ -205,7 +242,11 @@ export function validateNormalizeRules(rules: NormalizeRulesInput): RuleError | 
     const prefix = prefixes[index].trim()
     if (!prefix) return { key: 'normalizeErrPrefixEmpty', params: { index: index + 1 } }
     if (prefix.includes('/')) return { key: 'normalizeErrPrefixPath', params: { value: prefix } }
-    if (!'-/.:_])'.includes(prefix[prefix.length - 1])) return { key: 'normalizeErrPrefixBoundary', params: { value: prefix } }
+    if (isRegexSuffix(prefix)) {
+      if (!getPrefixRegex(prefix)) return { key: 'normalizeErrPrefixRegex', params: { value: prefix } }
+    } else if (!'-/.:_])'.includes(prefix[prefix.length - 1])) {
+      return { key: 'normalizeErrPrefixBoundary', params: { value: prefix } }
+    }
     const lower = prefix.toLowerCase()
     if (seenPrefixes.has(lower)) return { key: 'normalizeErrPrefixDuplicate', params: { value: prefix } }
     seenPrefixes.add(lower)

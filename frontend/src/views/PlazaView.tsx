@@ -69,8 +69,8 @@ export function PlazaView() {
   const syncMetadata = async () => {
     setSyncing(true)
     try {
-      const result = await api<{ count: number }>('/api/v1/models/metadata/sync', { method: 'POST' })
-      notify(t('plazaSyncDone', { count: result.count }))
+      const result = await api<{ count: number; prices_filled: number }>('/api/v1/models/metadata/sync', { method: 'POST' })
+      notify(result.prices_filled > 0 ? `${t('plazaSyncDone', { count: result.count })} ${t('plazaSyncPricesFilled', { count: result.prices_filled })}` : t('plazaSyncDone', { count: result.count }))
       await refresh()
     } catch (cause) { notify(cause instanceof Error ? cause.message : String(cause)) } finally { setSyncing(false) }
   }

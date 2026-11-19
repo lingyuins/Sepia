@@ -41,6 +41,28 @@ test('malformed or empty names never disappear', () => {
   assert.equal(normalizeModelName('   '), '')
 })
 
+test('builtin defaults strip channel tags, official markers and dated snapshots', () => {
+  assert.equal(normalizeModelName('[官B]claude-opus-4-6'), 'claude-opus-4-6')
+  assert.equal(normalizeModelName('[满血A]-gpt-5'), 'gpt-5')
+  assert.equal(normalizeModelName('DMXAPI-Kimi-K2.5-CC'), 'kimi-k2.5')
+  assert.equal(normalizeModelName('deepseek-v4-pro-guan-cc'), 'deepseek-v4-pro')
+  assert.equal(normalizeModelName('MiniMax-M3-guan'), 'minimax-m3')
+  assert.equal(normalizeModelName('deepseek-r1-all'), 'deepseek-r1')
+  assert.equal(normalizeModelName('gpt-4o:batch'), 'gpt-4o')
+  assert.equal(normalizeModelName('claude-opus-4-6-50off'), 'claude-opus-4-6')
+  assert.equal(normalizeModelName('gpt-4o-20240806'), 'gpt-4o')
+  assert.equal(normalizeModelName('gpt-4o-2024-08-06'), 'gpt-4o')
+  assert.equal(normalizeModelName('aihubmix-gemini-2.5-flash'), 'gemini-2.5-flash')
+  assert.equal(normalizeModelName('zai-glm-5-turbo'), 'glm-5-turbo')
+  // thinking modes and provider-specific markers stay distinct by default
+  assert.equal(normalizeModelName('gemini-2.5-flash-nothink'), 'gemini-2.5-flash-nothink')
+  assert.equal(normalizeModelName('glm-5-t'), 'glm-5-t')
+})
+
+test('builtin default lists pass validation', () => {
+  assert.equal(validateNormalizeRules({ routerPrefixes: BUILTIN_ROUTER_PREFIXES, functionalSuffixes: BUILTIN_FUNCTIONAL_SUFFIXES, explicitMappings: [] }), null)
+})
+
 // --- rule customization ---
 
 test('custom prefixes replace builtins; trailing-dash prefix matches bracket form', () => {
@@ -106,6 +128,8 @@ test('validation rejects unsafe prefixes', () => {
   assert.equal(validateNormalizeRules({ routerPrefixes: ['a/b-'] }).key, 'normalizeErrPrefixPath')
   assert.equal(validateNormalizeRules({ routerPrefixes: ['gpt'] }).key, 'normalizeErrPrefixBoundary')
   assert.equal(validateNormalizeRules({ routerPrefixes: ['dmxapi-', 'DMXAPI-'] }).key, 'normalizeErrPrefixDuplicate')
+  assert.equal(validateNormalizeRules({ routerPrefixes: ['\\[[^\\]]+\\]-?'] }), null)
+  assert.equal(validateNormalizeRules({ routerPrefixes: ['-(x*'] }).key, 'normalizeErrPrefixRegex')
 })
 
 test('validation rejects suffixes that would merge distinct models', () => {
