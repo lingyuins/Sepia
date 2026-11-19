@@ -135,6 +135,7 @@ export type Settings = {
   normalizePrefixes: string[]
   normalizeSuffixes: string[]
   normalizeMappings: { variant: string; canonical: string }[]
+  aiPoolEnabled: boolean
 }
 export const providerModels: Record<string, string[]> = {
   OpenAI: ['gpt-4.1', 'gpt-4.1-mini', 'gpt-4o', 'o3', 'o4-mini'],
