@@ -7,6 +7,7 @@ import { Dropdown } from '../components/Dropdown'
 import { RouteChain } from '../components/RouteChain'
 import { routeDisplayCandidates } from '../route-display'
 import { AiRouteDialog } from '../components/AiRouteDialog'
+import { ROUTE_STRATEGY_IDS, normalizeRouteStrategy, strategyDescriptionKey, strategyLabelKey, strategyUsesWeights, clampWeight, type RouteStrategyId } from '../route-strategy'
 
 type ProbeResult = { ok: boolean; latency_ms: number; endpoint: string | null; error: string | null; reply: string | null }
 type RouteTestResponse = { route: string; candidates: { provider_id: number; provider: string | null; model: string; enabled: boolean; result: ProbeResult }[] }
@@ -19,7 +20,7 @@ const routeCandidates = routeDisplayCandidates
 
 function useRouteMeta() {
   const t = useTranslation()
-  const strategyName = (_value: string) => t('failover')
+  const strategyName = (value: string) => t(strategyLabelKey(value))
   return { t, strategyName }
 }
 
@@ -36,7 +37,7 @@ function RouteForm({ route, onClose }: { route: RouteRule | null; onClose: () =>
   const [patterns, setPatterns] = useState<string[]>(route?.patterns || (route ? [route.match] : []))
   const [patternDraft, setPatternDraft] = useState('')
   const [modelListing, setModelListing] = useState(route?.listMembers === false ? 'group' : 'members')
-  const [strategy, setStrategy] = useState(route?.strategy === 'Smart routing' ? 'Failover' : route?.strategy || 'Failover')
+  const [strategy, setStrategy] = useState<RouteStrategyId>(normalizeRouteStrategy(route?.strategy))
   const [active, setActive] = useState(route?.active ?? true)
   const updateCandidate = (id: string, patch: Partial<RouteCandidate>) => setCandidates((current) => current.map((candidate) => candidate.id === id ? { ...candidate, ...patch } : candidate))
   const changeCandidateProvider = (id: string, provider: string) => updateCandidate(id, { provider, model: modelsFor(provider)[0] || '' })
@@ -75,7 +76,7 @@ function RouteForm({ route, onClose }: { route: RouteRule | null; onClose: () =>
     const saved: RouteRule = {
       id: route?.id || Date.now(), name: name.trim(), slug: slug.trim() || slugify(name), description: description.trim() || t('defaultRouteDescription'),
       match: finalPatterns[0], primary: enabled[0].provider, primaryModel: enabled[0].model, fallback: enabled[1]?.provider || '', fallbackModel: enabled[1]?.model || '',
-      strategy, active, requests: route?.requests || '0', candidates: enabled.map((candidate) => ({ ...candidate, weight: Math.max(1, candidate.weight || 1) })), patterns: finalPatterns,
+      strategy, active, requests: route?.requests || '0', candidates: enabled.map((candidate) => ({ ...candidate, weight: clampWeight(candidate.weight || 1) })), patterns: finalPatterns,
       listMembers: modelListing === 'members', isDefault: route?.isDefault || false,
     }
     try { await run(() => api(route ? `/api/v1/routes/${route.id}` : '/api/v1/routes', { method: route ? 'PUT' : 'POST', body: JSON.stringify(routeInput(saved, providers)) })); notify(route ? t('routeUpdated') : t('routeCreated')); onClose() } catch (cause) { notify(cause instanceof Error ? cause.message : String(cause)) }
@@ -86,10 +87,10 @@ function RouteForm({ route, onClose }: { route: RouteRule | null; onClose: () =>
       <div className="form-grid"><Field label={t('routeName')} value={name} onChange={(value) => { setName(value); if (!route) setSlug(slugify(value, 'new-route')) }} required placeholder={t('routeNamePlaceholder')} /><Field label={t('routeId')} value={slug} onChange={setSlug} required placeholder="auto-route" hint={`${t('agentModelId')}: ${slug || 'route'}`} /></div>
       <Field label={t('description')} value={description} onChange={setDescription} placeholder={t('routeDescriptionPlaceholder')} />
       <div className="route-group-options">
-        <div className="route-group-field"><span>{t('routingStrategy')}</span><Dropdown variant="compact" label={t('routingStrategy')} value={strategy} options={[{ value: 'Failover', label: t('failover') }]} onChange={setStrategy} /></div>
+        <div className="route-group-field"><span>{t('routingStrategy')}</span><Dropdown variant="compact" label={t('routingStrategy')} value={strategy} options={ROUTE_STRATEGY_IDS.map((id) => ({ value: id, label: t(strategyLabelKey(id)) }))} onChange={(value) => setStrategy(normalizeRouteStrategy(value))} /></div>
         <div className="route-group-field"><span>{t('modelList')}</span><Dropdown variant="compact" label={t('modelList')} value={modelListing} options={[{ value: 'members', label: t('listMemberModels') }, { value: 'group', label: t('listGroupOnly') }]} onChange={setModelListing} /></div>
       </div>
-      <p className="route-section-hint">{t('strategySequentialDescription')} {t('modelListHint')}</p>
+      <p className="route-section-hint">{t(strategyDescriptionKey(strategy))} {t('strategyFailoverNote')} {t('modelListHint')}</p>
       <div className="route-group-patterns">
         <span className="route-group-label">{t('matchPatterns')}</span>
         <div className="pattern-input-row"><input className="field" value={patternDraft} onChange={(event) => setPatternDraft(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') { event.preventDefault(); addPattern() } }} placeholder={t('patternPlaceholder')} aria-label={t('patternPlaceholder')} /><button type="button" className="button secondary" onClick={addPattern}><Plus size={13} />{t('addPattern')}</button></div>
@@ -124,10 +125,12 @@ function RouteForm({ route, onClose }: { route: RouteRule | null; onClose: () =>
               <Dropdown className="candidate-dropdown" variant="compact" label={t('candidateModel', { number: index + 1 })} value={candidate.model} options={modelsFor(candidate.provider).map((model) => ({ value: model, label: model }))} onChange={(value) => updateCandidate(candidate.id, { model: value })} />
               <Dropdown className="candidate-provider-dropdown" variant="compact" label={t('candidateProvider', { number: index + 1 })} value={candidate.provider} options={providers.map((provider) => ({ value: provider.name, label: provider.name }))} onChange={(value) => changeCandidateProvider(candidate.id, value)} />
             </div>
+            {strategyUsesWeights(strategy) && <label className="candidate-weight"><span>{t('candidateWeight')}</span><input type="number" min={1} max={100} value={candidate.weight} aria-label={t('candidateWeightNamed', { name: candidate.model })} onChange={(event) => { const raw = event.target.value; if (raw === '') return; const parsed = Number(raw); if (Number.isFinite(parsed)) updateCandidate(candidate.id, { weight: Math.round(parsed) }) }} onBlur={() => updateCandidate(candidate.id, { weight: clampWeight(candidate.weight) })} /></label>}
             <div className="candidate-actions"><button type="button" className="icon-button" disabled={index === 0} onClick={() => moveCandidate(index, -1)} aria-label={t('moveCandidateUp', { name: candidate.model })}><ArrowUp size={13} /></button><button type="button" className="icon-button" disabled={index === candidates.length - 1} onClick={() => moveCandidate(index, 1)} aria-label={t('moveCandidateDown', { name: candidate.model })}><ArrowDown size={13} /></button><button type="button" className="icon-button danger-icon" onClick={() => setCandidates((current) => current.filter((item) => item.id !== candidate.id))} aria-label={t('removeCandidate', { name: candidate.model })}><X size={14} /></button></div>
           </div>)}</div>
           {!candidates.length && <div className="candidate-selection-empty">{t('routeNeedsModel')}</div>}
           <p className="route-section-hint">{t('candidateOrderHint')}</p>
+          {strategyUsesWeights(strategy) && !!candidates.length && <p className="route-section-hint">{t('strategyWeightHint')}</p>}
         </div>
       </div>
     </section>

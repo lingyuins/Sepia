@@ -1,0 +1,2 @@
+ALTER TABLE routes ADD COLUMN strategy TEXT NOT NULL DEFAULT 'priority';
+ALTER TABLE route_candidates ADD COLUMN weight INTEGER NOT NULL DEFAULT 1;

@@ -1,9 +1,10 @@
 import type { KeyPolicy } from './key-policy'
 import type { Plugin, Provider, RequestRecord, RouteRule } from './workspace'
+import { clampWeight, normalizeRouteStrategy } from './route-strategy.ts'
 type ProviderProtocol = 'openai' | 'anthropic' | 'gemini' | 'openai-responses'
 
 export type ApiProvider = { id: number; name: string; protocol: ProviderProtocol; endpoint: string; models: string[]; key_count: number; enabled: boolean; group_id: string; keys?: { id: number; models: string[] | null }[] }
-export type ApiRoute = { id: number; slug: string; name: string; description: string; patterns: string[]; is_default: boolean; list_members: boolean; enabled: boolean; candidates: [number, string][] }
+export type ApiRoute = { id: number; slug: string; name: string; description: string; patterns: string[]; is_default: boolean; list_members: boolean; enabled: boolean; candidates: [number, string][]; strategy?: string; weights?: number[] }
 export type ApiRequest = { id: string; protocol: string; model: string; route?: string; status: string; input_tokens: number; output_tokens: number; cost_micros: number; latency_ms: number; created_at: string; provider?: string; key?: string; client_ip?: string | null; first_byte_ms?: number | null; cached_tokens?: number; reasoning_tokens?: number; has_body?: boolean }
 export type ApiClientKey = { id: number; name: string; models: string[]; token_limit: number; max_amount_micros: number; rpm: number; tpm: number; expires_at: string | null }
 export type ApiGroup = { id: string; name: string; description: string }
@@ -36,9 +37,9 @@ export function mapProvider(provider: ApiProvider): Provider {
   return { id: provider.id, name: provider.name, short: provider.name.charAt(0).toUpperCase(), type: provider.protocol, models: provider.models.length, latency: 0, success: '—', requests: '0', color: color[provider.id % color.length], enabled: provider.enabled, endpoint: provider.endpoint, group: provider.group_id, modelsList: provider.models, keyCount: provider.key_count, keyScopes: provider.keys }
 }
 export function mapRoute(route: ApiRoute, providers: Provider[]): RouteRule {
-  const candidates = route.candidates.map(([provider, model], index) => ({ id: `${route.id}-${index}`, provider: providers.find((item) => item.id === provider)?.name || String(provider), model, enabled: true, weight: 1 }))
+  const candidates = route.candidates.map(([provider, model], index) => ({ id: `${route.id}-${index}`, provider: providers.find((item) => item.id === provider)?.name || String(provider), model, enabled: true, weight: clampWeight(route.weights?.[index] ?? 1) }))
   const [primary, fallback] = candidates
-  return { id: route.id, name: route.name || route.slug, slug: route.slug, description: route.description || '', match: route.patterns[0] || '*', primary: primary?.provider || '', primaryModel: primary?.model || '', fallback: fallback?.provider || '', fallbackModel: fallback?.model || '', strategy: 'Failover', active: route.enabled, requests: '0', candidates, patterns: route.patterns, listMembers: route.list_members, isDefault: route.is_default }
+  return { id: route.id, name: route.name || route.slug, slug: route.slug, description: route.description || '', match: route.patterns[0] || '*', primary: primary?.provider || '', primaryModel: primary?.model || '', fallback: fallback?.provider || '', fallbackModel: fallback?.model || '', strategy: normalizeRouteStrategy(route.strategy), active: route.enabled, requests: '0', candidates, patterns: route.patterns, listMembers: route.list_members, isDefault: route.is_default }
 }
 export function mapRequest(request: ApiRequest): RequestRecord {
   const total = request.input_tokens + request.output_tokens
@@ -61,6 +62,7 @@ export function policyInput(policy: KeyPolicy, providers: Provider[]) {
   return { ip_whitelist: policy.ipWhitelist, model_quotas: policy.modelQuotas, allowed_groups: policy.allowedGroups, excluded_providers: policy.excludedProviders.map((name) => { const provider = providers.find((item) => item.name === name || String(item.id) === name); if (!provider) throw new Error(`Unknown provider: ${name}`); return provider.id }) }
 }
 export function routeInput(route: RouteRule, providers: Provider[]) {
-  const candidates = (route.candidates || []).filter((candidate) => candidate.enabled).map((candidate) => { const provider = providers.find((item) => item.name === candidate.provider); if (!provider) throw new Error(`Unknown provider: ${candidate.provider}`); return [provider.id, candidate.model] as [number, string] })
-  return { slug: route.slug, name: route.name, description: route.description, patterns: route.patterns || [route.match], is_default: route.isDefault === true, list_members: route.listMembers !== false, enabled: route.active, candidates }
+  const enabled = (route.candidates || []).filter((candidate) => candidate.enabled)
+  const candidates = enabled.map((candidate) => { const provider = providers.find((item) => item.name === candidate.provider); if (!provider) throw new Error(`Unknown provider: ${candidate.provider}`); return [provider.id, candidate.model] as [number, string] })
+  return { slug: route.slug, name: route.name, description: route.description, patterns: route.patterns || [route.match], is_default: route.isDefault === true, list_members: route.listMembers !== false, enabled: route.active, candidates, strategy: normalizeRouteStrategy(route.strategy), weights: enabled.map((candidate) => clampWeight(candidate.weight ?? 1)) }
 }

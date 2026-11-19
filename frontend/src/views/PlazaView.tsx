@@ -7,6 +7,7 @@ import { DialogActions, Field, Modal, SectionHeading, StatusDot, Toggle } from '
 import { Dropdown } from '../components/Dropdown'
 import { familyRoutable, filterFamilies, formatContext, formatPrice, formatReferencePrice, groupFamilies, mapCatalog, modelKind, plazaChannelVisible, routeForModel, type CatalogResponse, type PlazaChannel, type PlazaFilters, type PlazaKind, type PlazaModel } from '../model-plaza'
 import { compileNormalizeRules } from '../model-normalize'
+import { strategyLabelKey } from '../route-strategy'
 
 const kindIcons: Record<PlazaKind, typeof MessageSquareText> = { chat: MessageSquareText, image: ImageIcon, audio: AudioLines, video: Film, embedding: Boxes, rerank: List, moderation: ShieldCheck, music: Music2, other: Sparkles }
 const kindKeys: Record<PlazaKind, 'kindChat' | 'kindImage' | 'kindAudio' | 'kindVideo' | 'kindEmbedding' | 'kindRerank' | 'kindModeration' | 'kindMusic' | 'kindOther'> = { chat: 'kindChat', image: 'kindImage', audio: 'kindAudio', video: 'kindVideo', embedding: 'kindEmbedding', rerank: 'kindRerank', moderation: 'kindModeration', music: 'kindMusic', other: 'kindOther' }
@@ -69,8 +70,8 @@ export function PlazaView() {
   const syncMetadata = async () => {
     setSyncing(true)
     try {
-      const result = await api<{ count: number }>('/api/v1/models/metadata/sync', { method: 'POST' })
-      notify(t('plazaSyncDone', { count: result.count }))
+      const result = await api<{ count: number; prices_filled: number }>('/api/v1/models/metadata/sync', { method: 'POST' })
+      notify(result.prices_filled > 0 ? `${t('plazaSyncDone', { count: result.count })} ${t('plazaSyncPricesFilled', { count: result.prices_filled })}` : t('plazaSyncDone', { count: result.count }))
       await refresh()
     } catch (cause) { notify(cause instanceof Error ? cause.message : String(cause)) } finally { setSyncing(false) }
   }
@@ -161,11 +162,11 @@ export function PlazaView() {
           const channels = variantChannels(variant)
           const routable = routeForModel(routes, variant.model)
           return <div className="plaza-variant" key={variant.model}>
-            <div className="plaza-variant-head"><strong title={variant.model}>{variant.model}</strong><span className="plaza-chip">{kindLabel(modelKind(variant.model))}</span><span className={`plaza-chip ${routable ? 'chip-ok' : 'chip-muted'}`}>{routable ? t('plazaRoutable') : t('plazaNotRoutable')}</span>{routable && <span className="plaza-chip">{t('plazaRoutesLabel')}: {routable.name || routable.slug}</span>}<span onClick={(event) => event.stopPropagation()}><CopyButton value={variant.model} onCopy={() => notify(t('copied'))} /></span></div>
+            <div className="plaza-variant-head"><strong title={variant.model}>{variant.model}</strong><span className="plaza-chip">{kindLabel(modelKind(variant.model))}</span><span className={`plaza-chip ${routable ? 'chip-ok' : 'chip-muted'}`}>{routable ? t('plazaRoutable') : t('plazaNotRoutable')}</span>{routable && <span className="plaza-chip">{t('plazaRoutesLabel')}: {routable.name || routable.slug} · {t(strategyLabelKey(routable.strategy))}</span>}<span onClick={(event) => event.stopPropagation()}><CopyButton value={variant.model} onCopy={() => notify(t('copied'))} /></span></div>
             {channels.length ? channels.map((channel) => <div className="plaza-channel" key={`${variant.model}-${channel.providerId}`}>
               <div className="plaza-channel-head"><ProviderMark name={channel.provider} short={providers.find((item) => item.id === channel.providerId)?.short || channel.provider.slice(0, 2).toUpperCase()} color={providers.find((item) => item.id === channel.providerId)?.color || '#c4f4aa'} small /><strong>{channel.provider}</strong><span className="plaza-chip">{groupLabel(channel.groupId)}</span><span className={channelStatus(channel) ? 'positive' : 'muted'}><StatusDot />{channelStatus(channel) ? t('plazaAvailable') : t('plazaUnavailable')}</span></div>
               <div className="plaza-channel-meta"><span>{t('plazaKeysServe', { count: channel.keyCount })}</span><span>{t('plazaInputPrice')} <strong>{formatPrice(channel.inputPriceMicros)}</strong></span><span>{t('plazaOutputPrice')} <strong>{formatPrice(channel.outputPriceMicros)}</strong></span><button className="button text-button" onClick={() => setPriceTarget({ channel, model: variant.model })}><Pencil size={13} />{t('plazaEditPrice')}</button></div>
-              <div className="plaza-channel-routes">{channel.routes.length ? channel.routes.map((route) => <span className="plaza-chip chip-ok" key={route.slug}>{route.name || route.slug}</span>) : <span className="plaza-route-empty">{t('plazaNoRoutes')}</span>}</div>
+              <div className="plaza-channel-routes">{channel.routes.length ? channel.routes.map((route) => <span className="plaza-chip chip-ok" key={route.slug} title={t(strategyLabelKey(route.strategy))}>{route.name || route.slug} · {t(strategyLabelKey(route.strategy))}</span>) : <span className="plaza-route-empty">{t('plazaNoRoutes')}</span>}</div>
             </div>) : <div className="plaza-route-empty">{t('plazaNoVisibleChannels')}</div>}
           </div>
         })}

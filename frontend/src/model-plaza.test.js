@@ -44,6 +44,14 @@ test('mapCatalog converts snake_case records including metadata', () => {
   assert.equal(models[2].metadata, null)
 })
 
+test('mapCatalog normalizes owning-route strategies for plaza chips', () => {
+  const models = mapCatalog([catalog[0]])
+  // Fixture routes omit strategy (legacy wire shape) → priority fallback.
+  assert.deepEqual(models[0].channels[0].routes, [{ slug: 'smart-x', name: 'Smart X', strategy: 'priority' }])
+  const weighted = mapCatalog([{ model: 'gpt-x', base_model: 'gpt-x', metadata: null, channels: [channel({ routes: [{ slug: 'smart-x', name: 'Smart X', strategy: 'weighted' }] })] }])
+  assert.equal(weighted[0].channels[0].routes[0].strategy, 'weighted')
+})
+
 test('groupFamilies collapses variants of one base model', () => {
   const families = groupFamilies(mapCatalog(catalog))
   assert.equal(families.length, 2)

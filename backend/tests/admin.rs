@@ -25,6 +25,7 @@ async fn management_requires_session_and_client_secret_is_returned_once() {
                 .unwrap(),
         ),
         key_health: Default::default(),
+        routing_stats: sepia_gateway::strategy::RoutingStats::shared(),
         secure_cookie: false,
         metadata_source: sepia_gateway::metadata::DEFAULT_SOURCE.into(),
         plugins: sepia_gateway::plugin::shared(
@@ -282,6 +283,7 @@ async fn provider_creation_discovers_models_before_persisting() {
                 .unwrap(),
         ),
         key_health: Default::default(),
+        routing_stats: sepia_gateway::strategy::RoutingStats::shared(),
         secure_cookie: false,
         metadata_source: sepia_gateway::metadata::DEFAULT_SOURCE.into(),
         plugins: sepia_gateway::plugin::shared(
@@ -380,6 +382,7 @@ async fn model_normalize_settings_round_trip_and_unknown_key_rejected() {
                 .unwrap(),
         ),
         key_health: Default::default(),
+        routing_stats: sepia_gateway::strategy::RoutingStats::shared(),
         secure_cookie: false,
         metadata_source: sepia_gateway::metadata::DEFAULT_SOURCE.into(),
         plugins: sepia_gateway::plugin::shared(

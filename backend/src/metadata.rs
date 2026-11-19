@@ -202,11 +202,14 @@ pub fn match_meta<'a>(entries: &'a [(String, ModelMeta)], local: &str) -> Option
 }
 
 impl Store {
+    /// Replaces the reference catalog and fills unset channel prices from
+    /// matched reference prices in the same transaction. Configured prices
+    /// (both columns > 0) are never overwritten. Returns the filled row count.
     pub async fn replace_model_metadata(
         &self,
         source: &str,
         entries: &[(String, ModelMeta)],
-    ) -> Result<(), String> {
+    ) -> Result<usize, String> {
         let mut transaction = self.pool.begin().await.map_err(|e| e.to_string())?;
         sqlx::query("DELETE FROM model_metadata")
             .execute(&mut *transaction)
@@ -239,7 +242,43 @@ impl Store {
         .execute(&mut *transaction)
         .await
         .map_err(|e| e.to_string())?;
-        transaction.commit().await.map_err(|e| e.to_string())
+        let unset: Vec<(i64, String)> = sqlx::query_as(
+            "SELECT provider_id, model FROM provider_models WHERE input_price_micros = 0 AND output_price_micros = 0",
+        )
+        .fetch_all(&mut *transaction)
+        .await
+        .map_err(|e| e.to_string())?;
+        let mut filled = 0usize;
+        for (provider_id, model) in unset {
+            let Some(meta) = match_meta(entries, &model) else {
+                continue;
+            };
+            let (Some(input_nanos), Some(output_nanos)) =
+                (meta.input_price_nanos, meta.output_price_nanos)
+            else {
+                continue;
+            };
+            // nanos/token → micros/token is ×1000 (1 micro = 1000 nanos);
+            // sub-micro prices round to 0 and stay unset.
+            let input_micros = input_nanos * 1000;
+            let output_micros = output_nanos * 1000;
+            if input_micros <= 0 || output_micros <= 0 {
+                continue;
+            }
+            sqlx::query(
+                "UPDATE provider_models SET input_price_micros = ?, output_price_micros = ? WHERE provider_id = ? AND model = ?",
+            )
+            .bind(input_micros)
+            .bind(output_micros)
+            .bind(provider_id)
+            .bind(&model)
+            .execute(&mut *transaction)
+            .await
+            .map_err(|e| e.to_string())?;
+            filled += 1;
+        }
+        transaction.commit().await.map_err(|e| e.to_string())?;
+        Ok(filled)
     }
     pub async fn model_metadata(&self) -> Result<Vec<(String, ModelMeta)>, String> {
         let rows = sqlx::query("SELECT model, source_id, base_model, display_name, description, context_length, input_modalities, output_modalities, capabilities, input_price_nanos, output_price_nanos FROM model_metadata ORDER BY model")

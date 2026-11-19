@@ -99,6 +99,10 @@ pub struct Route {
     pub list_members: bool,
     pub enabled: bool,
     pub candidates: Vec<(i64, String)>,
+    /// Built-in candidate ordering algorithm (see `crate::strategy`).
+    pub strategy: String,
+    /// Per-candidate weights, parallel to `candidates`; default 1.
+    pub weights: Vec<i64>,
 }
 #[derive(Debug, Clone)]
 pub struct UpsertClientKey {
@@ -949,9 +953,47 @@ impl Store {
             .find(|route| route.id == id)
             .ok_or("route not saved".into())
     }
+    /// Sets the route's ordering strategy and per-candidate weights.
+    /// `weights` must be parallel to the stored candidates; values clamp to 1..=100.
+    pub async fn set_route_strategy(
+        &self,
+        id: i64,
+        strategy: &str,
+        weights: &[i64],
+    ) -> Result<(), String> {
+        if crate::strategy::Strategy::parse(strategy).is_none() {
+            return Err(format!("unknown route strategy: {strategy}"));
+        }
+        let mut transaction = self.pool.begin().await.map_err(|e| e.to_string())?;
+        sqlx::query("UPDATE routes SET strategy = ? WHERE id = ?")
+            .bind(strategy)
+            .bind(id)
+            .execute(&mut *transaction)
+            .await
+            .map_err(|e| e.to_string())?;
+        let candidate_ids: Vec<i64> =
+            sqlx::query("SELECT id FROM route_candidates WHERE route_id = ? ORDER BY position")
+                .bind(id)
+                .fetch_all(&mut *transaction)
+                .await
+                .map_err(|e| e.to_string())?
+                .into_iter()
+                .map(|row| row.get("id"))
+                .collect();
+        for (index, candidate_id) in candidate_ids.iter().enumerate() {
+            let weight = weights.get(index).copied().unwrap_or(1).clamp(1, 100);
+            sqlx::query("UPDATE route_candidates SET weight = ? WHERE id = ?")
+                .bind(weight)
+                .bind(candidate_id)
+                .execute(&mut *transaction)
+                .await
+                .map_err(|e| e.to_string())?;
+        }
+        transaction.commit().await.map_err(|e| e.to_string())
+    }
     pub async fn routes(&self) -> Result<Vec<Route>, String> {
         let rows = sqlx::query(
-            "SELECT id, slug, name, description, patterns, is_default, list_members, enabled FROM routes ORDER BY position",
+            "SELECT id, slug, name, description, patterns, is_default, list_members, enabled, strategy FROM routes ORDER BY position",
         )
         .fetch_all(&self.pool)
         .await
@@ -959,7 +1001,12 @@ impl Store {
         let mut routes = Vec::new();
         for row in rows {
             let id = row.get("id");
-            let candidates = sqlx::query("SELECT provider_id, model FROM route_candidates WHERE route_id = ? ORDER BY position").bind(id).fetch_all(&self.pool).await.map_err(|e| e.to_string())?.into_iter().map(|r| (r.get("provider_id"), r.get("model"))).collect();
+            let candidate_rows = sqlx::query("SELECT provider_id, model, weight FROM route_candidates WHERE route_id = ? ORDER BY position").bind(id).fetch_all(&self.pool).await.map_err(|e| e.to_string())?;
+            let candidates = candidate_rows
+                .iter()
+                .map(|r| (r.get("provider_id"), r.get("model")))
+                .collect();
+            let weights = candidate_rows.iter().map(|r| r.get("weight")).collect();
             routes.push(Route {
                 id,
                 slug: row.get("slug"),
@@ -970,6 +1017,8 @@ impl Store {
                 list_members: row.get("list_members"),
                 enabled: row.get("enabled"),
                 candidates,
+                strategy: row.get("strategy"),
+                weights,
             });
         }
         Ok(routes)

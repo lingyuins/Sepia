@@ -1,7 +1,9 @@
-import { useState } from 'react'
-import { ArrowRight, Plus, RotateCcw, X } from 'lucide-react'
-import { useTranslation } from '../workspace'
-import { BUILTIN_FUNCTIONAL_SUFFIXES, BUILTIN_ROUTER_PREFIXES, compileNormalizeRules, normalizeModelName, type ExplicitMapping } from '../model-normalize'
+import { useRef, useState } from 'react'
+import { ArrowRight, Check, Copy, Download, Plus, RotateCcw, Upload, X } from 'lucide-react'
+import { downloadFile, useTranslation, useWorkspace } from '../workspace'
+import { BUILTIN_FUNCTIONAL_SUFFIXES, BUILTIN_ROUTER_PREFIXES, compileNormalizeRules, normalizeModelName, validateNormalizeRules, type ExplicitMapping, type RuleError } from '../model-normalize'
+import { buildModelNamesExport, candidateCoverage, modelChannelsFilename, parseRulesFile, type WorkflowRules } from '../normalize-workflow'
+import type { TranslationKey } from '../i18n'
 
 export type NormalizeRulesDraft = { prefixes: string[]; suffixes: string[]; mappings: ExplicitMapping[] }
 
@@ -32,6 +34,36 @@ export default function ModelNormalizeEditor({ prefixes, suffixes, mappings, onC
   const [variant, setVariant] = useState('')
   const [canonical, setCanonical] = useState('')
   const [preview, setPreview] = useState('')
+  const { providers, notify } = useWorkspace()
+  const fileInput = useRef<HTMLInputElement>(null)
+  const [copied, setCopied] = useState(false)
+  const [imported, setImported] = useState<{ rules: WorkflowRules; error: RuleError | null } | null>(null)
+  const names = providers.flatMap((provider) => provider.modelsList)
+  const copyPrompt = async () => {
+    try {
+      await navigator.clipboard.writeText(t('normalizeWorkflowPrompt'))
+      setCopied(true)
+      window.setTimeout(() => setCopied(false), 1500)
+    } catch { notify(t('normalizePromptCopyFailed')) }
+  }
+  const exportNames = () => {
+    downloadFile(modelChannelsFilename(), JSON.stringify(buildModelNamesExport(names), null, 2))
+  }
+  const importFile = async (file: File) => {
+    const result = parseRulesFile(await file.text())
+    if (!result.ok) {
+      notify(t(result.error === 'shape' ? 'normalizeImportShape' : result.error === 'arrays' ? 'normalizeImportArrays' : 'normalizeImportEntries'))
+      return
+    }
+    setImported({ rules: result.rules, error: validateNormalizeRules(result.rules) })
+  }
+  const applyImport = () => {
+    if (!imported || imported.error) return
+    onChange({ prefixes: imported.rules.routerPrefixes, suffixes: imported.rules.functionalSuffixes, mappings: imported.rules.explicitMappings })
+    setImported(null)
+    notify(t('normalizeImportApplied'))
+  }
+  const importedCoverage = imported ? candidateCoverage(names, (name) => normalizeModelName(name, compileNormalizeRules(imported.rules))) : null
   const rules = compileNormalizeRules({ routerPrefixes: prefixes, functionalSuffixes: suffixes, explicitMappings: mappings })
   const addMapping = () => {
     const from = variant.trim()
@@ -68,5 +100,46 @@ export default function ModelNormalizeEditor({ prefixes, suffixes, mappings, onC
       </div>
       <small>{t('normalizePreviewHint')}</small>
     </label>
+    <div className="normalize-workflow">
+      <div className="settings-card-title"><div><h3>{t('normalizeWorkflowTitle')}</h3><p>{t('normalizeWorkflowDescription')}</p></div></div>
+      <fieldset className="settings-field normalize-rule-field"><legend>{t('normalizePromptCopy')}</legend>
+        <div className="key-tag-input">
+          <button type="button" className="button secondary" onClick={() => void copyPrompt()}>{copied ? <Check size={13} /> : <Copy size={13} />}{copied ? t('normalizePromptCopied') : t('normalizePromptCopy')}</button>
+        </div>
+        <small>{t('normalizePromptHint')}</small>
+      </fieldset>
+      <fieldset className="settings-field normalize-rule-field"><legend>{t('normalizeExportNames')}</legend>
+        <div className="key-tag-input">
+          <button type="button" className="button secondary" disabled={names.length === 0} onClick={exportNames}><Download size={13} />{t('normalizeExportNames')}</button>
+          <span className="muted">{names.length === 0 ? t('normalizeExportEmpty') : t('normalizeExportCount', { count: names.length })}</span>
+        </div>
+        <small>{t('normalizeExportHint')}</small>
+      </fieldset>
+      <fieldset className="settings-field normalize-rule-field"><legend>{t('normalizeImportRules')}</legend>
+        <div className="key-tag-input">
+          <button type="button" className="button secondary" onClick={() => fileInput.current?.click()}><Upload size={13} />{t('normalizeImportRules')}</button>
+          <input ref={fileInput} type="file" accept="application/json,.json" hidden aria-label={t('normalizeImportRules')} onChange={(event) => { const file = event.target.files?.[0]; if (file) void importFile(file); event.target.value = '' }} />
+        </div>
+        <small>{t('normalizeImportHint')}</small>
+        {imported && <div className="normalize-import-preview">
+          <strong>{t('normalizeImportPreview')}</strong>
+          <div className="key-tag-list">
+            <span className="key-tag">{t('normalizePrefixes')}: {imported.rules.routerPrefixes.length}</span>
+            <span className="key-tag">{t('normalizeSuffixes')}: {imported.rules.functionalSuffixes.length}</span>
+            <span className="key-tag">{t('normalizeMappings')}: {imported.rules.explicitMappings.length}</span>
+          </div>
+          {importedCoverage && <div className="key-tag-list">
+            <span className="key-tag">{t('normalizeCoverageInput')}: {importedCoverage.input}</span>
+            <span className="key-tag">{t('normalizeCoverageCanonical')}: {importedCoverage.canonical}</span>
+            <span className="key-tag">{t('normalizeCoverageMerged')}: {importedCoverage.merged}</span>
+          </div>}
+          {imported.error && <p className="danger-text normalize-import-error">{t(imported.error.key as TranslationKey, imported.error.params)}</p>}
+          <div className="key-tag-input">
+            <button type="button" className="button" disabled={!!imported.error} onClick={applyImport}>{t('normalizeImportApply')}</button>
+            <button type="button" className="button secondary" onClick={() => setImported(null)}>{t('cancel')}</button>
+          </div>
+        </div>}
+      </fieldset>
+    </div>
   </section>
 }

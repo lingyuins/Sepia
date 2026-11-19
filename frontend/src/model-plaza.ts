@@ -1,5 +1,6 @@
 import type { RouteRule } from './workspace'
 import { compileNormalizeRules, normalizeModelName, type CompiledRules, type NormalizeRulesInput } from './model-normalize.ts'
+import { normalizeRouteStrategy } from './route-strategy.ts'
 
 export type PlazaChannel = {
   providerId: number
@@ -10,7 +11,7 @@ export type PlazaChannel = {
   keyCount: number
   inputPriceMicros: number | null
   outputPriceMicros: number | null
-  routes: { slug: string; name: string }[]
+  routes: { slug: string; name: string; strategy: string }[]
 }
 
 export type ModelMeta = {
@@ -66,7 +67,7 @@ export type ApiCatalogModel = {
     key_count: number
     input_price_micros: number | null
     output_price_micros: number | null
-    routes: { slug: string; name: string }[]
+    routes: { slug: string; name: string; strategy: string }[]
   }[]
 }
 
@@ -103,7 +104,7 @@ export function mapCatalog(entries: ApiCatalogModel[]): PlazaModel[] {
       keyCount: channel.key_count,
       inputPriceMicros: channel.input_price_micros,
       outputPriceMicros: channel.output_price_micros,
-      routes: channel.routes,
+      routes: channel.routes.map((route) => ({ slug: route.slug, name: route.name, strategy: normalizeRouteStrategy(route.strategy) })),
     })),
   }))
 }
