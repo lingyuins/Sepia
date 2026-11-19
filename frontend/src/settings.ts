@@ -7,4 +7,5 @@ export const defaultSettings: Settings = {
   theme: 'Sepia dark', accent: 'Sage', reducedMotion: false, compact: false,
   requireApproval: true, pluginNetwork: false, pluginSecrets: false,
   normalizePrefixes: [], normalizeSuffixes: [], normalizeMappings: [],
+  aiPoolEnabled: false,
 }

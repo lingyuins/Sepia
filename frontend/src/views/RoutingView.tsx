@@ -1,11 +1,12 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Activity, ArrowDown, ArrowUp, Check, ChevronDown, ChevronRight, Copy, GripVertical, Pencil, Play, Plus, RefreshCw, Search, Trash2, X } from 'lucide-react'
+import { Activity, ArrowDown, ArrowUp, Check, ChevronDown, ChevronRight, Copy, GripVertical, Pencil, Play, Plus, RefreshCw, Search, Sparkles, Trash2, X } from 'lucide-react'
 import { useWorkspace, useTranslation, type Provider, type RouteCandidate, type RouteRule } from '../workspace'
 import { api, routeInput } from '../api'
 import { DialogActions, Field, Modal, Toggle, SectionHeading, StatusDot } from '../components/UI'
 import { Dropdown } from '../components/Dropdown'
 import { RouteChain } from '../components/RouteChain'
 import { routeDisplayCandidates } from '../route-display'
+import { AiRouteDialog } from '../components/AiRouteDialog'
 
 type ProbeResult = { ok: boolean; latency_ms: number; endpoint: string | null; error: string | null; reply: string | null }
 type RouteTestResponse = { route: string; candidates: { provider_id: number; provider: string | null; model: string; enabled: boolean; result: ProbeResult }[] }
@@ -141,6 +142,7 @@ export function RoutingView() {
   const [editing, setEditing] = useState<RouteRule | null>(null)
   const [open, setOpen] = useState(false)
   const [deleting, setDeleting] = useState<RouteRule | null>(null)
+  const [aiOpen, setAiOpen] = useState(false)
   const [testing, setTesting] = useState<RouteRule | null>(null)
   const [testResults, setTestResults] = useState<RouteTestResponse | null>(null)
   const [testError, setTestError] = useState('')
@@ -160,8 +162,7 @@ export function RoutingView() {
     finally { setTestRunning(false) }
   }
   return <>
-    <SectionHeading title={t('routingTitle')} description={t('routingSubtitle')} action={<button className="button primary" onClick={() => setOpen(true)}><Plus size={16} />{t('createRoute')}</button>} />
-    <div className="list-toolbar route-list-toolbar"><label className="search-field"><Search size={15} /><input aria-label={t('searchRouteProviderModel')} placeholder={t('searchRouteProviderModel')} value={query} onChange={(event) => setQuery(event.target.value)} /></label><span>{t('routesCount', { count: filtered.length })} · {t('selectRouteDetail')}</span></div>
+    <SectionHeading title={t('routingTitle')} description={t('routingSubtitle')} action={<><button className="button secondary" onClick={() => setAiOpen(true)}><Sparkles size={16} />{t('aiGenerateTitle')}</button><button className="button primary" onClick={() => setOpen(true)}><Plus size={16} />{t('createRoute')}</button></>} />
     {filtered.length && selectedRoute ? <div className="route-workspace"><section className="route-list glass-panel" aria-label={t('routeList')}><div className="route-list-heading"><h2>{t('routeList')}</h2><span>{filtered.length}</span></div>{filtered.map((route) => <button className={`route-list-item ${selectedRoute.id === route.id ? 'selected' : ''}`} key={route.id} onClick={() => setSelectedId(route.id)}><span className="route-list-name">{route.name || route.slug}<ChevronRight size={15} /></span><code>{route.slug}</code><span className={route.active ? 'positive' : 'muted'}><StatusDot />{t('candidatesCount', { count: routeDisplayCandidates(route).length })} · {route.active ? t('routeActive') : t('routePaused')}</span></button>)}</section>
       <section className={`route-detail glass-panel ${!selectedRoute.active ? 'is-paused' : ''}`}><div className="route-detail-head"><div><div className="route-detail-title"><h2>{selectedRoute.name || selectedRoute.slug}</h2><span className={selectedRoute.active ? 'positive' : 'muted'}><StatusDot />{selectedRoute.active ? t('routeActive') : t('routePaused')}</span></div><p>{selectedRoute.description || t('defaultRouteDescription')}</p><code>{selectedRoute.slug} · {strategyName(selectedRoute.strategy)}</code></div><Toggle checked={selectedRoute.active} onChange={() => updateRoute(selectedRoute.id, !selectedRoute.active)} label={t('toggleNamed', { name: selectedRoute.name })} /></div><div className="route-match"><span>{t('whenModelMatches')}</span><code>{selectedRoute.patterns?.join(' · ') || selectedRoute.match}</code></div><RouteChain route={selectedRoute} /><p className="route-preview-hint">{t('routePreviewHint')}</p><div className="route-detail-foot"><span><Activity size={14} />{selectedRoute.requests} {t('requestsRouted')}</span><div className="card-actions"><button className="button secondary" onClick={() => runRouteTest(selectedRoute)}><Play size={14} />{t('testRoute')}</button><button className="icon-button" onClick={() => { const copy = { ...selectedRoute, id: Date.now(), name: `${selectedRoute.name} ${t('copySuffix')}`, slug: `${selectedRoute.slug || slugify(selectedRoute.name)}-copy`, requests: '0', isDefault: false }; run(() => api('/api/v1/routes', { method: 'POST', body: JSON.stringify(routeInput(copy, providers)) })).then(() => notify(t('routeDuplicated'))).catch((cause) => notify(cause instanceof Error ? cause.message : String(cause))) }} aria-label={t('duplicateNamed', { name: selectedRoute.name })}><Copy size={15} /></button><button className="icon-button" onClick={() => { setEditing(selectedRoute); setOpen(true) }} aria-label={t('editNamed', { name: selectedRoute.name })}><Pencil size={15} /></button><button className="icon-button danger-icon" onClick={() => setDeleting(selectedRoute)} aria-label={t('deleteNamed', { name: selectedRoute.name })}><Trash2 size={15} /></button></div></div></section></div> : <div className="empty-state glass-panel">{t('noRouteMatch')}<button className="button text-button" onClick={() => setQuery('')}>{t('clearSearch')}</button></div>}
     <Modal open={open} onClose={close} title={editing ? t('refineRoute') : t('createSmarterRoute')} description={t('routeDialogSubtitle')} size="route-dialog"><RouteForm key={editing?.id || 'new'} route={editing} onClose={close} /></Modal>
@@ -184,5 +185,6 @@ export function RoutingView() {
         {testing && <div className="route-test-actions"><button type="button" className="button secondary" disabled={testRunning} onClick={() => runRouteTest(testing)}><RefreshCw size={13} className={testRunning ? 'spin' : ''} />{t('routeTestRerun')}</button></div>}
       </div>
     </Modal>
+    <AiRouteDialog open={aiOpen} onClose={() => setAiOpen(false)} />
   </>
 }

@@ -249,6 +249,7 @@ async fn auth(
                 let admin_only = path.starts_with("/users")
                     || path.starts_with("/settings")
                     || path.starts_with("/update")
+                    || path.starts_with("/ai/pool")
                     || path == "/keys"
                     || path.starts_with("/keys/")
                     || path.starts_with("/plugins/")
@@ -1388,6 +1389,7 @@ pub fn router(state: AppState) -> Router<AppState> {
         .route("/users/{id}/password", post(reset_user_password))
         .route("/users/{id}", axum::routing::delete(delete_user))
         .merge(crate::webauthn::protected_routes())
+        .merge(crate::ai::routes())
         .route_layer(middleware::from_fn_with_state(state.clone(), auth));
     Router::new()
         .route("/auth/status", get(status))

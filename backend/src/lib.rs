@@ -1,4 +1,5 @@
 pub mod admin;
+pub mod ai;
 pub mod attempts;
 pub mod auxiliary;
 pub mod bootstrap;

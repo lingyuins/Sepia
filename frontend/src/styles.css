@@ -1143,3 +1143,26 @@ kbd { font-family: inherit; }
   .plaza-row .plaza-card-head { min-width: 0; }
   .plaza-channel-head .positive, .plaza-channel-head .muted { margin-left: 0; }
 }
+
+/* AI service pool + AI route generation */
+.ai-service-form { display: grid; gap: 16px; margin-top: 18px; }
+.ai-service-model-row { display: flex; align-items: flex-end; gap: 10px; }
+.ai-service-model-row .dropdown-field { flex: 1; min-width: 0; }
+.ai-service-model-row .button { flex-shrink: 0; min-height: 44px; }
+.ai-service-limits { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+.ai-generate-form { display: grid; gap: 16px; margin-top: 18px; }
+.ai-generate-instruction { resize: vertical; min-height: 84px; font-family: inherit; line-height: 1.6; }
+.ai-generate-controls { display: flex; align-items: flex-end; gap: 14px; }
+.ai-generate-controls .form-field { flex: 1; min-width: 0; }
+.ai-generate-controls .button { flex-shrink: 0; min-height: 44px; }
+.ai-generate-result .route-section-hint { display: flex; align-items: center; gap: 6px; margin-top: 0; }
+.ai-generate-result .route-test-error { margin-top: 10px; }
+.ai-route-proposal { align-items: flex-start; cursor: pointer; }
+.ai-route-proposal input[type='checkbox'] { flex-shrink: 0; width: 16px; height: 16px; margin-top: 3px; accent-color: var(--accent); }
+.ai-route-proposal p { overflow-wrap: anywhere; }
+.ai-route-proposal small { white-space: normal; }
+@media (max-width: 640px) {
+  .ai-service-limits { grid-template-columns: 1fr; }
+  .ai-service-model-row, .ai-generate-controls { flex-direction: column; align-items: stretch; }
+  .ai-service-model-row .button, .ai-generate-controls .button { justify-content: center; }
+}

@@ -15,6 +15,7 @@ impl Store {
             "model_normalize_router_prefixes",
             "model_normalize_functional_suffixes",
             "model_normalize_explicit_mappings",
+            "ai_pool_enabled",
         ]
         .contains(&key)
         {
