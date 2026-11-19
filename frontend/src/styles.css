@@ -848,6 +848,19 @@ kbd { font-family: inherit; }
 .gateway-setup-spinner { animation: gateway-setup-spin 1s linear infinite; }
 @keyframes gateway-setup-spin { to { transform: rotate(360deg); } }
 
+/* Gateway connection probe and sign-in share a centered single-column layout; the setup wizard keeps the two-column intro. */
+.gateway-centered-body { flex: 1; display: grid; place-items: center; width: 100%; padding: 32px 0 8px; }
+.gateway-connection-panel { width: min(480px, 100%); }
+.gateway-login-card { width: min(420px, 100%); padding: 34px 32px 26px; }
+.gateway-login-icon { display: grid; place-items: center; width: 46px; height: 46px; margin: 0 auto 18px; border: 1px solid var(--accent-border); border-radius: 11px; background: var(--accent-soft); color: var(--accent); }
+.gateway-login-card h1 { font-size: 24px; font-weight: 500; letter-spacing: -.02em; text-align: center; outline: none; }
+.gateway-login-description { margin-top: 10px; color: var(--text-secondary); font-size: 13px; line-height: 1.7; text-align: center; }
+.gateway-login-card form { display: grid; margin-top: 6px; }
+.gateway-login-card .gateway-setup-submit { margin-top: 18px; }
+.gateway-login-card .button.secondary.gateway-setup-submit { margin-top: 10px; }
+.gateway-login-note { display: flex; align-items: flex-start; gap: 8px; margin-top: 22px; padding-top: 16px; border-top: 1px solid var(--border); color: var(--text-muted); font-size: 12px; line-height: 1.6; }
+.gateway-login-note svg { flex-shrink: 0; margin-top: 2px; color: var(--accent); }
+
 .reduce-motion *, .reduce-motion *::before, .reduce-motion *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
 .compact-tables .requests-table td { padding-top: 9px; padding-bottom: 9px; }
 
@@ -914,6 +927,8 @@ kbd { font-family: inherit; }
   .gateway-setup-eyebrow { margin-bottom: 12px; }
   .gateway-setup-mobile-security { display: flex; align-items: flex-start; gap: 9px; margin-top: 15px; color: var(--text-secondary); font-size: 12px; line-height: 1.65; }
   .gateway-setup-mobile-security svg { flex-shrink: 0; margin-top: 1px; color: var(--accent); }
+  .gateway-login-card { padding: 26px 20px 22px; }
+  .gateway-centered-body { padding: 24px 0 8px; }
 }
 @media (max-width: 700px) {
   .sidebar { width: 240px; transform: translateX(-100%); transition: transform .22s ease; box-shadow: 20px 0 50px #00000033; }
