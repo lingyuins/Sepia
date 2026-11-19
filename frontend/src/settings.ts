@@ -6,4 +6,5 @@ export const defaultSettings: Settings = {
   timeout: '60', retries: '2', strategy: 'Failover', affinity: false, affinityTtl: '30', circuitBreaker: false,
   theme: 'Sepia dark', accent: 'Sage', reducedMotion: false, compact: false,
   requireApproval: true, pluginNetwork: false, pluginSecrets: false,
+  normalizePrefixes: [], normalizeSuffixes: [], normalizeMappings: [],
 }

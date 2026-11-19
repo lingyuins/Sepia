@@ -1,4 +1,5 @@
 import type { RouteRule } from './workspace'
+import { compileNormalizeRules, normalizeModelName, type CompiledRules, type NormalizeRulesInput } from './model-normalize.ts'
 
 export type PlazaChannel = {
   providerId: number
@@ -107,14 +108,17 @@ export function mapCatalog(entries: ApiCatalogModel[]): PlazaModel[] {
   }))
 }
 
-// Group local models into families by the backend-normalized base id so dated /
-// free / preview variants of one model collapse into a single plaza card.
-export function groupFamilies(models: PlazaModel[]): PlazaFamily[] {
+// Group local models into families by the normalized base id so dated / free /
+// preview variants and channel-specific router prefixes / functional suffixes
+// (dmxapi-kimi-k2.5-cc → kimi-k2.5) collapse into a single plaza card.
+export function groupFamilies(models: PlazaModel[], rules: NormalizeRulesInput | CompiledRules = {}): PlazaFamily[] {
+  const compiled = 'explicitFullByKey' in rules ? rules : compileNormalizeRules(rules)
   const byBase = new Map<string, PlazaModel[]>()
   for (const model of models) {
-    const list = byBase.get(model.baseModel) ?? []
+    const base = normalizeModelName(model.baseModel, compiled)
+    const list = byBase.get(base) ?? []
     list.push(model)
-    byBase.set(model.baseModel, list)
+    byBase.set(base, list)
   }
   const families: PlazaFamily[] = []
   for (const [base, variants] of byBase) {
@@ -224,7 +228,7 @@ export function filterFamilies(
         const channels = variant.channels.filter((c) => plazaChannelVisible(c, filters))
         if (channels.length === 0) return false
         if (query) {
-          const names = [variant.model, variant.baseModel, family.displayName, ...channels.map((c) => c.provider)]
+          const names = [variant.model, variant.baseModel, family.base, family.displayName, ...channels.map((c) => c.provider)]
           if (!names.some((n) => n.toLowerCase().includes(query))) return false
         }
         return true

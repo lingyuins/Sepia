@@ -12,6 +12,9 @@ impl Store {
             "retry_after_cap_seconds",
             "log_bodies",
             "body_retention_days",
+            "model_normalize_router_prefixes",
+            "model_normalize_functional_suffixes",
+            "model_normalize_explicit_mappings",
         ]
         .contains(&key)
         {

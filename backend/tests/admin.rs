@@ -360,3 +360,118 @@ async fn provider_creation_discovers_models_before_persisting() {
         fallback.text().await.unwrap()
     );
 }
+
+#[tokio::test]
+async fn model_normalize_settings_round_trip_and_unknown_key_rejected() {
+    let directory = tempfile::tempdir().unwrap();
+    let store = Store::connect(&directory.path().join("normalize.db"))
+        .await
+        .unwrap();
+    let state = AppState {
+        store: store.clone(),
+        keys: KeyStore::testing(),
+        http: reqwest::Client::new(),
+        bootstrap_token: "bootstrap".into(),
+        data_directory: directory.path().to_path_buf(),
+        frontend_directory: "frontend/dist".into(),
+        snapshots: std::sync::Arc::new(
+            sepia_gateway::snapshot::Snapshots::load(&store)
+                .await
+                .unwrap(),
+        ),
+        key_health: Default::default(),
+        secure_cookie: false,
+        metadata_source: sepia_gateway::metadata::DEFAULT_SOURCE.into(),
+        plugins: sepia_gateway::plugin::shared(
+            sepia_gateway::plugin::PluginRuntime::new().unwrap(),
+        ),
+    };
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    tokio::spawn(
+        axum::serve(
+            listener,
+            app(state).into_make_service_with_connect_info::<std::net::SocketAddr>(),
+        )
+        .into_future(),
+    );
+    let client = reqwest::Client::new();
+    let url = |path: &str| format!("http://{address}{path}");
+    let password = "normalize test password";
+    let bootstrap = client
+        .post(url("/api/v1/auth/bootstrap"))
+        .json(&json!({"username":"admin","password":password,"token":"bootstrap"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(bootstrap.status(), 200);
+    let login = client
+        .post(url("/api/v1/auth/login"))
+        .json(&json!({"username":"admin","password":password}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(login.status(), 200);
+    let cookie = login
+        .headers()
+        .get("set-cookie")
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .split(';')
+        .next()
+        .unwrap()
+        .to_string();
+    let rules = json!({
+        "model_normalize_router_prefixes": ["dmxapi-", "[官B]-"],
+        "model_normalize_functional_suffixes": ["-cc", "-\\d{8}"],
+        "model_normalize_explicit_mappings": [{"variant":"claude-opus-4-6","canonical":"claude-opus-4.6"}],
+    });
+    let saved = client
+        .post(url("/api/v1/settings"))
+        .header("cookie", &cookie)
+        .json(&rules)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(saved.status(), 200, "save: {}", saved.text().await.unwrap());
+    let loaded: Value = client
+        .get(url("/api/v1/settings"))
+        .header("cookie", &cookie)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    for (key, value) in rules.as_object().unwrap() {
+        assert_eq!(&loaded[key], value, "setting {key} did not round-trip");
+    }
+    // Clearing a list persists an empty array (frontend falls back to builtins).
+    let cleared = client
+        .post(url("/api/v1/settings"))
+        .header("cookie", &cookie)
+        .json(&json!({"model_normalize_router_prefixes": []}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(cleared.status(), 200);
+    let loaded: Value = client
+        .get(url("/api/v1/settings"))
+        .header("cookie", &cookie)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(loaded["model_normalize_router_prefixes"], json!([]));
+    let rejected = client
+        .post(url("/api/v1/settings"))
+        .header("cookie", &cookie)
+        .json(&json!({"model_normalize_unknown": true}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(rejected.status(), 400);
+}

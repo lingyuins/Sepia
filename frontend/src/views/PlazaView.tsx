@@ -6,6 +6,7 @@ import { CopyButton, ProviderMark } from '../components/Provider'
 import { DialogActions, Field, Modal, SectionHeading, StatusDot, Toggle } from '../components/UI'
 import { Dropdown } from '../components/Dropdown'
 import { familyRoutable, filterFamilies, formatContext, formatPrice, formatReferencePrice, groupFamilies, mapCatalog, modelKind, plazaChannelVisible, routeForModel, type CatalogResponse, type PlazaChannel, type PlazaFilters, type PlazaKind, type PlazaModel } from '../model-plaza'
+import { compileNormalizeRules } from '../model-normalize'
 
 const kindIcons: Record<PlazaKind, typeof MessageSquareText> = { chat: MessageSquareText, image: ImageIcon, audio: AudioLines, video: Film, embedding: Boxes, rerank: List, moderation: ShieldCheck, music: Music2, other: Sparkles }
 const kindKeys: Record<PlazaKind, 'kindChat' | 'kindImage' | 'kindAudio' | 'kindVideo' | 'kindEmbedding' | 'kindRerank' | 'kindModeration' | 'kindMusic' | 'kindOther'> = { chat: 'kindChat', image: 'kindImage', audio: 'kindAudio', video: 'kindVideo', embedding: 'kindEmbedding', rerank: 'kindRerank', moderation: 'kindModeration', music: 'kindMusic', other: 'kindOther' }
@@ -43,7 +44,7 @@ function PriceEditor({ channel, model, onClose }: { channel: PlazaChannel; model
 }
 
 export function PlazaView() {
-  const { providers, routes, channelGroups, notify, refresh } = useWorkspace()
+  const { providers, routes, channelGroups, settings, notify, refresh } = useWorkspace()
   const t = useTranslation()
   const [tab, setTab] = useState<'models' | 'providers'>('models')
   const [catalog, setCatalog] = useState<CatalogResponse | null>(null)
@@ -76,7 +77,8 @@ export function PlazaView() {
   const groupLabel = (id: string) => id === 'official' ? t('officialChannels') : id === 'free' ? t('freeChannels') : id === 'team' ? t('teamChannels') : channelGroups.find((item) => item.id === id)?.name || t('noGroup')
   const filters: PlazaFilters = { query, kind, groupId, providerId, routableOnly, availableOnly }
   const models = useMemo(() => catalog ? mapCatalog(catalog.models) : [], [catalog])
-  const families = useMemo(() => groupFamilies(models), [models])
+  const normalizeRules = useMemo(() => compileNormalizeRules({ routerPrefixes: settings.normalizePrefixes, functionalSuffixes: settings.normalizeSuffixes, explicitMappings: settings.normalizeMappings }), [settings.normalizePrefixes, settings.normalizeSuffixes, settings.normalizeMappings])
+  const families = useMemo(() => groupFamilies(models, normalizeRules), [models, normalizeRules])
   const visible = useMemo(() => filterFamilies(families, routes, filters), [families, routes, query, kind, groupId, providerId, routableOnly, availableOnly])
   const selectedFamily = families.find((family) => family.base === selected)
   const providerOptions = useMemo(() => {

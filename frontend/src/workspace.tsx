@@ -132,6 +132,9 @@ export type Settings = {
   requireApproval: boolean
   pluginNetwork: boolean
   pluginSecrets: boolean
+  normalizePrefixes: string[]
+  normalizeSuffixes: string[]
+  normalizeMappings: { variant: string; canonical: string }[]
 }
 export const providerModels: Record<string, string[]> = {
   OpenAI: ['gpt-4.1', 'gpt-4.1-mini', 'gpt-4o', 'o3', 'o4-mini'],
