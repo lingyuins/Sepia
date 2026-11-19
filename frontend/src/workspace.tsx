@@ -107,6 +107,19 @@ export type RequestRecord = {
   protocol: string
   hasBody: boolean
 }
+export type AttemptRecord = {
+  id: number
+  requestId: string
+  providerId: number | null
+  providerKeyId: number | null
+  model: string
+  status: string
+  error: string | null
+  inputTokens: number
+  outputTokens: number
+  latencyMs: number
+  createdAt: string
+}
 export type Settings = {
   workspace: string
   language: string

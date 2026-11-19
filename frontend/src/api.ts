@@ -1,11 +1,12 @@
 import type { KeyPolicy } from './key-policy'
-import type { Plugin, Provider, RequestRecord, RouteRule } from './workspace'
+import type { AttemptRecord, Plugin, Provider, RequestRecord, RouteRule } from './workspace'
 import { clampWeight, normalizeRouteStrategy } from './route-strategy.ts'
 type ProviderProtocol = 'openai' | 'anthropic' | 'gemini' | 'openai-responses'
 
 export type ApiProvider = { id: number; name: string; protocol: ProviderProtocol; endpoint: string; models: string[]; key_count: number; enabled: boolean; group_id: string; keys?: { id: number; models: string[] | null }[] }
 export type ApiRoute = { id: number; slug: string; name: string; description: string; patterns: string[]; is_default: boolean; list_members: boolean; enabled: boolean; candidates: [number, string][]; strategy?: string; weights?: number[] }
 export type ApiRequest = { id: string; protocol: string; model: string; route?: string; status: string; input_tokens: number; output_tokens: number; cost_micros: number; latency_ms: number; created_at: string; provider?: string; key?: string; client_ip?: string | null; first_byte_ms?: number | null; cached_tokens?: number; reasoning_tokens?: number; has_body?: boolean }
+export type ApiAttempt = { id: number; request_id: string; provider_id: number | null; provider_key_id: number | null; model: string; status: string; error: string | null; input_tokens: number; output_tokens: number; latency_ms: number; created_at: string }
 export type ApiClientKey = { id: number; name: string; models: string[]; token_limit: number; max_amount_micros: number; rpm: number; tpm: number; expires_at: string | null }
 export type ApiGroup = { id: string; name: string; description: string }
 export type ApiPlugin = { id: string; name: string; version: string; enabled: boolean; status: string; description: string; events: string[]; permissions: string[]; priority: number; has_ui: boolean; ui_title: string; config_schema: Record<string, unknown>; config: Record<string, unknown>; sha256: string; installed_at: string; updated_at: string }
@@ -45,6 +46,9 @@ export function mapRequest(request: ApiRequest): RequestRecord {
   const total = request.input_tokens + request.output_tokens
   const time = new Date(request.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false })
   return { id: request.id, createdAt: request.created_at, time, model: request.model || 'unknown', provider: request.provider || '—', tokens: total.toLocaleString('en-US'), inputTokens: request.input_tokens, outputTokens: request.output_tokens, latency: `${request.latency_ms} ms`, latencyMs: request.latency_ms, status: request.status === 'success' ? '200 OK' : request.status === 'failed' ? 'Failed' : request.status, key: request.key || '—', cost: `$${(request.cost_micros / 1000000).toFixed(6)}`, route: request.route || '—', clientIp: request.client_ip ?? null, firstByteMs: request.first_byte_ms ?? null, cachedTokens: request.cached_tokens ?? 0, reasoningTokens: request.reasoning_tokens ?? 0, protocol: request.protocol, hasBody: request.has_body === true }
+}
+export function mapAttempt(attempt: ApiAttempt): AttemptRecord {
+  return { id: attempt.id, requestId: attempt.request_id, providerId: attempt.provider_id, providerKeyId: attempt.provider_key_id, model: attempt.model, status: attempt.status, error: attempt.error, inputTokens: attempt.input_tokens, outputTokens: attempt.output_tokens, latencyMs: attempt.latency_ms, createdAt: attempt.created_at }
 }
 export function mapPlugin(plugin: ApiPlugin): Plugin {
   return { id: plugin.id, name: plugin.name, description: plugin.description, version: plugin.version, enabled: plugin.enabled, status: plugin.status, events: plugin.events, permissions: plugin.permissions, priority: plugin.priority, hasUi: plugin.has_ui, uiTitle: plugin.ui_title, configSchema: plugin.config_schema || {}, config: plugin.config || {}, sha256: plugin.sha256, installedAt: plugin.installed_at, updatedAt: plugin.updated_at }

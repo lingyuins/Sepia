@@ -5,7 +5,7 @@ import { api, routeInput } from '../api'
 import { DialogActions, Field, Modal, Toggle, SectionHeading, StatusDot } from '../components/UI'
 import { Dropdown } from '../components/Dropdown'
 import { RouteChain } from '../components/RouteChain'
-import { routeDisplayCandidates } from '../route-display'
+import { latestSuccessfulRouteRequest, routeDisplayCandidates } from '../route-display'
 import { AiRouteDialog } from '../components/AiRouteDialog'
 import { ROUTE_STRATEGY_IDS, normalizeRouteStrategy, strategyDescriptionKey, strategyLabelKey, strategyUsesWeights, clampWeight, type RouteStrategyId } from '../route-strategy'
 
@@ -30,7 +30,6 @@ function RouteForm({ route, onClose }: { route: RouteRule | null; onClose: () =>
   const modelsFor = (name: string) => { const provider = providers.find((item) => item.name === name); return provider ? modelsForProvider(provider) : [] }
   const [name, setName] = useState(route?.name || '')
   const [slug, setSlug] = useState(route?.slug || (route ? slugify(route.name) : 'new-route'))
-  const [description, setDescription] = useState(route?.description || '')
   const [candidates, setCandidates] = useState<RouteCandidate[]>(() => route ? routeCandidates(route).filter((candidate) => candidate.enabled).map((candidate) => ({ ...candidate })) : [])
   const [expandedProvider, setExpandedProvider] = useState(providers[0]?.name || '')
   const [modelQuery, setModelQuery] = useState('')
@@ -74,7 +73,7 @@ function RouteForm({ route, onClose }: { route: RouteRule | null; onClose: () =>
     if (!enabled.length) { notify(t('routeNeedsModel')); return }
     const finalPatterns = patterns.length ? patterns : ['*']
     const saved: RouteRule = {
-      id: route?.id || Date.now(), name: name.trim(), slug: slug.trim() || slugify(name), description: description.trim() || t('defaultRouteDescription'),
+      id: route?.id || Date.now(), name: name.trim(), slug: slug.trim() || slugify(name), description: route?.description || '',
       match: finalPatterns[0], primary: enabled[0].provider, primaryModel: enabled[0].model, fallback: enabled[1]?.provider || '', fallbackModel: enabled[1]?.model || '',
       strategy, active, requests: route?.requests || '0', candidates: enabled.map((candidate) => ({ ...candidate, weight: clampWeight(candidate.weight || 1) })), patterns: finalPatterns,
       listMembers: modelListing === 'members', isDefault: route?.isDefault || false,
@@ -84,11 +83,15 @@ function RouteForm({ route, onClose }: { route: RouteRule | null; onClose: () =>
   return <form className="route-editor" onSubmit={save}>
     <section className="route-editor-section">
       <div className="route-editor-section-title"><h3>{t('routeGroup')}</h3></div>
-      <div className="form-grid"><Field label={t('routeName')} value={name} onChange={(value) => { setName(value); if (!route) setSlug(slugify(value, 'new-route')) }} required placeholder={t('routeNamePlaceholder')} /><Field label={t('routeId')} value={slug} onChange={setSlug} required placeholder="auto-route" hint={`${t('agentModelId')}: ${slug || 'route'}`} /></div>
-      <Field label={t('description')} value={description} onChange={setDescription} placeholder={t('routeDescriptionPlaceholder')} />
-      <div className="route-group-options">
-        <div className="route-group-field"><span>{t('routingStrategy')}</span><Dropdown variant="compact" label={t('routingStrategy')} value={strategy} options={ROUTE_STRATEGY_IDS.map((id) => ({ value: id, label: t(strategyLabelKey(id)) }))} onChange={(value) => setStrategy(normalizeRouteStrategy(value))} /></div>
-        <div className="route-group-field"><span>{t('modelList')}</span><Dropdown variant="compact" label={t('modelList')} value={modelListing} options={[{ value: 'members', label: t('listMemberModels') }, { value: 'group', label: t('listGroupOnly') }]} onChange={setModelListing} /></div>
+      <div className="route-group-grid">
+        <div className="route-group-column">
+          <Field label={t('routeName')} value={name} onChange={(value) => { setName(value); if (!route) setSlug(slugify(value, 'new-route')) }} required placeholder={t('routeNamePlaceholder')} />
+          <div className="route-group-field"><span>{t('routingStrategy')}</span><Dropdown variant="compact" label={t('routingStrategy')} value={strategy} options={ROUTE_STRATEGY_IDS.map((id) => ({ value: id, label: t(strategyLabelKey(id)) }))} onChange={(value) => setStrategy(normalizeRouteStrategy(value))} /></div>
+        </div>
+        <div className="route-group-column">
+          <Field label={t('routeId')} value={slug} onChange={setSlug} required placeholder="auto-route" hint={`${t('agentModelId')}: ${slug || 'route'}`} />
+          <div className="route-group-field"><span>{t('modelList')}</span><Dropdown variant="compact" label={t('modelList')} value={modelListing} options={[{ value: 'members', label: t('listMemberModels') }, { value: 'group', label: t('listGroupOnly') }]} onChange={setModelListing} /></div>
+        </div>
       </div>
       <p className="route-section-hint">{t(strategyDescriptionKey(strategy))} {t('strategyFailoverNote')} {t('modelListHint')}</p>
       <div className="route-group-patterns">
@@ -140,7 +143,7 @@ function RouteForm({ route, onClose }: { route: RouteRule | null; onClose: () =>
 }
 
 export function RoutingView() {
-  const { routes, run, notify, providers } = useWorkspace()
+  const { routes, run, notify, providers, requests } = useWorkspace()
   const { t, strategyName } = useRouteMeta()
   const [editing, setEditing] = useState<RouteRule | null>(null)
   const [open, setOpen] = useState(false)
@@ -167,7 +170,7 @@ export function RoutingView() {
   return <>
     <SectionHeading title={t('routingTitle')} description={t('routingSubtitle')} action={<><button className="button secondary" onClick={() => setAiOpen(true)}><Sparkles size={16} />{t('aiGenerateTitle')}</button><button className="button primary" onClick={() => setOpen(true)}><Plus size={16} />{t('createRoute')}</button></>} />
     {filtered.length && selectedRoute ? <div className="route-workspace"><section className="route-list glass-panel" aria-label={t('routeList')}><div className="route-list-heading"><h2>{t('routeList')}</h2><span>{filtered.length}</span></div>{filtered.map((route) => <button className={`route-list-item ${selectedRoute.id === route.id ? 'selected' : ''}`} key={route.id} onClick={() => setSelectedId(route.id)}><span className="route-list-name">{route.name || route.slug}<ChevronRight size={15} /></span><code>{route.slug}</code><span className={route.active ? 'positive' : 'muted'}><StatusDot />{t('candidatesCount', { count: routeDisplayCandidates(route).length })} · {route.active ? t('routeActive') : t('routePaused')}</span></button>)}</section>
-      <section className={`route-detail glass-panel ${!selectedRoute.active ? 'is-paused' : ''}`}><div className="route-detail-head"><div><div className="route-detail-title"><h2>{selectedRoute.name || selectedRoute.slug}</h2><span className={selectedRoute.active ? 'positive' : 'muted'}><StatusDot />{selectedRoute.active ? t('routeActive') : t('routePaused')}</span></div><p>{selectedRoute.description || t('defaultRouteDescription')}</p><code>{selectedRoute.slug} · {strategyName(selectedRoute.strategy)}</code></div><Toggle checked={selectedRoute.active} onChange={() => updateRoute(selectedRoute.id, !selectedRoute.active)} label={t('toggleNamed', { name: selectedRoute.name })} /></div><div className="route-match"><span>{t('whenModelMatches')}</span><code>{selectedRoute.patterns?.join(' · ') || selectedRoute.match}</code></div><RouteChain route={selectedRoute} /><p className="route-preview-hint">{t('routePreviewHint')}</p><div className="route-detail-foot"><span><Activity size={14} />{selectedRoute.requests} {t('requestsRouted')}</span><div className="card-actions"><button className="button secondary" onClick={() => runRouteTest(selectedRoute)}><Play size={14} />{t('testRoute')}</button><button className="icon-button" onClick={() => { const copy = { ...selectedRoute, id: Date.now(), name: `${selectedRoute.name} ${t('copySuffix')}`, slug: `${selectedRoute.slug || slugify(selectedRoute.name)}-copy`, requests: '0', isDefault: false }; run(() => api('/api/v1/routes', { method: 'POST', body: JSON.stringify(routeInput(copy, providers)) })).then(() => notify(t('routeDuplicated'))).catch((cause) => notify(cause instanceof Error ? cause.message : String(cause))) }} aria-label={t('duplicateNamed', { name: selectedRoute.name })}><Copy size={15} /></button><button className="icon-button" onClick={() => { setEditing(selectedRoute); setOpen(true) }} aria-label={t('editNamed', { name: selectedRoute.name })}><Pencil size={15} /></button><button className="icon-button danger-icon" onClick={() => setDeleting(selectedRoute)} aria-label={t('deleteNamed', { name: selectedRoute.name })}><Trash2 size={15} /></button></div></div></section></div> : <div className="empty-state glass-panel">{t('noRouteMatch')}<button className="button text-button" onClick={() => setQuery('')}>{t('clearSearch')}</button></div>}
+      <section className={`route-detail glass-panel ${!selectedRoute.active ? 'is-paused' : ''}`}><div className="route-detail-head"><div><div className="route-detail-title"><h2>{selectedRoute.name || selectedRoute.slug}</h2><span className={selectedRoute.active ? 'positive' : 'muted'}><StatusDot />{selectedRoute.active ? t('routeActive') : t('routePaused')}</span></div>{selectedRoute.description && <p>{selectedRoute.description}</p>}<code>{selectedRoute.slug} · {strategyName(selectedRoute.strategy)}</code></div><Toggle checked={selectedRoute.active} onChange={() => updateRoute(selectedRoute.id, !selectedRoute.active)} label={t('toggleNamed', { name: selectedRoute.name })} /></div><div className="route-match"><span>{t('whenModelMatches')}</span><code>{selectedRoute.patterns?.join(' · ') || selectedRoute.match}</code></div><RouteChain route={selectedRoute} latestRequest={latestSuccessfulRouteRequest(selectedRoute, requests)} /><p className="route-preview-hint">{t('routePreviewHint')}</p><div className="route-detail-foot"><span><Activity size={14} />{selectedRoute.requests} {t('requestsRouted')}</span><div className="card-actions"><button className="button secondary" onClick={() => runRouteTest(selectedRoute)}><Play size={14} />{t('testRoute')}</button><button className="icon-button" onClick={() => { const copy = { ...selectedRoute, id: Date.now(), name: `${selectedRoute.name} ${t('copySuffix')}`, slug: `${selectedRoute.slug || slugify(selectedRoute.name)}-copy`, requests: '0', isDefault: false }; run(() => api('/api/v1/routes', { method: 'POST', body: JSON.stringify(routeInput(copy, providers)) })).then(() => notify(t('routeDuplicated'))).catch((cause) => notify(cause instanceof Error ? cause.message : String(cause))) }} aria-label={t('duplicateNamed', { name: selectedRoute.name })}><Copy size={15} /></button><button className="icon-button" onClick={() => { setEditing(selectedRoute); setOpen(true) }} aria-label={t('editNamed', { name: selectedRoute.name })}><Pencil size={15} /></button><button className="icon-button danger-icon" onClick={() => setDeleting(selectedRoute)} aria-label={t('deleteNamed', { name: selectedRoute.name })}><Trash2 size={15} /></button></div></div></section></div> : <div className="empty-state glass-panel">{t('noRouteMatch')}<button className="button text-button" onClick={() => setQuery('')}>{t('clearSearch')}</button></div>}
     <Modal open={open} onClose={close} title={editing ? t('refineRoute') : t('createSmarterRoute')} description={t('routeDialogSubtitle')} size="route-dialog"><RouteForm key={editing?.id || 'new'} route={editing} onClose={close} /></Modal>
     <Modal open={!!deleting} onClose={() => setDeleting(null)} title={t('removeRouteTitle')} description={t('removeRouteDescription')}><form onSubmit={(event) => { event.preventDefault(); if (deleting) run(() => api(`/api/v1/routes/${deleting.id}`, { method: 'DELETE' })).then(() => notify(t('routeRemoved'))).catch((cause) => notify(cause instanceof Error ? cause.message : String(cause))); setDeleting(null) }}><DialogActions onClose={() => setDeleting(null)} label={t('removeRoute')} /></form></Modal>
     <Modal open={!!testing} onClose={closeTest} title={t('routeTestTitle')} description={t('routeTestSubtitle')}>

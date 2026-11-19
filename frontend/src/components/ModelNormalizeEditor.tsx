@@ -1,5 +1,5 @@
 import { useRef, useState } from 'react'
-import { ArrowRight, Check, Copy, Download, Plus, RotateCcw, Upload, X } from 'lucide-react'
+import { AlertCircle, ArrowRight, Check, Copy, Download, Plus, RotateCcw, Upload, X } from 'lucide-react'
 import { downloadFile, useTranslation, useWorkspace } from '../workspace'
 import { BUILTIN_FUNCTIONAL_SUFFIXES, BUILTIN_ROUTER_PREFIXES, compileNormalizeRules, normalizeModelName, validateNormalizeRules, type ExplicitMapping, type RuleError } from '../model-normalize'
 import { buildModelNamesExport, candidateCoverage, modelChannelsFilename, parseRulesFile, type WorkflowRules } from '../normalize-workflow'
@@ -102,25 +102,23 @@ export default function ModelNormalizeEditor({ prefixes, suffixes, mappings, onC
     </label>
     <div className="normalize-workflow">
       <div className="settings-card-title"><div><h3>{t('normalizeWorkflowTitle')}</h3><p>{t('normalizeWorkflowDescription')}</p></div></div>
-      <fieldset className="settings-field normalize-rule-field"><legend>{t('normalizePromptCopy')}</legend>
+      <div className="normalize-workflow-steps">
+      <fieldset className="settings-field normalize-rule-field"><legend>{t('normalizePromptCopy')}<span className="normalize-legend-info" title={t('normalizePromptHint')}><AlertCircle size={12} aria-label={t('normalizePromptHint')} /></span></legend>
         <div className="key-tag-input">
           <button type="button" className="button secondary" onClick={() => void copyPrompt()}>{copied ? <Check size={13} /> : <Copy size={13} />}{copied ? t('normalizePromptCopied') : t('normalizePromptCopy')}</button>
         </div>
-        <small>{t('normalizePromptHint')}</small>
       </fieldset>
-      <fieldset className="settings-field normalize-rule-field"><legend>{t('normalizeExportNames')}</legend>
+      <fieldset className="settings-field normalize-rule-field"><legend>{t('normalizeExportNames')}<span className="normalize-legend-info" title={t('normalizeExportHint')}><AlertCircle size={12} aria-label={t('normalizeExportHint')} /></span></legend>
         <div className="key-tag-input">
           <button type="button" className="button secondary" disabled={names.length === 0} onClick={exportNames}><Download size={13} />{t('normalizeExportNames')}</button>
           <span className="muted">{names.length === 0 ? t('normalizeExportEmpty') : t('normalizeExportCount', { count: names.length })}</span>
         </div>
-        <small>{t('normalizeExportHint')}</small>
       </fieldset>
-      <fieldset className="settings-field normalize-rule-field"><legend>{t('normalizeImportRules')}</legend>
+      <fieldset className="settings-field normalize-rule-field"><legend>{t('normalizeImportRules')}<span className="normalize-legend-info" title={t('normalizeImportHint')}><AlertCircle size={12} aria-label={t('normalizeImportHint')} /></span></legend>
         <div className="key-tag-input">
           <button type="button" className="button secondary" onClick={() => fileInput.current?.click()}><Upload size={13} />{t('normalizeImportRules')}</button>
           <input ref={fileInput} type="file" accept="application/json,.json" hidden aria-label={t('normalizeImportRules')} onChange={(event) => { const file = event.target.files?.[0]; if (file) void importFile(file); event.target.value = '' }} />
         </div>
-        <small>{t('normalizeImportHint')}</small>
         {imported && <div className="normalize-import-preview">
           <strong>{t('normalizeImportPreview')}</strong>
           <div className="key-tag-list">
@@ -140,6 +138,7 @@ export default function ModelNormalizeEditor({ prefixes, suffixes, mappings, onC
           </div>
         </div>}
       </fieldset>
+      </div>
     </div>
   </section>
 }
