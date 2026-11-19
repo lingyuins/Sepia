@@ -724,7 +724,7 @@ export const translations = {
   gatewayMobileSecurity: ['The token is used once; sessions stay in an HttpOnly Cookie.', '令牌仅使用一次；会话保存在 HttpOnly Cookie 中。', 'トークンは一度だけ使用し、セッションは HttpOnly Cookie に保存されます。'],
   gatewaySetupProgress: ['Gateway setup progress', '网关初始化进度', 'ゲートウェイセットアップの進行状況'],
   gatewayStepConnect: ['Connect gateway', '连接网关', 'ゲートウェイ接続'],
-  gatewayStepVerify: ['Verify administrator', '管理员验证', '管理者認証'],
+  gatewayStepInitialize: ['Initialize administrator', '初始化管理员', '管理者を初期化'],
   gatewayStepConsole: ['Enter console', '进入控制台', 'コンソールへ'],
   gatewayChecking: ['Checking gateway connection', '正在检测网关连接', 'ゲートウェイ接続を確認中'],
   gatewayCheckingHint: ['Reading the real session and initialization state before asking for credentials.', '先读取真实会话与初始化状态，再请求凭据。', '認証情報を求める前に、実際のセッションと初期化状態を確認します。'],
