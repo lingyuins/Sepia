@@ -89,6 +89,7 @@ async fn main() -> Result<(), String> {
             metadata_source: std::env::var("SEPIA_METADATA_SOURCE")
                 .unwrap_or_else(|_| sepia_gateway::metadata::DEFAULT_SOURCE.into()),
             plugins,
+            routing_stats: sepia_gateway::strategy::RoutingStats::shared(),
         })
         .into_make_service_with_connect_info::<std::net::SocketAddr>(),
     )

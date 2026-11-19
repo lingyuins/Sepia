@@ -22,6 +22,7 @@ pub mod server;
 pub mod settings;
 pub mod snapshot;
 pub mod store;
+pub mod strategy;
 pub mod updates;
 pub mod webauthn;
 

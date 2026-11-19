@@ -187,6 +187,7 @@ async fn harness() -> (
                 .unwrap(),
         ),
         key_health: Default::default(),
+        routing_stats: sepia_gateway::strategy::RoutingStats::shared(),
         secure_cookie: false,
         metadata_source: sepia_gateway::metadata::DEFAULT_SOURCE.into(),
         plugins: sepia_gateway::plugin::shared(

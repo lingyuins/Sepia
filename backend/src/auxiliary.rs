@@ -672,12 +672,27 @@ async fn forward(
         .unwrap_or(model.clone());
     let targets: Vec<(i64, String, Option<i64>)> = match &pinned {
         Some(task) => vec![(task.provider_id, task.model.clone(), task.provider_key_id)],
-        None => route
-            .unwrap()
-            .candidates
-            .iter()
-            .map(|(provider_id, model)| (*provider_id, model.clone(), None))
-            .collect(),
+        None => {
+            let route = route.unwrap();
+            let pairs: Vec<(i64, String)> = route.candidates.clone();
+            let ordered = crate::strategy::order(
+                &route.strategy,
+                route.id,
+                &pairs,
+                &route.weights,
+                &state.routing_stats,
+                &crate::strategy::OrderContext {
+                    route_id: route.id,
+                    prices: &snapshot.prices,
+                    contexts: &snapshot.contexts,
+                    estimated_tokens: ((prepared.log_request.len() as i64 + 3) / 4).max(1),
+                },
+            );
+            ordered
+                .into_iter()
+                .map(|(provider_id, model)| (provider_id, model, None))
+                .collect()
+        }
     };
     let quota_model = targets
         .first()
@@ -795,10 +810,12 @@ async fn forward(
             };
             attempts_used += 1;
             let attempt_started = Instant::now();
-            let response = match build_request(&state, provider, &secret, &prepared)
+            state.routing_stats.enter(provider.id);
+            let upstream = build_request(&state, provider, &secret, &prepared)
                 .send()
-                .await
-            {
+                .await;
+            state.routing_stats.leave(provider.id);
+            let response = match upstream {
                 Ok(response) => response,
                 Err(_) => {
                     state
@@ -830,6 +847,15 @@ async fn forward(
             };
             let first_byte_ms = attempt_started.elapsed().as_millis() as i64;
             let status = response.status();
+            if let Some(route) = route {
+                state.routing_stats.record(
+                    route.id,
+                    provider.id,
+                    model,
+                    status.is_success(),
+                    first_byte_ms,
+                );
+            }
             let content_type = response
                 .headers()
                 .get(reqwest::header::CONTENT_TYPE)

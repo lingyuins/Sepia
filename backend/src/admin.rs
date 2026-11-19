@@ -104,6 +104,12 @@ pub struct RouteInput {
     list_members: bool,
     #[serde(default = "default_true")]
     enabled: bool,
+    /// Ordering strategy id; omitted keeps the default `priority`.
+    #[serde(default)]
+    strategy: Option<String>,
+    /// Per-candidate weights parallel to `candidates`; omitted defaults to 1.
+    #[serde(default)]
+    weights: Option<Vec<i64>>,
 }
 #[derive(Deserialize)]
 pub struct PriceInput {
@@ -416,7 +422,7 @@ async fn model_catalog(State(state): State<AppState>) -> Response {
                 "key_count": keys.iter().filter(|key| key.models.as_ref().is_none_or(|models| models.iter().any(|item| item == model))).count(),
                 "input_price_micros": price.map(|(_, _, input, _)| *input),
                 "output_price_micros": price.map(|(_, _, _, output)| *output),
-                "routes": routes.iter().filter(|route| route.enabled && route.candidates.iter().any(|(_, candidate)| candidate == model)).map(|route| json!({"slug":route.slug,"name":route.name})).collect::<Vec<_>>(),
+                "routes": routes.iter().filter(|route| route.enabled && route.candidates.iter().any(|(_, candidate)| candidate == model)).map(|route| json!({"slug":route.slug,"name":route.name,"strategy":route.strategy})).collect::<Vec<_>>(),
             });
             match models.iter_mut().find(|(name, _)| name == model) {
                 Some((_, serde_json::Value::Array(channels))) => channels.push(entry),
@@ -601,12 +607,23 @@ async fn create_provider(
     }
 }
 async fn routes(State(state): State<AppState>) -> Response {
-    match state.store.routes().await { Ok(routes) => Json(json!(routes.into_iter().map(|route| json!({"id":route.id,"slug":route.slug,"name":route.name,"description":route.description,"patterns":route.patterns,"is_default":route.is_default,"list_members":route.list_members,"enabled":route.enabled,"candidates":route.candidates})).collect::<Vec<_>>())).into_response(), Err(message) => error(StatusCode::INTERNAL_SERVER_ERROR, message) }
+    match state.store.routes().await { Ok(routes) => Json(json!(routes.into_iter().map(|route| json!({"id":route.id,"slug":route.slug,"name":route.name,"description":route.description,"patterns":route.patterns,"is_default":route.is_default,"list_members":route.list_members,"enabled":route.enabled,"candidates":route.candidates,"strategy":route.strategy,"weights":route.weights})).collect::<Vec<_>>())).into_response(), Err(message) => error(StatusCode::INTERNAL_SERVER_ERROR, message) }
 }
 async fn create_route(State(state): State<AppState>, Json(input): Json<RouteInput>) -> Response {
     let Some((provider_id, model)) = input.candidates.first().cloned() else {
         return error(StatusCode::BAD_REQUEST, "at least one candidate required");
     };
+    let strategy = input.strategy.as_deref().unwrap_or("priority");
+    if crate::strategy::Strategy::parse(strategy).is_none() {
+        return error(
+            StatusCode::BAD_REQUEST,
+            format!("unknown route strategy: {strategy}"),
+        );
+    }
+    let weights = input.weights.unwrap_or_default();
+    if !weights.is_empty() && weights.len() != input.candidates.len() {
+        return error(StatusCode::BAD_REQUEST, "weights must match candidates");
+    }
     match state
         .store
         .create_route(NewRoute {
@@ -624,6 +641,13 @@ async fn create_route(State(state): State<AppState>, Json(input): Json<RouteInpu
     {
         Ok(route) => {
             if let Err(message) = state.store.set_route_enabled(route.id, input.enabled).await {
+                return error(StatusCode::BAD_REQUEST, message);
+            }
+            if let Err(message) = state
+                .store
+                .set_route_strategy(route.id, strategy, &weights)
+                .await
+            {
                 return error(StatusCode::BAD_REQUEST, message);
             }
             if let Err(message) = state.snapshots.refresh(&state.store).await {
@@ -705,6 +729,8 @@ async fn update_route(
                 list_members: input.list_members,
                 enabled: input.enabled,
                 candidates: &input.candidates,
+                strategy: input.strategy.as_deref().unwrap_or("priority"),
+                weights: input.weights.as_deref().unwrap_or_default(),
             },
         )
         .await

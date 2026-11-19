@@ -9,6 +9,9 @@ pub struct RouteUpdate<'a> {
     pub list_members: bool,
     pub enabled: bool,
     pub candidates: &'a [(i64, String)],
+    pub strategy: &'a str,
+    /// Parallel to `candidates`; missing entries default to weight 1.
+    pub weights: &'a [i64],
 }
 pub struct ProviderUpdate<'a> {
     pub id: i64,
@@ -64,16 +67,22 @@ impl Store {
             list_members,
             enabled,
             candidates,
+            strategy,
+            weights,
         } = input;
+        if crate::strategy::Strategy::parse(strategy).is_none() {
+            return Err(format!("unknown route strategy: {strategy}"));
+        }
         let mut tx = self.pool.begin().await.map_err(|e| e.to_string())?;
-        sqlx::query("UPDATE routes SET slug = ?, name = ?, description = ?, patterns = ?, is_default = ?, list_members = ?, enabled = ? WHERE id = ?").bind(slug).bind(name).bind(description).bind(serde_json::to_string(patterns).map_err(|e| e.to_string())?).bind(is_default).bind(list_members).bind(enabled).bind(id).execute(&mut *tx).await.map_err(|e| e.to_string())?;
+        sqlx::query("UPDATE routes SET slug = ?, name = ?, description = ?, patterns = ?, is_default = ?, list_members = ?, enabled = ?, strategy = ? WHERE id = ?").bind(slug).bind(name).bind(description).bind(serde_json::to_string(patterns).map_err(|e| e.to_string())?).bind(is_default).bind(list_members).bind(enabled).bind(strategy).bind(id).execute(&mut *tx).await.map_err(|e| e.to_string())?;
         sqlx::query("DELETE FROM route_candidates WHERE route_id = ?")
             .bind(id)
             .execute(&mut *tx)
             .await
             .map_err(|e| e.to_string())?;
         for (position, (provider, model)) in candidates.iter().enumerate() {
-            sqlx::query("INSERT INTO route_candidates (route_id, provider_id, model, position) VALUES (?, ?, ?, ?)").bind(id).bind(provider).bind(model).bind(position as i64).execute(&mut *tx).await.map_err(|e| e.to_string())?;
+            let weight = weights.get(position).copied().unwrap_or(1).clamp(1, 100);
+            sqlx::query("INSERT INTO route_candidates (route_id, provider_id, model, position, weight) VALUES (?, ?, ?, ?, ?)").bind(id).bind(provider).bind(model).bind(position as i64).bind(weight).execute(&mut *tx).await.map_err(|e| e.to_string())?;
         }
         tx.commit().await.map_err(|e| e.to_string())?;
         Ok(())

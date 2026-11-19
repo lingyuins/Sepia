@@ -30,6 +30,7 @@ pub struct AppState {
     pub secure_cookie: bool,
     pub metadata_source: String,
     pub plugins: crate::plugin::SharedRuntime,
+    pub routing_stats: std::sync::Arc<crate::strategy::RoutingStats>,
 }
 impl AppState {
     pub async fn for_testing(store: Store) -> Self {
@@ -45,6 +46,7 @@ impl AppState {
             secure_cookie: false,
             metadata_source: crate::metadata::DEFAULT_SOURCE.into(),
             plugins: crate::plugin::shared(crate::plugin::PluginRuntime::new().unwrap()),
+            routing_stats: crate::strategy::RoutingStats::shared(),
         }
     }
 }
@@ -537,6 +539,31 @@ pub async fn relay(
                 return error(StatusCode::BAD_GATEWAY, message);
             }
         };
+    // Plugin filters run first (they may exclude candidates); the built-in
+    // strategy orders the surviving list. `priority` keeps plugin output order.
+    let weights: Vec<i64> = route
+        .candidates
+        .iter()
+        .enumerate()
+        .filter(|(_, candidate)| candidates.contains(candidate))
+        .map(|(index, _)| route.weights.get(index).copied().unwrap_or(1))
+        .collect();
+    let candidates = crate::strategy::order(
+        &route.strategy,
+        route.id,
+        &candidates,
+        &weights,
+        &state.routing_stats,
+        &crate::strategy::OrderContext {
+            route_id: route.id,
+            prices: &snapshot.prices,
+            contexts: &snapshot.contexts,
+            estimated_tokens: crate::strategy::estimate_tokens(
+                request.system.as_deref(),
+                &request.messages,
+            ),
+        },
+    );
     let quota_model = route
         .candidates
         .first()
@@ -657,6 +684,7 @@ pub async fn relay(
                 };
                 attempts_used += 1;
                 let attempt_started = Instant::now();
+                state.routing_stats.enter(provider.id);
                 let encoded_body = crate::protocol::encode_request(*protocol, &request, model)
                     .unwrap_or_else(|_| json!({}));
                 let (out_body, out_headers) = match crate::plugin::rewrite_upstream(
@@ -694,9 +722,17 @@ pub async fn relay(
                     )
                     .await
                 };
+                state.routing_stats.leave(provider.id);
                 let response = match upstream {
                     Ok(response) => response,
                     Err(message) => {
+                        state.routing_stats.record(
+                            route.id,
+                            provider.id,
+                            model,
+                            false,
+                            attempt_started.elapsed().as_millis() as i64,
+                        );
                         state
                             .key_health
                             .lock()
@@ -728,6 +764,13 @@ pub async fn relay(
                     }
                 };
                 let first_byte_ms = attempt_started.elapsed().as_millis() as i64;
+                state.routing_stats.record(
+                    route.id,
+                    provider.id,
+                    model,
+                    response.status().is_success(),
+                    first_byte_ms,
+                );
                 if !response.status().is_success() {
                     let status = response.status();
                     let retry = status == StatusCode::TOO_MANY_REQUESTS

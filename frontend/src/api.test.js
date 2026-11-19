@@ -33,7 +33,22 @@ test('serializes editor data for the real management API', () => {
   const provider = mapProvider(remoteProvider)
   const route = mapRoute(remoteRoute, [provider])
   assert.deepEqual(providerInput(provider, [{ value: 'secret', models: null }]), { name: 'Local OpenAI', protocol: 'openai', endpoint: 'http://127.0.0.1:9000/v1', models: ['local-model'], secret: 'secret', secrets: ['secret'], key_models: [], group_id: 'official', enabled: true })
-  assert.deepEqual(routeInput(route, [provider]), { slug: 'chat', name: 'Chat route', description: 'Real description', patterns: ['chat-*'], is_default: true, list_members: true, enabled: true, candidates: [[7, 'local-model']] })
+  assert.deepEqual(routeInput(route, [provider]), { slug: 'chat', name: 'Chat route', description: 'Real description', patterns: ['chat-*'], is_default: true, list_members: true, enabled: true, candidates: [[7, 'local-model']], strategy: 'priority', weights: [1] })
+})
+
+test('round-trips strategy and per-candidate weights through the route API shapes', () => {
+  const provider = mapProvider(remoteProvider)
+  const remote = { ...remoteRoute, candidates: [[7, 'local-model'], [7, 'local-model']], strategy: 'weighted', weights: [70, 30] }
+  const route = mapRoute(remote, [provider])
+  assert.equal(route.strategy, 'weighted')
+  assert.deepEqual(route.candidates.map((candidate) => candidate.weight), [70, 30])
+  const input = routeInput(route, [provider])
+  assert.equal(input.strategy, 'weighted')
+  assert.deepEqual(input.weights, [70, 30])
+  // Legacy records without strategy/weights keep priority and unit weights.
+  const legacy = mapRoute(remoteRoute, [provider])
+  assert.equal(legacy.strategy, 'priority')
+  assert.deepEqual(routeInput(legacy, [provider]).weights, [1])
 })
 
 test('uses the first entered secret for discovery and retains additional keys', () => {

@@ -4,6 +4,7 @@ import { Area, AreaChart, Bar, BarChart, CartesianGrid, Cell, Pie, PieChart, Res
 import { useWorkspace, useTranslation } from '../workspace'
 import { chartTimeLabel } from '../analytics'
 import { ProviderCell, SectionHeading } from '../components/UI'
+import { strategyLabelKey } from '../route-strategy'
 
 const requestCount = (value: string) => {
   const normalized = value.toLowerCase().replace(/,/g, '')
@@ -40,7 +41,7 @@ export function AnalyticsView() {
   })
   const totalGroupRequests = groupTotals.reduce((sum, group) => sum + group.requests, 0)
   const groupData = groupTotals.map((group) => ({ ...group, share: totalGroupRequests ? group.requests / totalGroupRequests * 100 : 0 })).sort((a, b) => b.requests - a.requests)
-  const strategyLabel = (_value: string) => t('failover')
+  const strategyLabel = (value: string) => t(strategyLabelKey(value))
   const routeTotals = routes.map((route, index) => {
     const candidates = route.candidates?.length ? route.candidates.filter((candidate) => candidate.enabled) : [
       { provider: route.primary, model: route.primaryModel },
