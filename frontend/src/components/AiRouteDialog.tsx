@@ -8,7 +8,7 @@ import { filterGeneratedRoutes, generatedRouteRule, type GenerateResponse } from
 type GeneratedState = { routes: GenerateResponse['routes']; errors: string[]; batches: number; services: number }
 
 export function AiRouteDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
-  const { providers, routes, settings, run, notify } = useWorkspace()
+  const { providers, routes, settings, run, refresh, notify } = useWorkspace()
   const t = useTranslation()
   const [instruction, setInstruction] = useState('')
   const [batchSize, setBatchSize] = useState('10')
@@ -36,14 +36,27 @@ export function AiRouteDialog({ open, onClose }: { open: boolean; onClose: () =>
     const chosen = visible.filter((route) => selected.has(route.slug))
     if (!chosen.length) return
     setApplying(true)
+    const created: string[] = []
     try {
       await run(async () => {
-        for (const [index, route] of chosen.entries()) await api('/api/v1/routes', { method: 'POST', body: JSON.stringify(routeInput(generatedRouteRule(route, index), providers)) })
+        for (const [index, route] of chosen.entries()) {
+          await api('/api/v1/routes', { method: 'POST', body: JSON.stringify(routeInput(generatedRouteRule(route, index), providers)) })
+          created.push(route.slug)
+        }
       })
       notify(t('aiRoutesApplied', { count: chosen.length }))
       onClose()
-    } catch (cause) { notify(cause instanceof Error ? cause.message : String(cause)) }
-    finally { setApplying(false) }
+    } catch (cause) {
+      // Partial apply: refresh so the created routes are visible, then drop the
+      // already-created proposals so a retry only sends the remainder instead
+      // of re-creating old slugs.
+      if (created.length) {
+        setResult((current) => current && { ...current, routes: current.routes.filter((route) => !created.includes(route.slug)) })
+        setSelected((current) => new Set([...current].filter((slug) => !created.includes(slug))))
+      }
+      try { await refresh() } catch { /* Keep the original failure visible. */ }
+      notify(cause instanceof Error ? cause.message : String(cause))
+    } finally { setApplying(false) }
   }
   return <Modal open={open} onClose={onClose} title={t('aiGenerateTitle')} description={t('aiGenerateSubtitle')} size="route-dialog">
     <form className="ai-generate-form" onSubmit={generate}>

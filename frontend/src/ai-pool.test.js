@@ -48,6 +48,13 @@ test('generated routes drop unknown, disabled or unserved candidates', () => {
   assert.deepEqual(routes[0].candidates, [{ provider_id: 1, provider: 'Alpha', model: 'gpt-x' }])
 })
 
+test('generated routes rewrite stale provider names to the current name', () => {
+  const routes = filterGeneratedRoutes([proposal({ candidates: [{ provider_id: 1, provider: 'Alpha Old', model: 'gpt-x' }, { provider_id: 2, provider: 'Beta Renamed', model: 'gpt-x' }] })], providers, [])
+  assert.deepEqual(routes[0].candidates.map((candidate) => [candidate.provider_id, candidate.provider]), [[1, 'Alpha'], [2, 'Beta']])
+  // routeInput resolves candidates by provider name, so the rename must not break persistence.
+  assert.deepEqual(routeInput(generatedRouteRule(routes[0], 0), providers).candidates, [[1, 'gpt-x'], [2, 'gpt-x']])
+})
+
 test('generated routes drop empty proposals and duplicate slugs', () => {
   const routes = filterGeneratedRoutes([proposal(), proposal({ name: 'dup' }), proposal({ slug: 'all-dead', candidates: [{ provider_id: 3, provider: 'Gamma', model: 'gpt-x' }] })], providers, ['existing'])
   assert.deepEqual(routes.map((route) => route.slug), ['gpt-x'])

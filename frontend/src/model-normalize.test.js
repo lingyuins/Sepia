@@ -109,6 +109,13 @@ test('explicit mappings win over stripping and match dot-dash equivalently', () 
   assert.equal(dotDashKey('Claude-Opus-4-6'), 'claude.opus.4.6')
 })
 
+test('explicit mapping base keys generalize across hyphen-led suffixes', () => {
+  const rules = compileNormalizeRules({ explicitMappings: [{ variant: 'gpt-x-cc', canonical: 'gpt-x-plus' }] })
+  assert.equal(normalizeModelName('gpt-x-cc', rules), 'gpt-x-plus')
+  assert.equal(normalizeModelName('gpt-x-free', rules), 'gpt-x-plus')
+  assert.equal(normalizeModelName('dmxapi-gpt-x-latest', rules), 'gpt-x-plus')
+})
+
 test('empty rule lists fall back to builtins', () => {
   const rules = compileNormalizeRules({ routerPrefixes: [], functionalSuffixes: [], explicitMappings: [] })
   assert.deepEqual(rules.routerPrefixes, BUILTIN_ROUTER_PREFIXES)

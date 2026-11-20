@@ -264,7 +264,12 @@ async fn auth(
                 if admin_only && session.role != UserRole::Admin {
                     return error(StatusCode::FORBIDDEN, "administrator role required");
                 }
-                if !admin_only && !session.role.can_edit() {
+                // Passkey self-service: every role manages its own
+                // credentials (register/delete own passkeys).
+                let self_service = path.starts_with("/auth/passkey/register/")
+                    || path == "/passkeys"
+                    || path.starts_with("/passkeys/");
+                if !admin_only && !self_service && !session.role.can_edit() {
                     return error(StatusCode::FORBIDDEN, "read-only role");
                 }
             }
@@ -379,6 +384,8 @@ async fn sync_model_metadata(State(state): State<AppState>) -> Response {
         Ok(filled) => filled,
         Err(message) => return error(StatusCode::INTERNAL_SERVER_ERROR, message),
     };
+    // Prices/contexts feed cost-optimized and context-fit ordering.
+    let _ = state.snapshots.refresh(&state.store).await;
     let (_, fetched_at) = state.store.catalog_meta().await.unwrap_or((None, None));
     Json(json!({"count": entries.len(), "prices_filled": prices_filled, "source": source, "fetched_at": fetched_at}))
         .into_response()
@@ -730,8 +737,8 @@ async fn update_route(
                 list_members: input.list_members,
                 enabled: input.enabled,
                 candidates: &input.candidates,
-                strategy: input.strategy.as_deref().unwrap_or("priority"),
-                weights: input.weights.as_deref().unwrap_or_default(),
+                strategy: input.strategy.as_deref(),
+                weights: input.weights.as_deref(),
             },
         )
         .await
@@ -974,7 +981,10 @@ async fn set_price(State(state): State<AppState>, Json(input): Json<PriceInput>)
         )
         .await
     {
-        Ok(()) => StatusCode::OK.into_response(),
+        Ok(()) => {
+            let _ = state.snapshots.refresh(&state.store).await;
+            StatusCode::OK.into_response()
+        }
         Err(message) => error(StatusCode::BAD_REQUEST, message),
     }
 }

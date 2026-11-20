@@ -10,14 +10,19 @@ export type WorkflowRules = { routerPrefixes: string[]; functionalSuffixes: stri
 
 export type RulesFileResult = { ok: true; rules: WorkflowRules } | { ok: false; error: 'shape' | 'arrays' | 'entries' }
 
-// Unique, trimmed, sorted model names — the corpus an offline AI analyzes.
-export function buildModelNamesExport(names: string[], now: Date = new Date()): { exported_at: string; model_names: string[] } {
+// Trimmed, unique, non-empty model names; insertion order preserved.
+function uniqueModelNames(names: string[]): string[] {
   const seen = new Set<string>()
   for (const name of names) {
     const trimmed = name.trim()
     if (trimmed) seen.add(trimmed)
   }
-  return { exported_at: now.toISOString(), model_names: [...seen].sort() }
+  return [...seen]
+}
+
+// Unique, trimmed, sorted model names — the corpus an offline AI analyzes.
+export function buildModelNamesExport(names: string[], now: Date = new Date()): { exported_at: string; model_names: string[] } {
+  return { exported_at: now.toISOString(), model_names: uniqueModelNames(names).sort() }
 }
 
 export function modelChannelsFilename(now: Date = new Date()): string {
@@ -75,16 +80,13 @@ export function parseRulesFile(text: string): RulesFileResult {
 // preview: how many names normalize, how many distinct canonical names remain
 // and how many variants actually merged.
 export function candidateCoverage(names: string[], normalize: (name: string) => string): { input: number; canonical: number; merged: number } {
+  const unique = uniqueModelNames(names)
   const bases = new Map<string, number>()
-  let input = 0
-  for (const name of names) {
-    const trimmed = name.trim()
-    if (!trimmed) continue
-    input += 1
-    const base = normalize(trimmed)
+  for (const name of unique) {
+    const base = normalize(name)
     bases.set(base, (bases.get(base) ?? 0) + 1)
   }
   let merged = 0
   for (const count of bases.values()) if (count > 1) merged += count - 1
-  return { input, canonical: bases.size, merged }
+  return { input: unique.length, canonical: bases.size, merged }
 }

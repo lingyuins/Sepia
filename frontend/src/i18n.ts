@@ -921,6 +921,8 @@ export const translations = {
   aiPoolEnableDescription: ['Off by default. When enabled, AI tasks such as route generation run through the pool.', '默认关闭。启用后，AI 生成路由等 AI 任务将通过服务池执行。', 'デフォルトでは無効。有効にすると、ルート生成などの AI タスクがプール経由で実行されます。'],
   aiPoolDispatchNote: ['Tasks are split into batches and dispatched dynamically: each service takes new batches as its workers free up, bounded by its own concurrency. Failed batches are retried once, preferring another service.', '任务会按批次拆分并动态分配：每个服务的工作槽空闲后立即领取新批次，受各自并发数限制。失败批次会重试一次，并优先交给其他服务。', 'タスクはバッチに分割され動的に割り当てられます。各サービスはワーカーが空き次第新しいバッチを受け取り、それぞれの同時実行数で制限されます。失敗したバッチは別のサービスを優先して1回再試行されます。'],
   aiPoolAdminOnly: ['Only administrators can manage AI pool services.', '只有管理员可以管理 AI 服务池。', 'AI サービスプールを管理できるのは管理者のみです。'],
+  settingsAdminOnly: ['Only administrators can change these gateway settings. Your other preferences are still saved in this browser.', '只有管理员可以修改这些网关设置。其他偏好仍会保存在此浏览器中。', 'これらのゲートウェイ設定は管理者のみ変更できます。その他の設定はこのブラウザーに保存されます。'],
+  updateAdminOnly: ['Only administrators can check for and install updates.', '只有管理员可以检查并安装更新。', '更新の確認とインストールは管理者のみ実行できます。'],
   aiPoolServices: ['Pool services', '池内服务', 'プールサービス'],
   aiPoolServicesDescription: ['OpenAI-compatible services used for AI tasks. Keys are encrypted at rest and never shown again.', '用于 AI 任务的 OpenAI 兼容服务。密钥加密存储，保存后不再显示。', 'AI タスクに使用する OpenAI 互換サービス。キーは暗号化して保存され、再表示されません。'],
   aiPoolEmpty: ['No AI services yet. Add one to use AI generation.', '还没有 AI 服务。添加一个即可使用 AI 生成。', 'AI サービスがまだありません。追加すると AI 生成を使用できます。'],

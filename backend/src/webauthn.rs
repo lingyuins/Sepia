@@ -1,7 +1,7 @@
 use crate::{server::AppState, store::AdminSession};
 use axum::{
     Extension, Json, Router,
-    extract::{Path, State},
+    extract::{ConnectInfo, Path, State},
     http::{HeaderMap, StatusCode, header},
     response::{IntoResponse, Response},
     routing::{get, post},
@@ -29,7 +29,13 @@ fn core(headers: &HeaderMap) -> Result<WebauthnCore, String> {
         .get(header::HOST)
         .and_then(|value| value.to_str().ok())
         .ok_or("missing host header")?;
-    let rp_id = host.split(':').next().unwrap_or(host);
+    // Bracketed IPv6 authorities ([::1]:5000) keep their address; a plain
+    // host:port drops only the trailing port.
+    let rp_id = if let Some(rest) = host.strip_prefix('[') {
+        rest.split(']').next().unwrap_or(host)
+    } else {
+        host.split(':').next().unwrap_or(host)
+    };
     let mut origins = Vec::new();
     for candidate in [
         format!("http://{host}"),
@@ -208,7 +214,32 @@ async fn delete_passkey(
     }
 }
 
-pub(crate) async fn login_options(State(state): State<AppState>, headers: HeaderMap) -> Response {
+pub(crate) async fn login_options(
+    State(state): State<AppState>,
+    ConnectInfo(peer): ConnectInfo<std::net::SocketAddr>,
+    headers: HeaderMap,
+) -> Response {
+    // Public endpoint: cap challenge creation per client so it cannot be
+    // used to flood the challenge table.
+    {
+        use std::sync::{LazyLock, Mutex};
+        static HITS: LazyLock<
+            Mutex<std::collections::HashMap<std::net::IpAddr, (u32, std::time::Instant)>>,
+        > = LazyLock::new(|| Mutex::new(std::collections::HashMap::new()));
+        let mut hits = HITS.lock().unwrap();
+        let now = std::time::Instant::now();
+        hits.retain(|_, (_, started)| {
+            now.duration_since(*started) < std::time::Duration::from_secs(60)
+        });
+        let entry = hits.entry(peer.ip()).or_insert((0, now));
+        if entry.0 >= 30 {
+            return error(
+                StatusCode::TOO_MANY_REQUESTS,
+                "too many passkey login attempts",
+            );
+        }
+        entry.0 += 1;
+    }
     let wa = match core(&headers) {
         Ok(wa) => wa,
         Err(message) => return error(StatusCode::BAD_REQUEST, message),

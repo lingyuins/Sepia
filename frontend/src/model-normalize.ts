@@ -80,7 +80,10 @@ export function compileNormalizeRules(rules: NormalizeRulesInput = {}): Compiled
     if (!variant || !canonical) continue
     const fullKey = dotDashKey(stripPathAndRouterPrefix(variant, compiled.routerPrefixes))
     if (fullKey && !compiled.explicitFullByKey.has(fullKey)) compiled.explicitFullByKey.set(fullKey, canonical)
-    const baseKey = dotDashKey(stripFunctionalSuffixes(fullKey, compiled.functionalSuffixes))
+    // Suffixes such as -cc never match after dot-dashing turns '-' into '.', so
+    // strip from the plain path-stripped form and dot-dash afterwards, exactly
+    // like the lookup path in normalizeModelName.
+    const baseKey = dotDashKey(stripFunctionalSuffixes(stripPathAndRouterPrefix(variant, compiled.routerPrefixes), compiled.functionalSuffixes))
     if (baseKey && !compiled.explicitBaseByKey.has(baseKey)) compiled.explicitBaseByKey.set(baseKey, canonical)
   }
   return compiled

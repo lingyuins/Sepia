@@ -636,6 +636,12 @@ impl Store {
         user_id: Option<i64>,
         state: &str,
     ) -> Result<String, String> {
+        // Expired rows are never taken again; drop them so unauthenticated
+        // login-options calls cannot grow the table without bound.
+        let _ = sqlx::query("DELETE FROM webauthn_challenges WHERE expires_at < ?")
+            .bind(Utc::now().to_rfc3339())
+            .execute(&self.pool)
+            .await;
         let token = random_token("sepia_wa_");
         sqlx::query(
             "INSERT INTO webauthn_challenges (token_hash, kind, user_id, state, expires_at) VALUES (?, ?, ?, ?, ?)",

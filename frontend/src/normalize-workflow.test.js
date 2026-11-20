@@ -56,3 +56,10 @@ test('candidate coverage counts inputs, canonical names and merged variants', ()
   assert.deepEqual(coverage, { input: 4, canonical: 3, merged: 1 })
   assert.deepEqual(candidateCoverage([], () => 'x'), { input: 0, canonical: 0, merged: 0 })
 })
+
+test('candidate coverage deduplicates input names before counting merges', () => {
+  // Duplicate names across providers are not merges; identity rules merge nothing.
+  assert.deepEqual(candidateCoverage(['gpt-x', 'gpt-x', ' gpt-x ', 'gpt-y', 'gpt-y'], (name) => name), { input: 2, canonical: 2, merged: 0 })
+  // Real merging still counts once per distinct input name.
+  assert.deepEqual(candidateCoverage(['a-cc', 'a', 'a-cc', 'a'], (name) => name.replace(/-cc$/, '')), { input: 2, canonical: 1, merged: 1 })
+})

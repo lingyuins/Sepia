@@ -10,6 +10,10 @@ async fn main() -> Result<(), String> {
         .unwrap_or_else(default_data_directory);
     std::fs::create_dir_all(&directory)
         .map_err(|error| format!("data directory {}: {error}", directory.display()))?;
+    // An in-app update restart on Windows spawns this process while the parent
+    // still holds the listen port, so wait for the parent to exit before
+    // touching the database or the port.
+    await_handoff_parent();
     // A staged in-app update lives in the data directory, so it also takes
     // effect after container restarts where the image binary is read-only.
     if let Some((binary, frontend)) = sepia_gateway::self_update::handoff_target(&directory) {
@@ -95,4 +99,71 @@ async fn main() -> Result<(), String> {
     )
     .await
     .map_err(|e| e.to_string())
+}
+
+/// Waits for the process that spawned this one during a Windows in-app update
+/// restart, then clears the handoff variable so it cannot reach a later
+/// generation. On Unix the restart uses `exec`, which keeps the PID, so there
+/// is nothing to wait for.
+fn await_handoff_parent() {
+    let variable = sepia_gateway::self_update::HANDOFF_PARENT_PID_ENV;
+    let Some(parent) = std::env::var(variable)
+        .ok()
+        .and_then(|value| value.trim().parse::<u32>().ok())
+    else {
+        return;
+    };
+    // SAFETY: runs at the very start of `main`, before any application thread
+    // reads the environment; the variable is only an internal handoff signal.
+    unsafe { std::env::remove_var(variable) };
+    wait_for_process_exit(parent, std::time::Duration::from_secs(15));
+}
+
+#[cfg(windows)]
+fn wait_for_process_exit(pid: u32, limit: std::time::Duration) {
+    if pid == std::process::id() {
+        return;
+    }
+    let deadline = std::time::Instant::now() + limit;
+    while process_running(pid) && std::time::Instant::now() < deadline {
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+}
+
+#[cfg(not(windows))]
+fn wait_for_process_exit(_pid: u32, _limit: std::time::Duration) {}
+
+#[cfg(windows)]
+fn process_running(pid: u32) -> bool {
+    const SYNCHRONIZE: u32 = 0x0010_0000;
+    const WAIT_OBJECT_0: u32 = 0;
+    const WAIT_TIMEOUT: u32 = 0x102;
+
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        fn OpenProcess(
+            desired_access: u32,
+            inherit_handle: i32,
+            process_id: u32,
+        ) -> *mut core::ffi::c_void;
+        fn WaitForSingleObject(handle: *mut core::ffi::c_void, milliseconds: u32) -> u32;
+        fn CloseHandle(object: *mut core::ffi::c_void) -> i32;
+    }
+
+    // SAFETY: `pid` is the PID of the process that spawned us; the handle is
+    // closed before returning and never reused.
+    let handle = unsafe { OpenProcess(SYNCHRONIZE, 0, pid) };
+    if handle.is_null() {
+        // Gone, or not ours to open: either way it cannot hold the port.
+        return false;
+    }
+    let status = unsafe { WaitForSingleObject(handle, 0) };
+    // SAFETY: `handle` came from OpenProcess and is not used afterwards.
+    unsafe { CloseHandle(handle) };
+    match status {
+        WAIT_OBJECT_0 => false,
+        WAIT_TIMEOUT => true,
+        // WAIT_FAILED and anything unexpected must not hang startup.
+        _ => false,
+    }
 }

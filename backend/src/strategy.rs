@@ -107,6 +107,17 @@ impl RoutingStats {
         }
     }
 
+    /// RAII inflight slot: held until the upstream response is fully
+    /// consumed (JSON body or SSE stream end), released on every early
+    /// return and on client disconnect.
+    pub fn inflight_slot(self: &Arc<Self>, provider_id: i64) -> InflightGuard {
+        self.enter(provider_id);
+        InflightGuard {
+            stats: Arc::clone(self),
+            provider_id,
+        }
+    }
+
     /// Records a finished attempt: latency EWMA for every outcome, sticky
     /// last-good only on success.
     pub fn record(
@@ -164,6 +175,17 @@ impl RoutingStats {
 
     fn last_good(&self, route_id: i64) -> Option<(i64, String)> {
         self.inner.lock().unwrap().last_good.get(&route_id).cloned()
+    }
+}
+
+pub struct InflightGuard {
+    stats: Arc<RoutingStats>,
+    provider_id: i64,
+}
+
+impl Drop for InflightGuard {
+    fn drop(&mut self) {
+        self.stats.leave(self.provider_id);
     }
 }
 
@@ -289,7 +311,10 @@ fn order_with(
         }
         Strategy::ContextFit => {
             // 0 = known to fit (smallest window wins), 1 = unknown, 2 = too small.
-            let bucket = |model: &str| match context.contexts.get(model) {
+            // Snapshot contexts are keyed by bare model id (metadata sync);
+            // candidates may carry router prefixes or variant suffixes.
+            let bucket = |model: &str| match context.contexts.get(&crate::metadata::bare_id(model))
+            {
                 Some(window) if *window >= context.estimated_tokens => (0, *window),
                 Some(_) => (2, 0),
                 None => (1, 0),
@@ -521,5 +546,58 @@ mod tests {
         };
         assert_eq!(estimate_tokens(Some("abcd"), &[message]), 4);
         assert_eq!(estimate_tokens(None, &[]), 1);
+    }
+
+    #[test]
+    fn inflight_slot_releases_on_drop_and_early_return() {
+        let stats = RoutingStats::shared();
+        {
+            let _slot = stats.inflight_slot(5);
+            assert_eq!(stats.inflight(5), 1);
+            let _second = stats.inflight_slot(5);
+            assert_eq!(stats.inflight(5), 2);
+        }
+        assert_eq!(stats.inflight(5), 0);
+        fn early_return(stats: &Arc<RoutingStats>) -> Result<(), ()> {
+            let _slot = stats.inflight_slot(6);
+            Err(())
+        }
+        assert!(early_return(&stats).is_err());
+        assert_eq!(stats.inflight(6), 0);
+    }
+
+    #[test]
+    fn context_fit_matches_prefixed_candidates_by_bare_id() {
+        let stats = RoutingStats::default();
+        let mut contexts_map = HashMap::new();
+        contexts_map.insert("a".to_string(), 200_000);
+        contexts_map.insert("b".to_string(), 8_000);
+        contexts_map.insert("c".to_string(), 50);
+        let context = OrderContext {
+            contexts: &contexts_map,
+            estimated_tokens: 100,
+            ..context()
+        };
+        let prefixed = vec![
+            (1, "vendor/a".to_string()),
+            (2, "router-b".to_string()),
+            (3, "c".to_string()),
+            (4, "d".to_string()),
+        ];
+        let ordered = order_with(
+            Strategy::ContextFit,
+            7,
+            &prefixed,
+            &[1, 1, 1, 1],
+            &stats,
+            &context,
+            &mut StdRng::seed_from_u64(0),
+        );
+        // vendor/a resolves to the known large window; router-b stays unknown
+        // (bare_id only strips vendor prefixes, not router prefixes).
+        assert_eq!(ordered[0].1, "vendor/a");
+        assert_eq!(ordered[1].1, "router-b");
+        assert_eq!(ordered[2].1, "d");
+        assert_eq!(ordered[3].1, "c");
     }
 }

@@ -376,4 +376,27 @@ async fn strategy_and_weights_round_trip_through_management_api() {
     let route = &routes.as_array().unwrap()[0];
     assert_eq!(route["strategy"], "least-used");
     assert_eq!(route["weights"], json!([1, 100]));
+
+    // A partial update without strategy/weights keeps the stored values;
+    // reordered candidates keep their weights by identity, new ones get 1.
+    let partial = client
+        .put(url(&format!("/api/v1/routes/{route_id}")))
+        .header("cookie", &cookie)
+        .json(&json!({"slug":"chat","name":"chat renamed","description":"","patterns":["chat"],"candidates":json!([[provider_id,"m-two"],[provider_id,"m-one"]]),"enabled":true}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(partial.status(), 200);
+    let routes: Value = client
+        .get(url("/api/v1/routes"))
+        .header("cookie", &cookie)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let route = &routes.as_array().unwrap()[0];
+    assert_eq!(route["strategy"], "least-used");
+    assert_eq!(route["weights"], json!([100, 1]));
 }

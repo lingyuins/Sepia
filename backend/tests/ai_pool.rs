@@ -436,12 +436,23 @@ async fn generation_dispatches_batches_dynamically_and_retries_failures() {
         assert_eq!(route["candidates"][0]["provider"], "relay");
     }
 
-    // Dynamic allocation: the fast service handled strictly more batches than
-    // the slow one, and every model was generated exactly once. The slow
-    // service's two failures were retried on the fast one, so it saw at most
-    // its initial two batches.
-    let fast_count = fast_hits.lock().unwrap().len();
-    let slow_count = slow_hits.lock().unwrap().len();
+    // Dynamic allocation: every batch must reach the service it was assigned
+    // to (hits record the service's own model), the fast service handled
+    // strictly more batches, and every model was generated exactly once. The
+    // slow service's two failures were retried on the fast one, so it saw at
+    // most its initial two batches.
+    let fast_hits = fast_hits.lock().unwrap().clone();
+    let slow_hits = slow_hits.lock().unwrap().clone();
+    assert!(
+        fast_hits.iter().all(|hit| hit.model == "planner-fast"),
+        "fast service received another service's batches: {fast_hits:?}"
+    );
+    assert!(
+        slow_hits.iter().all(|hit| hit.model == "planner-slow"),
+        "slow service received another service's batches: {slow_hits:?}"
+    );
+    let fast_count = fast_hits.len();
+    let slow_count = slow_hits.len();
     assert!(fast_count >= 6, "fast={fast_count}");
     assert!(slow_count <= 2, "slow={slow_count}");
     let mut generated: Vec<String> = routes

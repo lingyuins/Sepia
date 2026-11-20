@@ -308,6 +308,33 @@ async fn stage_release_verifies_checksum_and_stages_binary_and_frontend() {
 }
 
 #[tokio::test]
+async fn staging_a_second_release_replaces_the_marker() {
+    // The second in-app update used to fail on Windows because publishing the
+    // marker with `rename` cannot replace the existing current.json there.
+    let client = reqwest::Client::new();
+    let directory = tempfile::tempdir().unwrap();
+    for offset in [1u64, 2] {
+        let mut version = current_version();
+        version.minor += offset;
+        let release = MockRelease::new(&version.to_string(), b"binary", b"<html>", None);
+        let source_address = mock_release_server(release.clone()).await;
+        let base = format!("http://{source_address}");
+        let parsed = self_update::parse_release(&release.body(&base)).unwrap();
+        self_update::stage_release(&client, directory.path(), &parsed)
+            .await
+            .unwrap();
+        let marker = read_marker(directory.path()).unwrap();
+        assert_eq!(marker.version, version.to_string());
+    }
+    let leftovers = std::fs::read_dir(updates_directory(directory.path()))
+        .unwrap()
+        .filter_map(|entry| entry.ok())
+        .filter(|entry| entry.file_name().to_string_lossy().starts_with(".current-"))
+        .count();
+    assert_eq!(leftovers, 0, "temporary marker files must not survive");
+}
+
+#[tokio::test]
 async fn stage_release_rejects_a_checksum_mismatch_without_staging() {
     let version = newer_version();
     let release = MockRelease::new(&version, b"binary", b"<html>", Some(&"0".repeat(64)));

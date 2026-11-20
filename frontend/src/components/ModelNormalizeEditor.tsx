@@ -50,6 +50,9 @@ export default function ModelNormalizeEditor({ prefixes, suffixes, mappings, onC
     downloadFile(modelChannelsFilename(), JSON.stringify(buildModelNamesExport(names), null, 2))
   }
   const importFile = async (file: File) => {
+    // Drop any previous preview first: a failed import must never leave a
+    // stale rule set that Apply could still write.
+    setImported(null)
     const result = parseRulesFile(await file.text())
     if (!result.ok) {
       notify(t(result.error === 'shape' ? 'normalizeImportShape' : result.error === 'arrays' ? 'normalizeImportArrays' : 'normalizeImportEntries'))

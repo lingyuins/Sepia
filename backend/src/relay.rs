@@ -199,6 +199,8 @@ pub async fn json_response(
 }
 pub struct StreamContext {
     pub store: Store,
+    pub routing_stats: std::sync::Arc<crate::strategy::RoutingStats>,
+    pub route_id: i64,
     pub request_id: String,
     pub provider_id: i64,
     pub provider_key_id: i64,
@@ -206,6 +208,9 @@ pub struct StreamContext {
     pub guard: crate::lifecycle::RequestGuard,
     pub started: Instant,
     pub first_byte_ms: i64,
+    /// Inflight slot held for the whole stream; dropped at stream end or on
+    /// client disconnect (the stream is dropped mid-flight).
+    pub inflight: Option<crate::strategy::InflightGuard>,
     pub log_bodies: bool,
     pub inbound_protocol: Protocol,
     pub response_context: Option<crate::responses::ResponseContext>,
@@ -231,9 +236,15 @@ pub fn stream_response(
     outbound: Protocol,
     response: reqwest::Response,
     start: StreamEvent,
-    context: StreamContext,
+    mut context: StreamContext,
 ) -> Response<Body> {
+    let routing_stats = context.routing_stats.clone();
+    let route_id = context.route_id;
+    let provider_id = context.provider_id;
+    let model = context.model.clone();
+    let first_byte_ms = context.first_byte_ms;
     let stream = async_stream::stream! {
+        let _inflight = context.inflight.take();
         let mut buffer = Vec::new();
         let mut responses = match inbound {
             crate::server::InboundProtocol::OpenAIResponses => match &start {
@@ -313,6 +324,9 @@ pub fn stream_response(
             yield Ok(encode(&inbound, &[StreamEvent::Stop(crate::protocol::FinishReason::Other)], &mut responses));
         }
         let status = if stopped && !failed { "success" } else { "failed" };
+        // Sticky/latency telemetry only once the stream actually finished;
+        // headers alone never marked this candidate successful.
+        routing_stats.record(route_id, provider_id, &model, stopped && !failed, first_byte_ms);
         let mut response = crate::protocol::ChatResponse::from_content(context.request_id.clone(), context.model.clone(), recorded_content, if stopped && !failed { terminal_reason.unwrap_or(crate::protocol::FinishReason::Stop) } else { crate::protocol::FinishReason::Other }, usage.0, usage.1);
         response.cached_tokens = usage.2;
         response.reasoning_tokens = usage.3;

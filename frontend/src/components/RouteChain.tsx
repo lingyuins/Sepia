@@ -10,18 +10,23 @@ export function RouteChain({ route, latestRequest, compact = false }: { route: R
   const t = useTranslation()
   const { providers } = useWorkspace()
   const candidates = routeDisplayCandidates(route)
-  const [attempts, setAttempts] = useState<AttemptRecord[]>([])
+  const [attempts, setAttempts] = useState<{ requestId: string; records: AttemptRecord[] } | null>(null)
   useEffect(() => {
-    if (!latestRequest) { setAttempts([]); return }
+    if (!latestRequest) { setAttempts(null); return }
+    const requestId = latestRequest.id
     let cancelled = false
-    api<ApiAttempt[]>(`/api/v1/requests/${latestRequest.id}/attempts`)
-      .then((records) => { if (!cancelled) setAttempts(records.map(mapAttempt)) })
-      .catch(() => { if (!cancelled) setAttempts([]) })
+    setAttempts(null)
+    api<ApiAttempt[]>(`/api/v1/requests/${requestId}/attempts`)
+      .then((records) => { if (!cancelled) setAttempts({ requestId, records: records.map(mapAttempt) }) })
+      .catch(() => { if (!cancelled) setAttempts({ requestId, records: [] }) })
     return () => { cancelled = true }
   }, [latestRequest?.id])
+  // Hops belong to one request: never show the previous request's badges while
+  // the next request's attempts are still loading.
+  const hopAttempts = latestRequest && attempts?.requestId === latestRequest.id ? attempts.records : []
   const hopSummary = (providerName: string, model: string) => {
     const providerId = providers.find((provider) => provider.name === providerName)?.id
-    const hops = attempts.filter((attempt) => attempt.providerId === providerId && attempt.model === model)
+    const hops = hopAttempts.filter((attempt) => attempt.providerId === providerId && attempt.model === model)
     if (!hops.length) return null
     const succeeded = hops.some((attempt) => attempt.status === 'success' || attempt.status === 'streaming')
     const retried = hops.some((attempt) => attempt.status === 'retry')

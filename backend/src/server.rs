@@ -541,12 +541,18 @@ pub async fn relay(
         };
     // Plugin filters run first (they may exclude candidates); the built-in
     // strategy orders the surviving list. `priority` keeps plugin output order.
-    let weights: Vec<i64> = route
-        .candidates
+    // Weights follow candidate identity, not position: plugins may reorder
+    // the surviving list, so each candidate keeps its saved weight.
+    let weights: Vec<i64> = candidates
         .iter()
-        .enumerate()
-        .filter(|(_, candidate)| candidates.contains(candidate))
-        .map(|(index, _)| route.weights.get(index).copied().unwrap_or(1))
+        .map(|candidate| {
+            route
+                .candidates
+                .iter()
+                .position(|saved| saved == candidate)
+                .and_then(|index| route.weights.get(index).copied())
+                .unwrap_or(1)
+        })
         .collect();
     let candidates = crate::strategy::order(
         &route.strategy,
@@ -684,7 +690,7 @@ pub async fn relay(
                 };
                 attempts_used += 1;
                 let attempt_started = Instant::now();
-                state.routing_stats.enter(provider.id);
+                let inflight = state.routing_stats.inflight_slot(provider.id);
                 let encoded_body = crate::protocol::encode_request(*protocol, &request, model)
                     .unwrap_or_else(|_| json!({}));
                 let (out_body, out_headers) = match crate::plugin::rewrite_upstream(
@@ -722,7 +728,6 @@ pub async fn relay(
                     )
                     .await
                 };
-                state.routing_stats.leave(provider.id);
                 let response = match upstream {
                     Ok(response) => response,
                     Err(message) => {
@@ -764,13 +769,11 @@ pub async fn relay(
                     }
                 };
                 let first_byte_ms = attempt_started.elapsed().as_millis() as i64;
-                state.routing_stats.record(
-                    route.id,
-                    provider.id,
-                    model,
-                    response.status().is_success(),
-                    first_byte_ms,
-                );
+                if !response.status().is_success() {
+                    state
+                        .routing_stats
+                        .record(route.id, provider.id, model, false, first_byte_ms);
+                }
                 if !response.status().is_success() {
                     let status = response.status();
                     let retry = status == StatusCode::TOO_MANY_REQUESTS
@@ -868,6 +871,8 @@ pub async fn relay(
                         start,
                         crate::relay::StreamContext {
                             store: state.store.clone(),
+                            routing_stats: state.routing_stats.clone(),
+                            route_id: route.id,
                             request_id,
                             provider_id: provider.id,
                             provider_key_id: key_id,
@@ -875,6 +880,7 @@ pub async fn relay(
                             guard,
                             started,
                             first_byte_ms,
+                            inflight: Some(inflight),
                             log_bodies: snapshot.log_bodies,
                             inbound_protocol,
                             response_context,
@@ -887,6 +893,13 @@ pub async fn relay(
                 let value = match response.json().await {
                     Ok(value) => value,
                     Err(_) => {
+                        state.routing_stats.record(
+                            route.id,
+                            provider.id,
+                            model,
+                            false,
+                            first_byte_ms,
+                        );
                         if let Some(response) = record_attempt(
                             &state,
                             crate::observability::NewAttempt {
@@ -914,6 +927,13 @@ pub async fn relay(
                 let value = match crate::plugin::rewrite_response(&state, model, &value).await {
                     Ok(value) => value,
                     Err(message) => {
+                        state.routing_stats.record(
+                            route.id,
+                            provider.id,
+                            model,
+                            false,
+                            first_byte_ms,
+                        );
                         let _ = guard.complete("failed", 0, 0, 0).await;
                         return error(StatusCode::BAD_GATEWAY, message);
                     }
@@ -921,12 +941,24 @@ pub async fn relay(
                 let decoded: ChatResponse = match decode_response(*protocol, value) {
                     Ok(response) => response,
                     Err(_) => {
+                        state.routing_stats.record(
+                            route.id,
+                            provider.id,
+                            model,
+                            false,
+                            first_byte_ms,
+                        );
                         if !last_leg {
                             continue 'legs;
                         }
                         continue;
                     }
                 };
+                // Success telemetry only after the body decoded: headers alone
+                // must not mark the candidate healthy or sticky.
+                state
+                    .routing_stats
+                    .record(route.id, provider.id, model, true, first_byte_ms);
                 let _ = state
                     .store
                     .set_request_details(

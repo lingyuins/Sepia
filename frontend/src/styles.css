@@ -301,7 +301,8 @@ kbd { font-family: inherit; }
 .protocol-label { color: var(--text-muted); font-size: 12px; }
 
 /* Scalable routing workspace */
-.route-list-toolbar .search-field { width: 360px; }
+.route-list-search { padding: 14px 18px; border-bottom: 1px solid var(--border); }
+.route-list-search .search-field { min-width: 0; }
 .route-workspace { display: grid; grid-template-columns: 300px minmax(0, 1fr); gap: 20px; align-items: start; }
 .route-list { overflow: hidden; }
 .route-list-heading { display: flex; align-items: center; justify-content: space-between; padding: 17px 18px; border-bottom: 1px solid var(--border); }
@@ -1039,8 +1040,7 @@ kbd { font-family: inherit; }
   .panel-heading .segmented { margin-left: auto; }
   .chart-legend { gap: 12px; }
   .chart-legend strong { display: none; }
-  .route-list-toolbar { align-items: flex-start; flex-direction: column; }
-  .route-list-toolbar .search-field { width: 100%; min-width: 0; }
+  .route-list-search { padding: 12px 14px; }
   .route-detail-head { gap: 10px; }
   .route-detail-title h2 { font-size: 18px; }
   .route-detail-foot { flex-wrap: wrap; }
@@ -1086,6 +1086,8 @@ kbd { font-family: inherit; }
 }
 .setting-note { display: flex; align-items: center; gap: 6px; color: var(--text-secondary); font-size: 12px; line-height: 1.7; margin-top: 4px; }
 .setting-note svg { flex-shrink: 0; }
+.settings-readonly-group { min-width: 0; margin: 0; padding: 0; border: 0; }
+.settings-readonly-group:disabled { opacity: .6; }
 .update-error { color: var(--danger); overflow-wrap: anywhere; }
 .release-notes { margin: 14px 0 0; padding: 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface-recessed); color: var(--text); font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', monospace; font-size: 12px; line-height: 1.7; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 320px; overflow: auto; }
 .settings-card .release-notes + .text-button { margin-top: 10px; }

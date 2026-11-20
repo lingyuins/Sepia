@@ -80,6 +80,16 @@ struct Part {
     content_type: Option<String>,
     bytes: Vec<u8>,
 }
+impl Payload {
+    /// Wire size of the outbound body, for the context-fit token estimate.
+    fn size(&self) -> usize {
+        match self {
+            Payload::None => 0,
+            Payload::Raw { bytes, .. } => bytes.len(),
+            Payload::Parts(parts) => parts.iter().map(|part| part.bytes.len()).sum(),
+        }
+    }
+}
 struct TaskRow {
     provider_id: i64,
     provider_key_id: Option<i64>,
@@ -685,7 +695,7 @@ async fn forward(
                     route_id: route.id,
                     prices: &snapshot.prices,
                     contexts: &snapshot.contexts,
-                    estimated_tokens: ((prepared.log_request.len() as i64 + 3) / 4).max(1),
+                    estimated_tokens: ((prepared.payload.size() as i64 + 3) / 4).max(1),
                 },
             );
             ordered
@@ -810,14 +820,22 @@ async fn forward(
             };
             attempts_used += 1;
             let attempt_started = Instant::now();
-            state.routing_stats.enter(provider.id);
+            let _inflight = state.routing_stats.inflight_slot(provider.id);
             let upstream = build_request(&state, provider, &secret, &prepared)
                 .send()
                 .await;
-            state.routing_stats.leave(provider.id);
             let response = match upstream {
                 Ok(response) => response,
                 Err(_) => {
+                    if let Some(route) = route {
+                        state.routing_stats.record(
+                            route.id,
+                            provider.id,
+                            model,
+                            false,
+                            attempt_started.elapsed().as_millis() as i64,
+                        );
+                    }
                     state
                         .key_health
                         .lock()
@@ -847,14 +865,12 @@ async fn forward(
             };
             let first_byte_ms = attempt_started.elapsed().as_millis() as i64;
             let status = response.status();
-            if let Some(route) = route {
-                state.routing_stats.record(
-                    route.id,
-                    provider.id,
-                    model,
-                    status.is_success(),
-                    first_byte_ms,
-                );
+            if !status.is_success()
+                && let Some(route) = route
+            {
+                state
+                    .routing_stats
+                    .record(route.id, provider.id, model, false, first_byte_ms);
             }
             let content_type = response
                 .headers()
@@ -928,6 +944,15 @@ async fn forward(
             let bytes = match response.bytes().await {
                 Ok(bytes) => bytes.to_vec(),
                 Err(_) => {
+                    if let Some(route) = route {
+                        state.routing_stats.record(
+                            route.id,
+                            provider.id,
+                            model,
+                            false,
+                            first_byte_ms,
+                        );
+                    }
                     if let Some(response) = record_attempt(
                         &state,
                         crate::observability::NewAttempt {
@@ -949,6 +974,11 @@ async fn forward(
                     continue 'candidates;
                 }
             };
+            if let Some(route) = route {
+                state
+                    .routing_stats
+                    .record(route.id, provider.id, model, true, first_byte_ms);
+            }
             let value: Option<Value> = serde_json::from_slice(&bytes).ok();
             let (input_tokens, output_tokens) = value.as_ref().map(usage_tokens).unwrap_or((0, 0));
             let _ = state
@@ -1034,4 +1064,52 @@ async fn record_attempt(
             "observability unavailable",
         )
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn context_fit_estimate_uses_wire_payload_not_log_text() {
+        // GET polls carry no body and an empty log string; the estimate must
+        // still floor at 1 instead of collapsing to the empty-log length.
+        let poll = Prepared {
+            path: "videos/task".into(),
+            suno: false,
+            get: true,
+            payload: Payload::None,
+            model: None,
+            task_kind: None,
+            required_task: Some("task".into()),
+            lookup_task: None,
+            log_request: String::new(),
+        };
+        assert_eq!(poll.payload.size(), 0);
+        assert_eq!(((poll.payload.size() as i64 + 3) / 4).max(1), 1);
+
+        let body = Bytes::from_static(b"{\"model\":\"m\",\"input\":\"0123456789ab\"}");
+        let prepared = raw_prepared("embeddings", None, body.clone());
+        assert_eq!(prepared.payload.size(), body.len());
+        assert_eq!(
+            ((prepared.payload.size() as i64 + 3) / 4).max(1),
+            ((body.len() as i64 + 3) / 4).max(1)
+        );
+
+        let parts = Payload::Parts(vec![
+            Part {
+                name: "file".into(),
+                file_name: Some("a.bin".into()),
+                content_type: None,
+                bytes: vec![0; 100],
+            },
+            Part {
+                name: "model".into(),
+                file_name: None,
+                content_type: None,
+                bytes: vec![0; 8],
+            },
+        ]);
+        assert_eq!(parts.size(), 108);
+    }
 }

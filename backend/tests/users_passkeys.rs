@@ -335,6 +335,23 @@ async fn roles_enforce_admin_editor_viewer_boundaries() {
         .unwrap();
     assert_eq!(viewer_users.status(), 403);
 
+    // Viewer may manage its own passkeys (self-service), but nothing else.
+    let viewer_passkey_options = client
+        .post(format!("{base}/api/v1/auth/passkey/register/options"))
+        .header("cookie", &viewer)
+        .json(&json!({}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(viewer_passkey_options.status(), 200);
+    let viewer_passkeys = client
+        .get(format!("{base}/api/v1/passkeys"))
+        .header("cookie", &viewer)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(viewer_passkeys.status(), 200);
+
     // Editor: ordinary management allowed, admin-only surfaces rejected.
     let editor_route = client
         .post(format!("{base}/api/v1/routes"))

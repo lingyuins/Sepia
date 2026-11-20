@@ -18,6 +18,10 @@ const MAX_SHA_BYTES: u64 = 4 * 1024;
 const MAX_ARCHIVE_BYTES: u64 = 512 * 1024 * 1024;
 const MAX_ENTRY_BYTES: u64 = 512 * 1024 * 1024;
 const MAX_EXTRACTED_BYTES: u64 = 1024 * 1024 * 1024;
+/// Parent PID handed to the child spawned by a Windows in-app update restart.
+/// The child waits for the parent to exit before binding the listen port, so
+/// the handoff cannot lose a bind race against the process it replaces.
+pub const HANDOFF_PARENT_PID_ENV: &str = "SEPIA_HANDOFF_PARENT_PID";
 static APPLY_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 pub fn current_version() -> semver::Version {
@@ -213,8 +217,70 @@ fn write_marker(data_directory: &Path, version: &str) -> Result<(), String> {
         serde_json::to_vec(&marker).map_err(|error| error.to_string())?,
     )
     .map_err(|error| format!("update marker: {error}"))?;
-    std::fs::rename(&temporary, marker_path(data_directory))
-        .map_err(|error| format!("update marker: {error}"))
+    replace_file(&temporary, &marker_path(data_directory))
+}
+
+/// Publish `source` at `destination`, replacing any existing file. On Unix
+/// `rename` already replaces atomically; on Windows `rename` fails when the
+/// destination exists, so the swap goes through `ReplaceFileW`.
+fn replace_file(source: &Path, destination: &Path) -> Result<(), String> {
+    #[cfg(windows)]
+    {
+        let replacing = destination.exists();
+        if replacing && windows_replace_file(source, destination).is_ok() {
+            return Ok(());
+        }
+        if replacing {
+            // ReplaceFileW also fails on filesystems that lack its support
+            // (some network shares), so fall back to the working pair.
+            std::fs::remove_file(destination).map_err(|error| format!("update marker: {error}"))?;
+        }
+    }
+    std::fs::rename(source, destination).map_err(|error| format!("update marker: {error}"))
+}
+
+/// `kernel32!ReplaceFileW` replaces `destination` with `source` in one
+/// operation, deleting the old file and keeping its attributes.
+#[cfg(windows)]
+fn windows_replace_file(source: &Path, destination: &Path) -> Result<(), String> {
+    use std::os::windows::ffi::OsStrExt;
+
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        fn ReplaceFileW(
+            replaced_file_name: *const u16,
+            replacement_file_name: *const u16,
+            backup_file_name: *const u16,
+            replace_flags: u32,
+            exclude: *mut core::ffi::c_void,
+            reserved: *mut core::ffi::c_void,
+        ) -> i32;
+    }
+
+    fn wide(path: &Path) -> Vec<u16> {
+        let mut units: Vec<u16> = path.as_os_str().encode_wide().collect();
+        units.push(0);
+        units
+    }
+
+    let replaced = wide(destination);
+    let replacement = wide(source);
+    // SAFETY: both arguments are NUL-terminated UTF-16 buffers that outlive the
+    // call, no backup file is requested and the reserved pointers are NULL.
+    let replaced_ok = unsafe {
+        ReplaceFileW(
+            replaced.as_ptr(),
+            replacement.as_ptr(),
+            std::ptr::null(),
+            0,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+        )
+    };
+    if replaced_ok == 0 {
+        return Err(std::io::Error::last_os_error().to_string());
+    }
+    Ok(())
 }
 
 /// Staged update newer than the running binary, if any. An older marker means
@@ -242,7 +308,8 @@ pub fn handoff_target(data_directory: &Path) -> Option<(PathBuf, PathBuf)> {
 }
 /// Replace the current process with the staged binary. On Unix `exec` keeps
 /// the PID (required for container PID 1); on Windows the child is spawned and
-/// the parent exits. Only returns on failure.
+/// the parent exits, so the child waits for the parent to release the listen
+/// port before it binds. Only returns on failure.
 pub fn restart_process(binary: &Path, frontend_directory: &Path) -> Result<(), String> {
     let mut command = std::process::Command::new(binary);
     command
@@ -256,6 +323,9 @@ pub fn restart_process(binary: &Path, frontend_directory: &Path) -> Result<(), S
     }
     #[cfg(windows)]
     {
+        // The child binds the same listen address, so it must wait for this
+        // process to exit and release the port before it starts listening.
+        command.env(HANDOFF_PARENT_PID_ENV, std::process::id().to_string());
         command
             .spawn()
             .map_err(|error| format!("spawn {}: {error}", binary.display()))?;
@@ -565,6 +635,24 @@ mod tests {
         );
         assert!(safe_relative_path(Path::new("/etc/passwd"), prefix).is_err());
         assert!(safe_relative_path(Path::new("other-package/bin/sepia-gateway"), prefix).is_err());
+    }
+
+    #[test]
+    fn write_marker_replaces_an_existing_marker() {
+        let directory = tempfile::tempdir().unwrap();
+        write_marker(directory.path(), "9.8.7").unwrap();
+        assert_eq!(read_marker(directory.path()).unwrap().version, "9.8.7");
+        // A second update rewrites current.json in place. `rename` cannot
+        // replace an existing file on Windows, so this is the regression: the
+        // second in-app update used to fail while the first one succeeded.
+        write_marker(directory.path(), "9.8.8").unwrap();
+        assert_eq!(read_marker(directory.path()).unwrap().version, "9.8.8");
+        let leftovers = std::fs::read_dir(updates_directory(directory.path()))
+            .unwrap()
+            .filter_map(|entry| entry.ok())
+            .filter(|entry| entry.file_name().to_string_lossy().starts_with(".current-"))
+            .count();
+        assert_eq!(leftovers, 0, "temporary marker files must not survive");
     }
 
     #[test]

@@ -63,7 +63,7 @@ export function PasskeySection() {
 }
 
 export function UserManagementSection() {
-  const { session, notify } = useWorkspace()
+  const { session, notify, checkGateway, logout } = useWorkspace()
   const t = useTranslation()
   const [users, setUsers] = useState<ConsoleUser[]>([])
   const [username, setUsername] = useState('')
@@ -87,8 +87,15 @@ export function UserManagementSection() {
     } catch (cause) { notify(cause instanceof Error ? cause.message : String(cause)) }
     finally { setBusy(false) }
   }
-  const changeRole = async (id: number, next: UserRole) => {
-    try { await api(`/api/v1/users/${id}/role`, { method: 'POST', body: JSON.stringify({ role: next }) }); await load(); notify(t('userRoleUpdated')) }
+  const changeRole = async (user: ConsoleUser, next: UserRole) => {
+    try {
+      await api(`/api/v1/users/${user.id}/role`, { method: 'POST', body: JSON.stringify({ role: next }) })
+      await load()
+      // Changing your own role makes the cached session stale (menu, admin-only
+      // actions); refresh it from the gateway before reporting success.
+      if (session?.username === user.username) await checkGateway()
+      notify(t('userRoleUpdated'))
+    }
     catch (cause) { notify(cause instanceof Error ? cause.message : String(cause)) }
   }
   const resetPassword = async (id: number) => {
@@ -99,7 +106,14 @@ export function UserManagementSection() {
   }
   const removeUser = async (user: ConsoleUser) => {
     if (!window.confirm(t('userDeleteConfirm', { name: user.username }))) return
-    try { await api(`/api/v1/users/${user.id}`, { method: 'DELETE' }); await load(); notify(t('userRemoved')) }
+    try {
+      await api(`/api/v1/users/${user.id}`, { method: 'DELETE' })
+      // Deleting your own account ends the session: go back to the login gate
+      // instead of leaving a stale console session behind.
+      if (session?.username === user.username) { await logout(); return }
+      await load()
+      notify(t('userRemoved'))
+    }
     catch (cause) { notify(cause instanceof Error ? cause.message : String(cause)) }
   }
   return <section className="settings-card glass-panel">
@@ -107,7 +121,7 @@ export function UserManagementSection() {
     {users.map((user) => <div className="api-key-row user-row" key={user.id}>
       <span className="key-icon"><UserRound size={17} /></span>
       <div><strong>{user.username}{session?.username === user.username && <span className="user-self-badge">{t('you')}</span>}</strong><span>{t('userCreatedAt', { date: formatDate(user.created_at) })}</span></div>
-      <Dropdown label={t('role')} value={user.role} options={roleOptions} onChange={(value) => void changeRole(user.id, value as UserRole)} variant="compact" />
+      <Dropdown label={t('role')} value={user.role} options={roleOptions} onChange={(value) => void changeRole(user, value as UserRole)} variant="compact" />
       <button type="button" className="icon-button" onClick={() => void resetPassword(user.id)} aria-label={t('userResetPassword')} title={t('userResetPassword')}><KeyRound size={15} /></button>
       <button type="button" className="icon-button danger-icon" onClick={() => void removeUser(user)} aria-label={t('deleteNamed', { name: user.username })}><Trash2 size={15} /></button>
     </div>)}

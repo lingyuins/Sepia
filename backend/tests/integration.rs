@@ -78,8 +78,8 @@ async fn provider_and_route_updates_round_trip_and_analytics_are_real() {
                 list_members: true,
                 enabled: true,
                 candidates: &[(provider.id, "two".into())],
-                strategy: "priority",
-                weights: &[],
+                strategy: Some("priority"),
+                weights: Some(&[]),
             },
         )
         .await

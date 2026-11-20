@@ -348,3 +348,77 @@ async fn failing_chat_candidate_fails_over_to_responses_only_upstream() {
     assert_eq!(attempts[1].status, "retry");
     assert_eq!(attempts[2].status, "success");
 }
+
+/// SSE upstream that sends one delta then closes WITHOUT a stop frame or
+/// [DONE]: the stream is a failure, so routing telemetry must not mark the
+/// candidate healthy/sticky and the attempt must be recorded as failed.
+async fn truncated_sse_upstream() -> SocketAddr {
+    serve(Router::new().fallback(post(|| async {
+        axum::response::Response::builder()
+            .header("content-type", "text/event-stream")
+            .body(axum::body::Body::from(
+                "data: {\"id\":\"chatcmpl-1\",\"object\":\"chat.completion.chunk\",\"model\":\"upstream-model\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"partial\"}}]}\n\n",
+            ))
+            .unwrap()
+    })))
+    .await
+}
+
+#[tokio::test]
+async fn truncated_stream_is_failed_not_sticky_success() {
+    let upstream = truncated_sse_upstream().await;
+    let directory = tempfile::tempdir().unwrap();
+    let store = Store::connect(&directory.path().join("truncated.db"))
+        .await
+        .unwrap();
+    let provider_id = provider(&store, "truncating", ProviderProtocol::OpenAI, upstream).await;
+    let route = store
+        .create_route(NewRoute {
+            slug: "chat".into(),
+            name: "chat".into(),
+            description: String::new(),
+            patterns: vec!["chat".into()],
+            provider_id,
+            model: "upstream-model".into(),
+            is_default: true,
+            list_members: true,
+            candidates: vec![(provider_id, "upstream-model".into())],
+        })
+        .await
+        .unwrap();
+    store
+        .set_route_strategy(route.id, "sticky", &[])
+        .await
+        .unwrap();
+    let key = store
+        .create_client_key(UpsertClientKey {
+            name: "test".into(),
+            models: vec!["*".into()],
+            token_limit: 0,
+            max_amount_micros: 0,
+            rpm: 0,
+            tpm: 0,
+            expires_at: None,
+        })
+        .await
+        .unwrap()
+        .plaintext;
+    let state = AppState::for_testing(store.clone()).await;
+    let address = serve(app(state.clone())).await;
+    let response = reqwest::Client::new()
+        .post(format!("http://{address}/v1/chat/completions"))
+        .bearer_auth(&key)
+        .json(&json!({"model":"chat","stream":true,"messages":[{"role":"user","content":"Hello"}]}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 200);
+    // Consume the whole SSE body so the stream's terminal handling runs.
+    let body = response.text().await.unwrap();
+    assert!(body.contains("partial"), "{body}");
+    let requests = store.requests().await.unwrap();
+    assert_eq!(requests[0].status, "failed");
+    let attempts = store.attempts(&requests[0].id).await.unwrap();
+    assert_eq!(attempts.len(), 1);
+    assert_eq!(attempts[0].status, "failed");
+}

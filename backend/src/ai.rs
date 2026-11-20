@@ -663,7 +663,7 @@ pub async fn generate_routes(
     enum WorkerEvent {
         Ready(usize),
         Outcome {
-            worker: usize,
+            service: usize,
             index: usize,
             content: Arc<str>,
             attempts: usize,
@@ -687,11 +687,17 @@ pub async fn generate_routes(
         .collect();
     let (event_tx, mut event_rx) = tokio::sync::mpsc::unbounded_channel::<WorkerEvent>();
     let mut assignment_txs = Vec::new();
+    let mut worker_services: Vec<usize> = Vec::new();
     let mut workers = tokio::task::JoinSet::new();
     for (service_index, (service, secret)) in active.iter().enumerate() {
         for _ in 0..service.concurrency {
+            // Channels are indexed by global worker id, never by service
+            // index: several workers share one service, and the scheduler
+            // must hand each ready worker its own channel.
+            let worker_id = assignment_txs.len();
             let (assign_tx, mut assign_rx) = tokio::sync::mpsc::unbounded_channel::<Assignment>();
             assignment_txs.push(assign_tx);
+            worker_services.push(service_index);
             let events = event_tx.clone();
             let client = state.http.clone();
             let endpoint = service.endpoint.clone();
@@ -699,7 +705,7 @@ pub async fn generate_routes(
             let timeout = service.timeout_seconds;
             let secret = secret.clone();
             workers.spawn(async move {
-                while events.send(WorkerEvent::Ready(service_index)).is_ok() {
+                while events.send(WorkerEvent::Ready(worker_id)).is_ok() {
                     let Some(Assignment { batch }) = assign_rx.recv().await else {
                         break;
                     };
@@ -708,7 +714,7 @@ pub async fn generate_routes(
                             .await
                             .and_then(|text| parse_proposals(&text));
                     let sent = events.send(WorkerEvent::Outcome {
-                        worker: service_index,
+                        service: service_index,
                         index: batch.index,
                         content: batch.content,
                         attempts: batch.attempts,
@@ -728,7 +734,7 @@ pub async fn generate_routes(
     let mut in_flight = 0usize;
     let mut ready_workers: VecDeque<usize> = VecDeque::new();
     let eligible = |batch: &Batch, worker: usize| {
-        batch.failed_service != Some(worker)
+        batch.failed_service != Some(worker_services[worker])
             || batch
                 .requeued_at
                 .is_some_and(|at| at.elapsed() >= REROUTE_GRACE)
@@ -780,11 +786,12 @@ pub async fn generate_routes(
         match event {
             Some(WorkerEvent::Ready(worker)) => ready_workers.push_back(worker),
             Some(WorkerEvent::Outcome {
-                worker,
+                service,
                 index,
                 content,
                 attempts,
                 result,
+                ..
             }) => {
                 in_flight -= 1;
                 match result {
@@ -798,7 +805,7 @@ pub async fn generate_routes(
                                 index,
                                 content,
                                 attempts: attempts + 1,
-                                failed_service: Some(worker),
+                                failed_service: Some(service),
                                 requeued_at: Some(std::time::Instant::now()),
                             });
                         } else {

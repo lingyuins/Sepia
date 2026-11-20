@@ -107,9 +107,13 @@ export function filterGeneratedRoutes(routes: GeneratedRoute[], providers: { id:
   const result: GeneratedRoute[] = []
   for (const route of routes) {
     if (slugs.has(route.slug)) continue
-    const candidates = route.candidates.filter((candidate) => {
+    // Generated candidates carry the provider name from generation time; a
+    // rename would make routeInput resolve by a stale name, so rewrite it from
+    // the current provider record while filtering.
+    const candidates = route.candidates.flatMap((candidate) => {
       const provider = providers.find((item) => item.id === candidate.provider_id)
-      return !!provider && provider.enabled && provider.modelsList.includes(candidate.model)
+      if (!provider || !provider.enabled || !provider.modelsList.includes(candidate.model)) return []
+      return [{ ...candidate, provider: provider.name }]
     })
     if (!candidates.length) continue
     slugs.add(route.slug)

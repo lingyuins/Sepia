@@ -259,7 +259,7 @@ impl Store {
                 continue;
             };
             // nanos/token → micros/token is ×1000 (1 micro = 1000 nanos);
-            // sub-micro prices round to 0 and stay unset.
+            // non-positive or missing reference prices stay unset.
             let input_micros = input_nanos * 1000;
             let output_micros = output_nanos * 1000;
             if input_micros <= 0 || output_micros <= 0 {
