@@ -128,32 +128,56 @@ jobs:
 
   docker:
     needs: verify
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            platform: linux/amd64
+            arch: amd64
+          - os: ubuntu-24.04-arm
+            platform: linux/arm64
+            arch: arm64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: docker/setup-buildx-action@v4
+      - name: Build container natively without publishing
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          platforms: ${{ matrix.platform }}
+          tags: sepia:smoke
+          outputs: type=docker,dest=/tmp/sepia-${{ matrix.arch }}.tar
+          cache-from: type=gha,scope=sepia-${{ matrix.arch }}
+          cache-to: type=gha,scope=sepia-${{ matrix.arch }},mode=max
+          provenance: false
+          sbom: false
+      - uses: actions/upload-artifact@v7
+        with:
+          name: docker-${{ matrix.arch }}
+          path: /tmp/sepia-${{ matrix.arch }}.tar
+          if-no-files-found: error
+          retention-days: 1
+
+  docker-publish:
+    needs: docker
     runs-on: ubuntu-24.04
     permissions:
       contents: read
       packages: write
     steps:
       - uses: actions/checkout@v6
-      - uses: docker/setup-qemu-action@v4
       - uses: docker/setup-buildx-action@v4
-      - name: Build both container architectures without publishing
-        uses: docker/build-push-action@v7
+      - uses: actions/download-artifact@v8
         with:
-          context: .
-          platforms: linux/amd64,linux/arm64
-          outputs: type=image,push=false
-          cache-from: type=gha,scope=sepia
-          cache-to: type=gha,scope=sepia,mode=max
-          provenance: false
-          sbom: false
+          pattern: docker-*
+          path: /tmp/docker-images
+          merge-multiple: true
       - name: Load AMD64 container for smoke testing
-        uses: docker/build-push-action@v7
-        with:
-          context: .
-          platforms: linux/amd64
-          tags: sepia:smoke
-          load: true
-          cache-from: type=gha,scope=sepia
+        run: |
+          docker load --input /tmp/docker-images/sepia-amd64.tar
+          docker tag sepia:smoke sepia:smoke-amd64
       - name: Verify container persistence and wrong-key rejection
         shell: bash
         run: |
@@ -255,23 +279,70 @@ jobs:
             type=raw,value=${{ github.ref_name }}
             type=semver,pattern={{version}},value=${{ github.ref_name }}
             type=raw,value=latest
-      - name: Publish both architectures to both registries
+      - name: Push both architecture images to both registries
         if: github.ref_type == 'tag'
-        uses: docker/build-push-action@v7
-        with:
-          context: .
-          platforms: linux/amd64,linux/arm64
-          push: true
-          tags: ${{ steps.metadata.outputs.tags }}
-          labels: ${{ steps.metadata.outputs.labels }}
-          cache-from: type=gha,scope=sepia
-          cache-to: type=gha,scope=sepia,mode=max
-          provenance: true
-          sbom: true
+        id: push
+        shell: bash
+        run: |
+          set -euo pipefail
+          ghcr="ghcr.io/${GITHUB_REPOSITORY,,}"
+          hub="${DOCKERHUB_USERNAME}/sepia"
+          declare -A digests
+          for arch in amd64 arm64; do
+            docker load --input "/tmp/docker-images/sepia-${arch}.tar"
+            docker tag "sepia:smoke" "sepia:smoke-${arch}"
+            for repo in "$ghcr" "$hub"; do
+              ref="$repo:build-${GITHUB_SHA::12}-${arch}"
+              docker tag "sepia:smoke-${arch}" "$ref"
+              docker push "$ref"
+              digest=$(docker buildx imagetools inspect "$ref" --format '{{.Manifest.Digest}}')
+              if [[ ! "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+                echo "Unexpected digest for $ref: $digest" >&2
+                exit 1
+              fi
+              digests["${repo}|${arch}"]="$digest"
+            done
+          done
+          {
+            echo "ghcr_amd64=${digests["$ghcr|amd64"]}"
+            echo "ghcr_arm64=${digests["$ghcr|arm64"]}"
+            echo "hub_amd64=${digests["$hub|amd64"]}"
+            echo "hub_arm64=${digests["$hub|arm64"]}"
+          } >>"$GITHUB_OUTPUT"
+        env:
+          DOCKERHUB_USERNAME: ${{ vars.DOCKERHUB_USERNAME }}
+      - name: Create multi-architecture manifests
+        if: github.ref_type == 'tag'
+        shell: bash
+        run: |
+          set -euo pipefail
+          ghcr="ghcr.io/${GITHUB_REPOSITORY,,}"
+          hub="${DOCKERHUB_USERNAME}/sepia"
+          tags="$METADATA_TAGS"
+          for repo in "$ghcr" "$hub"; do
+            if [[ "$repo" == "$ghcr" ]]; then
+              amd64="${{ steps.push.outputs.ghcr_amd64 }}"
+              arm64="${{ steps.push.outputs.ghcr_arm64 }}"
+            else
+              amd64="${{ steps.push.outputs.hub_amd64 }}"
+              arm64="${{ steps.push.outputs.hub_arm64 }}"
+            fi
+            while IFS= read -r tag; do
+              [[ -n "$tag" ]] || continue
+              docker buildx imagetools create \
+                --annotation "index:org.opencontainers.image.source=https://github.com/${GITHUB_REPOSITORY}" \
+                --annotation "index:org.opencontainers.image.revision=${GITHUB_SHA}" \
+                --tag "$tag" \
+                "$repo@$amd64" "$repo@$arm64"
+            done <<<"$tags"
+          done
+        env:
+          DOCKERHUB_USERNAME: ${{ vars.DOCKERHUB_USERNAME }}
+          METADATA_TAGS: ${{ steps.metadata.outputs.tags }}
 
   release:
     if: github.ref_type == 'tag'
-    needs: [native, docker]
+    needs: [native, docker-publish]
     runs-on: ubuntu-24.04
     permissions:
       contents: write

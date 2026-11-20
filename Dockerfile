@@ -3,9 +3,11 @@
 FROM node:24-bookworm-slim AS frontend
 WORKDIR /build
 COPY frontend/package.json frontend/package-lock.json frontend/
-RUN npm ci --prefix frontend
+RUN --mount=type=cache,id=sepia-npm-${TARGETPLATFORM},target=/root/.npm \
+    npm ci --prefix frontend
 COPY frontend/ frontend/
-RUN npm run build --prefix frontend
+RUN --mount=type=cache,id=sepia-vite-${TARGETPLATFORM},target=/build/frontend/node_modules/.vite \
+    npm run build --prefix frontend
 
 FROM rust:bookworm AS backend
 WORKDIR /build
@@ -13,8 +15,12 @@ COPY backend/Cargo.toml backend/Cargo.lock backend/
 COPY backend/migrations/ backend/migrations/
 COPY backend/src/ backend/src/
 ARG TARGETPLATFORM
-RUN echo "Building gateway for ${TARGETPLATFORM}" \
-    && cargo build --release --locked --manifest-path backend/Cargo.toml
+RUN --mount=type=cache,id=sepia-cargo-registry-${TARGETPLATFORM},target=/usr/local/cargo/registry \
+    --mount=type=cache,id=sepia-cargo-target-${TARGETPLATFORM},target=/build/backend/target \
+    echo "Building gateway for ${TARGETPLATFORM}" \
+    && cargo build --release --locked --manifest-path backend/Cargo.toml \
+    && mkdir -p /out \
+    && cp backend/target/release/sepia-gateway /out/sepia-gateway
 
 FROM debian:bookworm-slim
 RUN apt-get update \
@@ -24,7 +30,7 @@ RUN apt-get update \
     && useradd --uid 10001 --gid 10001 --no-create-home sepia \
     && mkdir -p /data /opt/sepia \
     && chown 10001:10001 /data
-COPY --from=backend /build/backend/target/release/sepia-gateway /usr/local/bin/sepia-gateway
+COPY --from=backend /out/sepia-gateway /usr/local/bin/sepia-gateway
 COPY --from=frontend /build/frontend/dist/ /opt/sepia/frontend/dist/
 COPY LICENSE /opt/sepia/LICENSE
 ENV SEPIA_DATA_DIR=/data \
