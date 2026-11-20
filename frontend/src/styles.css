@@ -414,8 +414,11 @@ kbd { font-family: inherit; }
 .search-results > p { padding: 15px 10px; color: var(--text-secondary); font-size: 13px; }
 .search-footer { display: flex; gap: 20px; padding: 12px 16px; border-top: 1px solid var(--border); color: var(--text-muted); font-size: 12px; }
 .search-footer kbd { color: var(--text-secondary); margin-right: 4px; }
-.request-details { margin-top: 20px; }
-.request-details > div { display: flex; align-items: center; justify-content: space-between; gap: 20px; padding: 12px 0; border-bottom: 1px solid var(--border); font-size: 13px; }
+.request-details { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); column-gap: 28px; margin-top: 20px; }
+.request-details > div { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 0; border-bottom: 1px solid var(--border); font-size: 13px; }
+.request-details > div.request-detail-wide { grid-column: 1 / -1; flex-direction: column; align-items: flex-start; justify-content: flex-start; gap: 6px; }
+.request-details > div.request-detail-wide dd { justify-content: flex-start; text-align: left; }
+@media (max-width: 560px) { .request-details { grid-template-columns: 1fr; } }
 .request-details dt { color: var(--text-muted); }
 .request-details dd { display: flex; align-items: center; justify-content: flex-end; gap: 6px; margin: 0; color: var(--text); overflow-wrap: anywhere; text-align: right; }
 .toast { position: fixed; bottom: 24px; left: calc(50% + 112px); transform: translateX(-50%); z-index: 150; display: flex; align-items: center; gap: 10px; max-width: calc(100vw - 32px); padding: 13px 15px; border: 1px solid var(--accent-border); border-radius: 9px; background: var(--panel-solid); color: var(--text); box-shadow: 0 10px 32px #00000033; font-size: 13px; animation: toast-in .18s ease-out; }

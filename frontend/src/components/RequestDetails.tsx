@@ -61,14 +61,14 @@ export function RequestDetails({ request }: { request: RequestRecord }) {
   const t = useTranslation()
   return <>
     <dl className="request-details">
-      <div><dt>{t('requestId')}</dt><dd>{request.id}</dd></div>
+      <div className="request-detail-wide"><dt>{t('requestId')}</dt><dd>{request.id}</dd></div>
       <div><dt>{t('time')}</dt><dd>{request.time}</dd></div>
       <div><dt>{t('model')}</dt><dd>{request.model}</dd></div>
       <div><dt>{t('provider')}</dt><dd><ProviderCell name={request.provider} /></dd></div>
       <div><dt>{t('route')}</dt><dd>{request.route}</dd></div>
       <div><dt>{t('apiKey')}</dt><dd>{request.key}</dd></div>
       {request.clientIp && <div><dt>{t('clientIp')}</dt><dd className="mono">{request.clientIp}</dd></div>}
-      <div><dt>{t('tokensDetail')}</dt><dd>{t('inputOutput', { input: request.inputTokens.toLocaleString(), output: request.outputTokens.toLocaleString() })}</dd></div>
+      <div className="request-detail-wide"><dt>{t('tokensDetail')}</dt><dd>{t('inputOutput', { input: request.inputTokens.toLocaleString(), output: request.outputTokens.toLocaleString() })}</dd></div>
       <div><dt>{t('totalTokens')}</dt><dd>{(request.inputTokens + request.outputTokens).toLocaleString()}</dd></div>
       <div><dt>{t('cachedTokens')}</dt><dd>{request.cachedTokens.toLocaleString()} · {cacheHitRate(request)}</dd></div>
       <div><dt>{t('reasoningTokens')}</dt><dd>{request.reasoningTokens.toLocaleString()}</dd></div>
