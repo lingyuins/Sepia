@@ -45,6 +45,19 @@ async fn keystore_marker_rejects_a_changed_master_key() {
 }
 
 #[test]
+fn volatile_mock_keyring_is_rejected_instead_of_generating_a_lost_key() {
+    // Simulates platforms without a compiled-in keyring backend (Linux
+    // containers): the crate silently falls back to this in-memory store.
+    keyring::set_default_credential_builder(keyring::mock::default_credential_builder());
+    let error = match KeyStore::production() {
+        Ok(_) => panic!("volatile mock keyring accepted"),
+        Err(error) => error,
+    };
+    assert!(error.contains("no persistent OS keyring"), "{error}");
+    assert!(error.contains("SEPIA_MASTER_KEY"), "{error}");
+}
+
+#[test]
 fn native_protocol_credentials_validate_version_and_transport() {
     let mut headers = HeaderMap::new();
     headers.insert("x-goog-api-key", HeaderValue::from_static("header-key"));

@@ -43,8 +43,25 @@ impl KeyStore {
         Ok(Self::from_master(master))
     }
     pub fn production() -> Result<Self, String> {
-        let entry =
-            keyring::Entry::new("dev.sepia.gateway", "master-key").map_err(|e| e.to_string())?;
+        Self::from_keyring(
+            keyring::Entry::new("dev.sepia.gateway", "master-key").map_err(|e| e.to_string())?,
+        )
+    }
+    fn from_keyring(entry: keyring::Entry) -> Result<Self, String> {
+        // The keyring crate falls back to an in-memory mock store when no
+        // platform backend is compiled in (e.g. Linux containers). A key
+        // written there vanishes on restart while the database keeps its
+        // continuity marker, bricking the next startup. Refuse up front.
+        if entry
+            .get_credential()
+            .downcast_ref::<keyring::mock::MockCredential>()
+            .is_some()
+        {
+            return Err(
+                "no persistent OS keyring is available on this platform; set SEPIA_MASTER_KEY to a Base64-encoded 32-byte key (containers must always set it)"
+                    .into(),
+            );
+        }
         match entry.get_password() {
             Ok(encoded) => {
                 let bytes = BASE64.decode(encoded).map_err(|e| e.to_string())?;
