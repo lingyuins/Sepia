@@ -6,7 +6,7 @@ Rust/Axum service for native OpenAI, Anthropic and Gemini text APIs plus OpenAI-
 
 - Rust stable (verified with 1.99.1)
 - Windows: Visual Studio Build Tools with the C++ workload; run Cargo from a Visual Studio Developer Command Prompt
-- Production: an available operating-system keyring (Windows/macOS), or an explicit `SEPIA_MASTER_KEY` (required in containers/Linux, which have no persistent keyring)
+- Production: an operating-system keyring (Windows/macOS), an explicit `SEPIA_MASTER_KEY`, or the auto-generated `master-key` file in the data directory (platforms without a persistent keyring, e.g. Linux/containers)
 
 ## Run
 
@@ -21,7 +21,7 @@ Useful environment variables:
 - `SEPIA_DATA_DIR`: database and bootstrap-token directory
 - `SEPIA_LISTEN`: listen address
 - `SEPIA_BOOTSTRAP_TOKEN`: explicit token for automation
-- `SEPIA_MASTER_KEY`: Base64-encoded 32-byte master key; takes precedence over the OS keyring and cannot be rotated; required when no persistent OS keyring exists (containers)
+- `SEPIA_MASTER_KEY`: Base64-encoded 32-byte master key; takes precedence over the OS keyring and the data-directory key file and cannot be rotated; optional (without a persistent keyring the key is auto-generated and persisted to `<data dir>/master-key`)
 - `SEPIA_FRONTEND_DIR`: optional absolute console build directory; containers use `/opt/sepia/frontend/dist`
 - `SEPIA_HTTP_LOOPBACK_COOKIE=true`: only for local HTTP access to a container published on loopback at `0.0.0.0:5000`; remove for remote/LAN deployment
 - `SEPIA_TRUSTED_PROXY=true`: required for non-loopback listening; TLS is terminated by a trusted proxy
@@ -30,7 +30,7 @@ Useful environment variables:
 
 The service serves `frontend/dist/` as a same-origin SPA when built. Run `npm run build --prefix frontend` and start the gateway from the repository root before using the production UI. At startup the console path is resolved before the process changes to `SEPIA_DATA_DIR`: an existing working-directory `frontend/dist` wins, otherwise packaged `bin/sepia-gateway` resolves the sibling package-root `frontend/dist`. `SEPIA_FRONTEND_DIR` overrides both. The root `Dockerfile` embeds migrations in the release binary, serves `/opt/sepia/frontend/dist`, and stores runtime state in `/data`.
 
-Provider keys are AES-GCM encrypted with an OS-keyring master key (Windows Credential Manager / macOS Keychain via the keyring crate's native backends), or with explicit `SEPIA_MASTER_KEY` when supplied. When no persistent keyring backend exists (e.g. Linux containers, where the keyring crate would silently fall back to an in-memory mock store) and `SEPIA_MASTER_KEY` is unset, startup fails immediately instead of generating a key that is lost on restart. Migration `0008_keystore_metadata.sql` stores an encrypted check value on first startup; later startups reject a different master key before listening rather than failing later during upstream-key decryption. Invalid Base64 and non-32-byte keys fail immediately.
+Provider keys are AES-GCM encrypted with an OS-keyring master key (Windows Credential Manager / macOS Keychain via the keyring crate's native backends), or with explicit `SEPIA_MASTER_KEY` when supplied. When no persistent keyring backend exists (e.g. Linux containers, where the keyring crate would silently fall back to an in-memory mock store) and `SEPIA_MASTER_KEY` is unset, the master key is generated once and persisted to `<data dir>/master-key` (0600 on Unix) so restarts keep working; key and data then share one trust boundary. Migration `0008_keystore_metadata.sql` stores an encrypted check value on first startup; later startups reject a different master key before listening rather than failing later during upstream-key decryption. Invalid Base64 and non-32-byte keys fail immediately.
 
 ## API surfaces
 

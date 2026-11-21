@@ -44,7 +44,10 @@ async fn main() -> Result<(), String> {
             KeyStore::at(&directory.join("development-master-key"))
                 .map_err(|error| format!("development keystore: {error}"))?
         } else {
-            KeyStore::production_with_override(std::env::var("SEPIA_MASTER_KEY").ok().as_deref())?
+            KeyStore::production_with_override(
+                std::env::var("SEPIA_MASTER_KEY").ok().as_deref(),
+                &directory,
+            )?
         };
     let store = sepia_gateway::Store::connect(&directory.join("sepia.db"))
         .await

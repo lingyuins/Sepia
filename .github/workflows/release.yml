@@ -244,6 +244,47 @@ jobs:
             echo 'Container log exposed the master key' >&2
             exit 1
           fi
+      - name: Verify bare container run keeps its generated master key
+        shell: bash
+        run: |
+          set -euo pipefail
+          volume=$(docker volume create)
+          container=
+          cleanup() {
+            if [[ -n "$container" ]]; then
+              docker rm -f "$container" >/dev/null 2>&1 || true
+            fi
+            docker volume rm "$volume" >/dev/null 2>&1 || true
+          }
+          trap cleanup EXIT
+          container=$(docker run -d --name sepia-bare-smoke -e SEPIA_BOOTSTRAP_TOKEN=bare-smoke -p 127.0.0.1:15001:5000 -v "$volume:/data" sepia:smoke)
+          ready=false
+          for _ in {1..60}; do
+            if [[ "$(curl -fsS http://127.0.0.1:15001/api/v1/auth/status 2>/dev/null || true)" == '{"initialized":false}' ]]; then
+              ready=true
+              break
+            fi
+            if [[ "$(docker inspect -f '{{.State.Running}}' "$container")" != true ]]; then
+              break
+            fi
+            sleep 1
+          done
+          if [[ "$ready" != true ]]; then
+            docker logs "$container"
+            exit 1
+          fi
+          docker exec "$container" test -s /data/master-key
+          curl -fsS -X POST http://127.0.0.1:15001/api/v1/auth/bootstrap -H 'Content-Type: application/json' -d '{"username":"admin","password":"bare-smoke-password","token":"bare-smoke"}' | grep -F '"initialized":true' >/dev/null
+          docker rm -f "$container" >/dev/null
+          container=$(docker run -d --name sepia-bare-smoke -e SEPIA_BOOTSTRAP_TOKEN=bare-smoke -p 127.0.0.1:15001:5000 -v "$volume:/data" sepia:smoke)
+          for _ in {1..60}; do
+            if [[ "$(curl -fsS http://127.0.0.1:15001/api/v1/auth/status 2>/dev/null || true)" == '{"initialized":true}' ]]; then
+              break
+            fi
+            sleep 1
+          done
+          [[ "$(curl -fsS http://127.0.0.1:15001/api/v1/auth/status)" == '{"initialized":true}' ]]
+          curl -fsS -X POST http://127.0.0.1:15001/api/v1/auth/login -H 'Content-Type: application/json' -d '{"username":"admin","password":"bare-smoke-password"}' | grep -F '"authenticated":true' >/dev/null
       - name: Log in to GitHub Container Registry
         if: github.ref_type == 'tag'
         uses: docker/login-action@v4

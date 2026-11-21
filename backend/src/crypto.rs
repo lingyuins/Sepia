@@ -42,25 +42,26 @@ impl KeyStore {
         }
         Ok(Self::from_master(master))
     }
-    pub fn production() -> Result<Self, String> {
+    pub fn production(data_directory: &Path) -> Result<Self, String> {
         Self::from_keyring(
             keyring::Entry::new("dev.sepia.gateway", "master-key").map_err(|e| e.to_string())?,
+            data_directory,
         )
     }
-    fn from_keyring(entry: keyring::Entry) -> Result<Self, String> {
+    fn from_keyring(entry: keyring::Entry, data_directory: &Path) -> Result<Self, String> {
         // The keyring crate falls back to an in-memory mock store when no
         // platform backend is compiled in (e.g. Linux containers). A key
         // written there vanishes on restart while the database keeps its
-        // continuity marker, bricking the next startup. Refuse up front.
+        // continuity marker. Persist it in the data directory instead so
+        // container restarts keep working without SEPIA_MASTER_KEY; the
+        // key then lives beside the data it protects (same trust boundary
+        // as the volume). An explicit SEPIA_MASTER_KEY keeps them separate.
         if entry
             .get_credential()
             .downcast_ref::<keyring::mock::MockCredential>()
             .is_some()
         {
-            return Err(
-                "no persistent OS keyring is available on this platform; set SEPIA_MASTER_KEY to a Base64-encoded 32-byte key (containers must always set it)"
-                    .into(),
-            );
+            return Self::at(&data_directory.join("master-key"));
         }
         match entry.get_password() {
             Ok(encoded) => {
@@ -82,9 +83,12 @@ impl KeyStore {
             Err(error) => Err(format!("OS keyring unavailable: {error}")),
         }
     }
-    pub fn production_with_override(encoded: Option<&str>) -> Result<Self, String> {
+    pub fn production_with_override(
+        encoded: Option<&str>,
+        data_directory: &Path,
+    ) -> Result<Self, String> {
         let Some(encoded) = encoded else {
-            return Self::production();
+            return Self::production(data_directory);
         };
         let bytes = BASE64
             .decode(encoded)

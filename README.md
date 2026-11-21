@@ -112,7 +112,7 @@ curl http://127.0.0.1:5000/api/v1/auth/status
 
 打开 [http://127.0.0.1:5000](http://127.0.0.1:5000)，按页面显示的初始化令牌设置至少 8 位的管理员密码并完成登录。命名卷 `sepia-data` 在容器替换后保留数据库与初始化状态。
 
-也可以直接运行镜像（版本标签示例：`ghcr.io/lingyuins/sepia:v0.1.2`、`lingyuins/sepia:0.1.2`）：
+也可以直接运行镜像（版本标签示例：`ghcr.io/lingyuins/sepia:v0.1.3`、`lingyuins/sepia:0.1.3`）：
 
 ```sh
 docker pull ghcr.io/lingyuins/sepia:latest
@@ -164,7 +164,7 @@ GitHub Release 为 Windows x64、macOS Intel、macOS Apple Silicon、Linux x64 �
 
 ### Docker 存储与安全
 
-Compose 将端口仅绑定到本机回环地址，缺少 `SEPIA_MASTER_KEY` 时会立即报错。直接 `docker run` 时也必须传 `SEPIA_MASTER_KEY`：容器内没有持久 OS Keyring，缺少该变量网关会在首次启动时直接报错退出，不会生成重启即丢失的临时密钥。必须同时备份 `sepia-data` 卷和同一个主密钥：丢失或轮换主密钥会使已有上游凭据无法解密。已有桌面条目和 OS Keyring 密钥不会自动迁入容器。
+Compose 将端口仅绑定到本机回环地址，并要求在 `.env` 中提供 `SEPIA_MASTER_KEY`（密钥与数据分离，推荐）。直接 `docker run` 可以不传该变量：容器内没有持久 OS Keyring，网关会自动生成主密钥并持久化到数据卷内的 `master-key` 文件（0600 权限），重启后继续使用，不会丢失。此时密钥与加密数据同在一个卷中，请保护并备份整个 `sepia-data` 卷；显式设置 `SEPIA_MASTER_KEY` 则密钥与数据分离，更安全，但必须与卷一起备份且不能轮换——丢失或更换主密钥会使已有上游凭据无法解密。已有桌面条目和 OS Keyring 密钥不会自动迁入容器。
 
 远程或局域网部署必须使用 HTTPS 反向代理，设置 `SEPIA_TRUSTED_PROXY=true`，并在容器环境中移除 `SEPIA_HTTP_LOOPBACK_COOKIE`，使管理员 Cookie 保持 `Secure`。不要把容器的 5000 端口直接暴露到不受信网络。镜像不内置主密钥、管理员密码、初始化令牌或供应商凭据。
 
@@ -175,7 +175,7 @@ Compose 将端口仅绑定到本机回环地址，缺少 `SEPIA_MASTER_KEY` 时�
 | `SEPIA_DATA_DIR` | SQLite、初始化令牌文件和开发密钥文件所在目录 |
 | `SEPIA_LISTEN` | 网关监听地址，默认 `127.0.0.1:5000` |
 | `SEPIA_BOOTSTRAP_TOKEN` | 为自动化部署显式指定一次性初始化令牌 |
-| `SEPIA_MASTER_KEY` | Base64 编码 32 字节生产主密钥；优先于 OS Keyring，不能轮换；容器（无持久 Keyring）必须设置 |
+| `SEPIA_MASTER_KEY` | Base64 编码 32 字节生产主密钥；优先于 OS Keyring 与数据目录密钥文件，不能轮换；容器可选（缺省时自动生成并持久化到数据目录 `master-key`） |
 | `SEPIA_FRONTEND_DIR` | 可选的控制台构建目录绝对路径；容器已设置 |
 | `SEPIA_HTTP_LOOPBACK_COOKIE=true` | 仅允许 `0.0.0.0:5000` 的本机 HTTP 容器映射省略 `Secure`；远程部署必须移除 |
 | `SEPIA_TRUSTED_PROXY=true` | 非回环监听所必需；由受信代理终止 TLS |
@@ -212,7 +212,7 @@ cargo run --release --manifest-path backend/Cargo.toml
 
 将客户端基础地址指向 Sepia，而不是上游供应商，并使用控制台创建的客户端密钥。
 
-网关发往上游的请求默认携带 `User-Agent: Sepia/<版本号>`（如 `Sepia/0.1.2`）；客户端请求未显式设置时使用该默认值。
+网关发往上游的请求默认携带 `User-Agent: Sepia/<版本号>`（如 `Sepia/0.1.3`）；客户端请求未显式设置时使用该默认值。
 
 ### OpenAI Chat Completions
 
@@ -295,7 +295,7 @@ curl http://127.0.0.1:5000/v1/embeddings \
 - Node.js 22.18+（推荐 Node.js 24）与 npm
 - Rust stable 与 Cargo
 - Windows 构建：Visual Studio C++ Build Tools，并在 MSVC Developer Command Prompt 中运行 Cargo
-- 生产环境：可用的操作系统 Keyring（Windows/macOS），或显式 `SEPIA_MASTER_KEY`（容器/Linux 必需）
+- 生产环境：操作系统 Keyring（Windows/macOS）、显式 `SEPIA_MASTER_KEY`，或数据目录内自动生成的 `master-key` 密钥文件（无持久 Keyring 的平台，如 Linux/容器）
 
 ### Windows 一键开发启动
 
@@ -361,7 +361,7 @@ cargo test --manifest-path backend/Cargo.toml
 
 - 客户端密钥仅在创建时显示一次，数据库只保存哈希；不要将其写入前端存储、日志或提交。
 - 管理员密码使用 Argon2 哈希，会话通过 HttpOnly Cookie 保存。
-- 上游密钥使用 AES-GCM 加密；桌面条目的生产主密钥默认由操作系统 Keyring（Windows 凭据管理器 / macOS 钥匙串）保护，容器使用显式 `SEPIA_MASTER_KEY`。没有持久 Keyring 且未设置该变量时，网关在首次启动即报错，不会生成重启后丢失的临时密钥。数据库中的加密校验标记会在监听前拒绝更换后的主密钥。
+- 上游密钥使用 AES-GCM 加密；桌面条目的生产主密钥默认由操作系统 Keyring（Windows 凭据管理器 / macOS 钥匙串）保护。没有持久 Keyring 且未设置 `SEPIA_MASTER_KEY` 时（如 Linux/容器），主密钥自动生成并持久化到数据目录的 `master-key` 文件（Unix 0600），重启不丢；密钥与数据同目录，需整体保护。显式 `SEPIA_MASTER_KEY` 优先且不能轮换。数据库中的加密校验标记会在监听前拒绝更换后的主密钥。
 - 网关不跟随上游重定向，避免凭据被转发到其他主机。
 - WASM 插件在 wasmtime 沙箱内执行：无 WASI，出站 HTTP 仅允许 manifest 声明的 origin，敏感请求头对插件隐藏且不可写；插件 secret 与上游密钥同样加密存储。
 - 非回环部署应置于启用 TLS 的受信反向代理之后，并显式设置 `SEPIA_TRUSTED_PROXY=true`。
@@ -477,7 +477,7 @@ curl http://127.0.0.1:5000/api/v1/auth/status
 
 Open [http://127.0.0.1:5000](http://127.0.0.1:5000), use the bootstrap token shown on the page to choose an administrator password of at least 8 characters, and sign in. The `sepia-data` named volume persists the database and initialization state across container replacements.
 
-You can also pull the image directly (version examples: `ghcr.io/lingyuins/sepia:v0.1.2`, `lingyuins/sepia:0.1.2`):
+You can also pull the image directly (version examples: `ghcr.io/lingyuins/sepia:v0.1.3`, `lingyuins/sepia:0.1.3`):
 
 ```sh
 docker pull ghcr.io/lingyuins/sepia:latest
@@ -529,7 +529,7 @@ Each package contains `README.md`, `LICENSE`, `bin/sepia-gateway[.exe]`, and `fr
 
 ### Docker storage and security
 
-Compose binds the port only to the local loopback address and fails immediately when `SEPIA_MASTER_KEY` is missing. Plain `docker run` must also pass `SEPIA_MASTER_KEY`: containers have no persistent OS keyring, so without it the gateway now fails on first startup instead of generating a temporary key that is lost on restart. Back up the `sepia-data` volume and the same master key together: losing or rotating the key makes existing upstream credentials undecryptable. Existing desktop data and OS-keyring keys are not imported automatically.
+Compose binds the port only to the local loopback address and requires `SEPIA_MASTER_KEY` in `.env` (key kept separate from data, recommended). Plain `docker run` may omit it: containers have no persistent OS keyring, so the gateway generates a master key and persists it to the `master-key` file inside the data volume (mode 0600), reusing it across restarts. The key then lives beside the encrypted data — protect and back up the whole `sepia-data` volume. An explicit `SEPIA_MASTER_KEY` keeps key and data separate (more secure) but must be backed up with the volume and cannot be rotated: losing or changing the key makes existing upstream credentials undecryptable. Existing desktop data and OS-keyring keys are not imported automatically.
 
 For remote or LAN deployment, use an HTTPS reverse proxy, set `SEPIA_TRUSTED_PROXY=true`, and remove `SEPIA_HTTP_LOOPBACK_COOKIE` from the container environment so administrator cookies remain `Secure`. Do not expose port 5000 directly to untrusted networks. Images contain no master key, administrator password, bootstrap token, or provider credentials.
 
@@ -540,7 +540,7 @@ For remote or LAN deployment, use an HTTPS reverse proxy, set `SEPIA_TRUSTED_PRO
 | `SEPIA_DATA_DIR` | Directory for SQLite, bootstrap-token files, and development key files |
 | `SEPIA_LISTEN` | Listen address; defaults to `127.0.0.1:5000` |
 | `SEPIA_BOOTSTRAP_TOKEN` | Explicit one-time bootstrap token for automation |
-| `SEPIA_MASTER_KEY` | Base64-encoded 32-byte production master key; takes precedence over the OS keyring and cannot be rotated; required in containers (no persistent keyring) |
+| `SEPIA_MASTER_KEY` | Base64-encoded 32-byte production master key; takes precedence over the OS keyring and the data-directory key file and cannot be rotated; optional in containers (auto-generated and persisted to `master-key` in the data directory when unset) |
 | `SEPIA_FRONTEND_DIR` | Optional absolute path to the built console; set in the container image |
 | `SEPIA_HTTP_LOOPBACK_COOKIE=true` | Omits `Secure` only for a local HTTP container mapping on `0.0.0.0:5000`; must be removed for remote deployments |
 | `SEPIA_TRUSTED_PROXY=true` | Required for non-loopback listening; TLS terminates at a trusted proxy |
@@ -577,7 +577,7 @@ The console's Settings → About tab shows the running gateway version, checks t
 
 Point clients at Sepia instead of the upstream provider and use a client key created in the console.
 
-Outbound upstream requests carry a default `User-Agent: Sepia/<version>` (e.g. `Sepia/0.1.2`), used whenever the request does not set one explicitly.
+Outbound upstream requests carry a default `User-Agent: Sepia/<version>` (e.g. `Sepia/0.1.3`), used whenever the request does not set one explicitly.
 
 ### OpenAI Chat Completions
 
@@ -660,7 +660,7 @@ Async submitted tasks are scoped to the submitting client key: video polls and S
 - Node.js 22.18+ (Node.js 24 recommended) and npm
 - Rust stable and Cargo
 - Windows builds: Visual Studio C++ Build Tools and an MSVC Developer Command Prompt
-- Production: an available operating-system keyring (Windows/macOS), or an explicit `SEPIA_MASTER_KEY` (required in containers/Linux)
+- Production: an operating-system keyring (Windows/macOS), an explicit `SEPIA_MASTER_KEY`, or the auto-generated `master-key` file in the data directory (platforms without a persistent keyring, e.g. Linux/containers)
 
 ### Windows development launcher
 
@@ -726,7 +726,7 @@ Backend tests cover native/cross-protocol JSON and SSE, tools and multimodal con
 
 - Client-key plaintext is shown only at creation; only hashes are stored. Never write keys to frontend storage, logs, or commits.
 - Administrator passwords use Argon2 hashes; sessions use HttpOnly cookies.
-- Upstream keys use AES-GCM encryption. Desktop production master keys use the OS keyring (Windows Credential Manager / macOS Keychain) by default; containers use an explicit `SEPIA_MASTER_KEY`. Without a persistent keyring and without that variable the gateway fails on first startup rather than generating a key that vanishes on restart. An encrypted database marker rejects a changed master key before the gateway starts listening.
+- Upstream keys use AES-GCM encryption. Desktop production master keys use the OS keyring (Windows Credential Manager / macOS Keychain) by default. Without a persistent keyring and without `SEPIA_MASTER_KEY` (e.g. Linux/containers), the master key is generated once and persisted to the `master-key` file in the data directory (0600 on Unix) so restarts keep working; key and data share one trust boundary and must be protected together. An explicit `SEPIA_MASTER_KEY` takes precedence and cannot be rotated. An encrypted database marker rejects a changed master key before the gateway starts listening.
 - Upstream redirects are not followed, preventing credential forwarding to another host.
 - WASM plugins run in a wasmtime sandbox: no WASI, outbound HTTP restricted to manifest-declared origins, sensitive request headers hidden and unwritable; plugin secrets are encrypted like upstream keys.
 - Deploy non-loopback instances behind a TLS-enabled trusted reverse proxy and explicitly set `SEPIA_TRUSTED_PROXY=true`.

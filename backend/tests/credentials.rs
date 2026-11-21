@@ -6,9 +6,12 @@ use sepia_gateway::{
 
 #[test]
 fn production_master_key_override_validates_and_encrypts() {
-    let keys =
-        KeyStore::production_with_override(Some("MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDA="))
-            .unwrap();
+    let directory = tempfile::tempdir().unwrap();
+    let keys = KeyStore::production_with_override(
+        Some("MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDA="),
+        directory.path(),
+    )
+    .unwrap();
     let (nonce, ciphertext) = keys.encrypt("upstream-secret").unwrap();
     assert_eq!(
         &*keys.decrypt(&nonce, &ciphertext).unwrap(),
@@ -16,7 +19,7 @@ fn production_master_key_override_validates_and_encrypts() {
     );
 
     for invalid in ["not-base64", "AA=="] {
-        let error = match KeyStore::production_with_override(Some(invalid)) {
+        let error = match KeyStore::production_with_override(Some(invalid), directory.path()) {
             Ok(_) => panic!("invalid master key accepted"),
             Err(error) => error,
         };
@@ -30,14 +33,18 @@ async fn keystore_marker_rejects_a_changed_master_key() {
     let store = sepia_gateway::Store::connect(&directory.path().join("keystore.db"))
         .await
         .unwrap();
-    let original =
-        KeyStore::production_with_override(Some("MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDA="))
-            .unwrap();
+    let original = KeyStore::production_with_override(
+        Some("MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDA="),
+        directory.path(),
+    )
+    .unwrap();
     store.verify_keystore(&original).await.unwrap();
     store.verify_keystore(&original).await.unwrap();
-    let replacement =
-        KeyStore::production_with_override(Some("MTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTE="))
-            .unwrap();
+    let replacement = KeyStore::production_with_override(
+        Some("MTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTE="),
+        directory.path(),
+    )
+    .unwrap();
     assert_eq!(
         store.verify_keystore(&replacement).await.unwrap_err(),
         "master key cannot decrypt existing credentials"
@@ -45,16 +52,20 @@ async fn keystore_marker_rejects_a_changed_master_key() {
 }
 
 #[test]
-fn volatile_mock_keyring_is_rejected_instead_of_generating_a_lost_key() {
+fn volatile_mock_keyring_persists_the_master_key_across_restarts() {
     // Simulates platforms without a compiled-in keyring backend (Linux
     // containers): the crate silently falls back to this in-memory store.
     keyring::set_default_credential_builder(keyring::mock::default_credential_builder());
-    let error = match KeyStore::production() {
-        Ok(_) => panic!("volatile mock keyring accepted"),
-        Err(error) => error,
-    };
-    assert!(error.contains("no persistent OS keyring"), "{error}");
-    assert!(error.contains("SEPIA_MASTER_KEY"), "{error}");
+    let directory = tempfile::tempdir().unwrap();
+    let first = KeyStore::production(directory.path()).unwrap();
+    let (nonce, ciphertext) = first.encrypt("upstream-secret").unwrap();
+    // A restart builds a fresh keystore; the persisted key must decrypt.
+    let second = KeyStore::production(directory.path()).unwrap();
+    assert_eq!(
+        &*second.decrypt(&nonce, &ciphertext).unwrap(),
+        "upstream-secret"
+    );
+    assert!(directory.path().join("master-key").is_file());
 }
 
 #[test]
