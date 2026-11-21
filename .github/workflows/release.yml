@@ -330,8 +330,6 @@ jobs:
             while IFS= read -r tag; do
               [[ -n "$tag" ]] || continue
               docker buildx imagetools create \
-                --annotation "index:org.opencontainers.image.source=https://github.com/${GITHUB_REPOSITORY}" \
-                --annotation "index:org.opencontainers.image.revision=${GITHUB_SHA}" \
                 --tag "$tag" \
                 "$repo@$amd64" "$repo@$arm64"
             done <<<"$tags"
