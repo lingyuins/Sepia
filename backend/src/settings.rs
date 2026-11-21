@@ -16,6 +16,11 @@ impl Store {
             "model_normalize_functional_suffixes",
             "model_normalize_explicit_mappings",
             "ai_pool_enabled",
+            "workspace_name",
+            "gateway_deployment",
+            "gateway_protocol",
+            "gateway_host",
+            "gateway_port",
         ]
         .contains(&key)
         {

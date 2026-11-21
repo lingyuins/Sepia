@@ -75,6 +75,7 @@ test('generated route rule persists through routeInput with ordered candidates',
   assert.deepEqual(wire.patterns, ['gpt-x'])
   assert.equal(wire.enabled, true)
   assert.equal(wire.is_default, false)
+  assert.equal(wire.list_members, false)
 })
 
 test('generated route rule defaults patterns to the slug', () => {

@@ -62,7 +62,7 @@ function ConnectionScreen({ headingRef }: { headingRef: React.RefObject<HTMLHead
 function SetupWizard({ headingRef }: { headingRef: React.RefObject<HTMLHeadingElement> }) {
   const { login, checkGateway } = useWorkspace()
   const t = useTranslation()
-  const [username, setUsername] = useState('admin')
+  const [username, setUsername] = useState('')
   const [token, setToken] = useState('')
   const [password, setPassword] = useState('')
   const [confirmation, setConfirmation] = useState('')
@@ -147,7 +147,7 @@ function SetupWizard({ headingRef }: { headingRef: React.RefObject<HTMLHeadingEl
 function LoginScreen({ headingRef }: { headingRef: React.RefObject<HTMLHeadingElement> }) {
   const { login, loginWithPasskey } = useWorkspace()
   const t = useTranslation()
-  const [username, setUsername] = useState('admin')
+  const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
   const [passwordVisible, setPasswordVisible] = useState(false)
   const [busy, setBusy] = useState(false)

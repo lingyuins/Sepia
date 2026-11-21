@@ -478,3 +478,94 @@ async fn model_normalize_settings_round_trip_and_unknown_key_rejected() {
         .unwrap();
     assert_eq!(rejected.status(), 400);
 }
+
+#[tokio::test]
+async fn workspace_and_gateway_address_settings_round_trip() {
+    let directory = tempfile::tempdir().unwrap();
+    let store = Store::connect(&directory.path().join("gateway-settings.db"))
+        .await
+        .unwrap();
+    let state = AppState {
+        store: store.clone(),
+        keys: KeyStore::testing(),
+        http: reqwest::Client::new(),
+        bootstrap_token: "bootstrap".into(),
+        data_directory: directory.path().to_path_buf(),
+        frontend_directory: "frontend/dist".into(),
+        snapshots: std::sync::Arc::new(
+            sepia_gateway::snapshot::Snapshots::load(&store)
+                .await
+                .unwrap(),
+        ),
+        key_health: Default::default(),
+        routing_stats: sepia_gateway::strategy::RoutingStats::shared(),
+        secure_cookie: false,
+        metadata_source: sepia_gateway::metadata::DEFAULT_SOURCE.into(),
+        plugins: sepia_gateway::plugin::shared(
+            sepia_gateway::plugin::PluginRuntime::new().unwrap(),
+        ),
+    };
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    tokio::spawn(
+        axum::serve(
+            listener,
+            app(state).into_make_service_with_connect_info::<std::net::SocketAddr>(),
+        )
+        .into_future(),
+    );
+    let client = reqwest::Client::new();
+    let url = |path: &str| format!("http://{address}{path}");
+    let password = "gateway settings password";
+    let bootstrap = client
+        .post(url("/api/v1/auth/bootstrap"))
+        .json(&json!({"username":"root","password":password,"token":"bootstrap"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(bootstrap.status(), 200);
+    let login = client
+        .post(url("/api/v1/auth/login"))
+        .json(&json!({"username":"root","password":password}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(login.status(), 200);
+    let cookie = login
+        .headers()
+        .get("set-cookie")
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .split(';')
+        .next()
+        .unwrap()
+        .to_string();
+    let settings = json!({
+        "workspace_name": "Team console",
+        "gateway_deployment": "cloud",
+        "gateway_protocol": "https",
+        "gateway_host": "ai.example.com",
+        "gateway_port": "8443",
+    });
+    let saved = client
+        .post(url("/api/v1/settings"))
+        .header("cookie", &cookie)
+        .json(&settings)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(saved.status(), 200, "save: {}", saved.text().await.unwrap());
+    let loaded: Value = client
+        .get(url("/api/v1/settings"))
+        .header("cookie", &cookie)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    for (key, value) in settings.as_object().unwrap() {
+        assert_eq!(&loaded[key], value, "setting {key} did not round-trip");
+    }
+}

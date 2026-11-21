@@ -34,6 +34,8 @@ test('serializes editor data for the real management API', () => {
   const route = mapRoute(remoteRoute, [provider])
   assert.deepEqual(providerInput(provider, [{ value: 'secret', models: null }]), { name: 'Local OpenAI', protocol: 'openai', endpoint: 'http://127.0.0.1:9000/v1', models: ['local-model'], secret: 'secret', secrets: ['secret'], key_models: [], group_id: 'official', enabled: true })
   assert.deepEqual(routeInput(route, [provider]), { slug: 'chat', name: 'Chat route', description: 'Real description', patterns: ['chat-*'], is_default: true, list_members: true, enabled: true, candidates: [[7, 'local-model']], strategy: 'priority', weights: [1] })
+  // Unspecified listing defaults to group-only so member models stay hidden.
+  assert.equal(routeInput({ ...route, listMembers: undefined }, [provider]).list_members, false)
 })
 
 test('round-trips strategy and per-candidate weights through the route API shapes', () => {

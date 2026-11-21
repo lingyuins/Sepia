@@ -94,7 +94,7 @@ export function generatedRouteRule(route: GeneratedRoute, index: number): RouteR
     requests: '0',
     candidates,
     patterns,
-    listMembers: true,
+    listMembers: false,
     isDefault: false,
   }
 }

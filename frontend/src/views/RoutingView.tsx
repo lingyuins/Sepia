@@ -104,7 +104,7 @@ function RouteForm({ route, onClose }: { route: RouteRule | null; onClose: () =>
     route?.patterns || (route ? [route.match] : []),
   )
   const [patternDraft, setPatternDraft] = useState('')
-  const [modelListing, setModelListing] = useState(route?.listMembers === false ? 'group' : 'members')
+  const [modelListing, setModelListing] = useState(route ? (route.listMembers === false ? 'group' : 'members') : 'group')
   const [strategy, setStrategy] = useState<RouteStrategyId>(normalizeRouteStrategy(route?.strategy))
   const [active, setActive] = useState(route?.active ?? true)
 

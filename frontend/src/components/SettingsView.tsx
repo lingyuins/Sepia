@@ -68,6 +68,11 @@ const tabs = [
 ] as const
 
 const serverSettingsKeys: (keyof Settings)[] = [
+  'workspace',
+  'deployment',
+  'protocol',
+  'host',
+  'port',
   'retries',
   'logBodies',
   'normalizePrefixes',
@@ -103,6 +108,7 @@ function SettingsField({
   type = 'text',
   hint,
   required = true,
+  disabled = false,
 }: {
   label: string
   value: string
@@ -110,6 +116,7 @@ function SettingsField({
   type?: string
   hint?: string
   required?: boolean
+  disabled?: boolean
 }) {
   return (
     <label className="settings-field">
@@ -120,6 +127,7 @@ function SettingsField({
         value={value}
         required={required}
         onChange={(e) => onChange(e.target.value)}
+        disabled={disabled}
       />
       {hint && <small>{hint}</small>}
     </label>
@@ -229,20 +237,16 @@ export default function SettingsView() {
       return
     }
 
+    const normalized = { ...nextSettings, workspace: nextSettings.workspace.trim(), host: nextSettings.host.trim(), port: nextSettings.port.trim() }
     const serverChanged = serverSettingsKeys.some(
-      (key) => JSON.stringify(nextSettings[key]) !== JSON.stringify(settings[key]),
+      (key) => JSON.stringify(normalized[key]) !== JSON.stringify(settings[key]),
     )
     const persisted: Settings = isAdmin
-      ? nextSettings
-      : {
-          ...nextSettings,
-          retries: settings.retries,
-          logBodies: settings.logBodies,
-          normalizePrefixes: settings.normalizePrefixes,
-          normalizeSuffixes: settings.normalizeSuffixes,
-          normalizeMappings: settings.normalizeMappings,
-          aiPoolEnabled: settings.aiPoolEnabled,
-        }
+      ? normalized
+      : serverSettingsKeys.reduce(
+          (merged, key) => ({ ...merged, [key]: settings[key] }),
+          normalized as Settings,
+        )
 
     try {
       if (isAdmin && serverChanged) {
@@ -250,6 +254,11 @@ export default function SettingsView() {
           api('/api/v1/settings', {
             method: 'POST',
             body: JSON.stringify({
+              workspace_name: normalized.workspace,
+              gateway_deployment: normalized.deployment,
+              gateway_protocol: normalized.protocol,
+              gateway_host: normalized.host,
+              gateway_port: normalized.port,
               max_attempts: Number(nextSettings.retries),
               log_bodies: nextSettings.logBodies,
               model_normalize_router_prefixes: nextSettings.normalizePrefixes,
@@ -441,6 +450,7 @@ export default function SettingsView() {
                     label={t('workspaceName')}
                     value={draft.workspace}
                     onChange={(v) => update('workspace', v)}
+                    disabled={!isAdmin}
                   />
                   <SelectField
                     label={t('language')}
@@ -452,6 +462,7 @@ export default function SettingsView() {
                     }}
                   />
                 </div>
+                {!isAdmin && <p className="setting-note">{t('settingsAdminOnly')}</p>}
               </section>
 
               <section className="settings-card glass-panel">
@@ -530,7 +541,7 @@ export default function SettingsView() {
                 </div>
                 <Network size={18} />
               </div>
-
+              <fieldset className="settings-readonly-group" disabled={!isAdmin}>
               <div
                 className="gateway-deployment-options"
                 role="group"
@@ -666,6 +677,8 @@ export default function SettingsView() {
                   />
                 </div>
               </div>
+              </fieldset>
+              {!isAdmin && <p className="setting-note">{t('settingsAdminOnly')}</p>}
             </section>
           )}
 

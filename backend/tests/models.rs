@@ -213,3 +213,70 @@ async fn a_candidate_permission_exposes_its_route_slug() {
         ])
     );
 }
+
+#[tokio::test]
+async fn group_only_routes_never_list_member_models() {
+    let directory = tempfile::tempdir().unwrap();
+    let store = Store::connect(&directory.path().join("group-only.db"))
+        .await
+        .unwrap();
+    let provider = store
+        .create_provider(
+            NewProvider {
+                name: "Provider".into(),
+                protocol: ProviderProtocol::OpenAI,
+                endpoint: "http://127.0.0.1:9/v1".into(),
+                models: vec!["m-a".into(), "m-b".into(), "m-unrouted".into()],
+                plugin_id: None,
+            },
+            "upstream-secret",
+            &[],
+            &KeyStore::testing(),
+        )
+        .await
+        .unwrap();
+    store
+        .create_route(NewRoute {
+            slug: "smart".into(),
+            name: "Smart".into(),
+            description: String::new(),
+            patterns: vec!["smart".into()],
+            provider_id: provider.id,
+            model: "m-a".into(),
+            is_default: false,
+            list_members: false,
+            candidates: vec![(provider.id, "m-a".into()), (provider.id, "m-b".into())],
+        })
+        .await
+        .unwrap();
+    let key = store
+        .create_client_key(UpsertClientKey {
+            name: "Wildcard client".into(),
+            models: vec!["*".into()],
+            token_limit: 0,
+            max_amount_micros: 0,
+            rpm: 0,
+            tpm: 0,
+            expires_at: None,
+        })
+        .await
+        .unwrap();
+    let response = app(AppState::for_testing(store).await)
+        .oneshot(
+            Request::get("/v1/models")
+                .header("authorization", format!("Bearer {}", key.plaintext))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 200);
+    let body = axum::body::to_bytes(response.into_body(), 1024 * 1024)
+        .await
+        .unwrap();
+    let models: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(
+        models["data"],
+        serde_json::json!([{"id":"smart","object":"model","owned_by":"sepia"}])
+    );
+}
