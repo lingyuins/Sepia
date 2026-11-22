@@ -74,6 +74,10 @@ const serverSettingsKeys: (keyof Settings)[] = [
   'host',
   'port',
   'retries',
+  'connectTimeout',
+  'firstByteTimeout',
+  'streamIdleTimeout',
+  'retryAfterCap',
   'logBodies',
   'normalizePrefixes',
   'normalizeSuffixes',
@@ -219,10 +223,18 @@ export default function SettingsView() {
       notify(t('gatewayValidation'))
       return
     }
+    const numericRanges: [keyof Settings, number][] = [
+      ['retries', 16],
+      ['connectTimeout', 60],
+      ['firstByteTimeout', 600],
+      ['streamIdleTimeout', 600],
+      ['retryAfterCap', 60],
+    ]
     if (
-      !Number.isInteger(Number(nextSettings.retries)) ||
-      Number(nextSettings.retries) < 1 ||
-      Number(nextSettings.retries) > 16
+      numericRanges.some(([key, max]) => {
+        const value = Number(nextSettings[key])
+        return !Number.isInteger(value) || value < 1 || value > max
+      })
     ) {
       notify(t('timeoutValidation'))
       return
@@ -260,6 +272,10 @@ export default function SettingsView() {
               gateway_host: normalized.host,
               gateway_port: normalized.port,
               max_attempts: Number(nextSettings.retries),
+              connect_timeout_seconds: Number(nextSettings.connectTimeout),
+              first_byte_timeout_seconds: Number(nextSettings.firstByteTimeout),
+              stream_idle_timeout_seconds: Number(nextSettings.streamIdleTimeout),
+              retry_after_cap_seconds: Number(nextSettings.retryAfterCap),
               log_bodies: nextSettings.logBodies,
               model_normalize_router_prefixes: nextSettings.normalizePrefixes,
               model_normalize_functional_suffixes: nextSettings.normalizeSuffixes,
@@ -693,6 +709,34 @@ export default function SettingsView() {
                       value={draft.retries}
                       options={Array.from({ length: 16 }, (_, index) => String(index + 1))}
                       onChange={(v) => update('retries', v)}
+                    />
+                    <SettingsField
+                      label={t('connectTimeout')}
+                      type="number"
+                      value={draft.connectTimeout}
+                      onChange={(v) => update('connectTimeout', v)}
+                      hint={t('connectTimeoutHint')}
+                    />
+                    <SettingsField
+                      label={t('firstByteTimeout')}
+                      type="number"
+                      value={draft.firstByteTimeout}
+                      onChange={(v) => update('firstByteTimeout', v)}
+                      hint={t('firstByteTimeoutHint')}
+                    />
+                    <SettingsField
+                      label={t('streamIdleTimeout')}
+                      type="number"
+                      value={draft.streamIdleTimeout}
+                      onChange={(v) => update('streamIdleTimeout', v)}
+                      hint={t('streamIdleTimeoutHint')}
+                    />
+                    <SettingsField
+                      label={t('retryAfterCap')}
+                      type="number"
+                      value={draft.retryAfterCap}
+                      onChange={(v) => update('retryAfterCap', v)}
+                      hint={t('retryAfterCapHint')}
                     />
                   </div>
                 </section>

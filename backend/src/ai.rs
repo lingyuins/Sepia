@@ -352,7 +352,7 @@ async fn discover_pool_models(state: &AppState, endpoint: &str, secret: &str) ->
         enabled: true,
         plugin_id: None,
     };
-    match crate::discovery::discover_models(&state.http, &probe, secret).await {
+    match crate::discovery::discover_models(&state.http(), &probe, secret).await {
         Ok(models) => Json(json!({"models":models})).into_response(),
         Err(message) => error(StatusCode::BAD_GATEWAY, message),
     }
@@ -699,7 +699,7 @@ pub async fn generate_routes(
             assignment_txs.push(assign_tx);
             worker_services.push(service_index);
             let events = event_tx.clone();
-            let client = state.http.clone();
+            let client = state.http();
             let endpoint = service.endpoint.clone();
             let model = service.model.clone();
             let timeout = service.timeout_seconds;

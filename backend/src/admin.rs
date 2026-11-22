@@ -347,7 +347,7 @@ async fn providers(State(state): State<AppState>) -> Response {
 }
 async fn sync_model_metadata(State(state): State<AppState>) -> Response {
     let source = state.metadata_source.clone();
-    let body = match state.http.get(&source).send().await {
+    let body = match state.http().get(&source).send().await {
         Ok(response) => match response.json::<serde_json::Value>().await {
             Ok(body) => body,
             Err(message) => {
@@ -482,7 +482,7 @@ async fn preview_provider_models(
     let result = if provider.plugin_id.is_some() {
         crate::plugin::provider_models(&state, &provider, secret).await
     } else {
-        crate::discovery::discover_models(&state.http, &provider, secret).await
+        crate::discovery::discover_models(&state.http(), &provider, secret).await
     };
     match result {
         Ok(models) => Json(json!({"models":models})).into_response(),
@@ -535,7 +535,7 @@ async fn create_provider(
             let discovery = if candidate.plugin_id.is_some() {
                 crate::plugin::provider_models(&state, &candidate, candidate_secret).await
             } else {
-                crate::discovery::discover_models(&state.http, &candidate, candidate_secret).await
+                crate::discovery::discover_models(&state.http(), &candidate, candidate_secret).await
             };
             match discovery {
                 Ok(models) => {
@@ -830,7 +830,7 @@ async fn test_provider(
     let result = if provider.plugin_id.is_some() {
         crate::plugin::provider_models(&state, &provider, &secret).await
     } else {
-        crate::discovery::discover_models(&state.http, &provider, &secret).await
+        crate::discovery::discover_models(&state.http(), &provider, &secret).await
     };
     match result {
         Ok(models) => Json(json!({"models":models})).into_response(),
@@ -1255,7 +1255,7 @@ async fn install_plugin(
             .invoke(
                 &state.store,
                 &state.keys,
-                &state.http,
+                &state.http(),
                 &record,
                 "plugin.migrate",
                 json!({"from_version": previous_version.clone().unwrap_or_default()}),
@@ -1365,7 +1365,7 @@ async fn plugin_rpc(
         .invoke(
             &state.store,
             &state.keys,
-            &state.http,
+            &state.http(),
             &record,
             "http.rpc",
             json!({"path": path, "body": input}),

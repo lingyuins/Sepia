@@ -780,7 +780,7 @@ pub async fn rewrite_request(
             .invoke(
                 &state.store,
                 &state.keys,
-                &state.http,
+                &state.http(),
                 &record,
                 "relay.request.before_route",
                 json!({"request": payload}),
@@ -816,7 +816,7 @@ pub async fn filter_candidates(
                 .invoke(
                     &state.store,
                     &state.keys,
-                    &state.http,
+                    &state.http(),
                     &record,
                     event,
                     payload,
@@ -878,7 +878,7 @@ pub async fn rewrite_upstream(
             .invoke(
                 &state.store,
                 &state.keys,
-                &state.http,
+                &state.http(),
                 &record,
                 "relay.request.before_upstream",
                 json!({
@@ -947,7 +947,7 @@ pub async fn rewrite_response(
             .invoke(
                 &state.store,
                 &state.keys,
-                &state.http,
+                &state.http(),
                 &record,
                 "relay.response.before_send",
                 json!({"model": model, "response": current}),
@@ -975,7 +975,7 @@ pub fn observe_completion(state: &crate::server::AppState, payload: Value) {
                 .invoke(
                     &state.store,
                     &state.keys,
-                    &state.http,
+                    &state.http(),
                     &record,
                     "relay.completed",
                     payload.clone(),
@@ -1100,7 +1100,7 @@ pub async fn provider_models(
         .invoke(
             &state.store,
             &state.keys,
-            &state.http,
+            &state.http(),
             &record,
             "provider.models",
             json!({
@@ -1155,7 +1155,7 @@ pub async fn provider_fetch(
         .invoke(
             &state.store,
             &state.keys,
-            &state.http,
+            &state.http(),
             &record,
             "provider.fetch",
             json!({

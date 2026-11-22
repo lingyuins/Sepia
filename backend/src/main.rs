@@ -86,7 +86,12 @@ async fn main() -> Result<(), String> {
         app(AppState {
             store,
             keys,
-            http: sepia_gateway::relay::protected_http_client()?,
+            http: std::sync::Arc::new(std::sync::Mutex::new((
+                snapshots.get().connect_timeout_seconds,
+                sepia_gateway::relay::protected_http_client(
+                    snapshots.get().connect_timeout_seconds,
+                )?,
+            ))),
             bootstrap_token,
             data_directory: directory,
             frontend_directory,

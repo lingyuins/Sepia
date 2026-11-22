@@ -13,10 +13,10 @@ use futures_util::StreamExt;
 use serde_json::json;
 use std::{convert::Infallible, time::Instant};
 
-pub fn protected_http_client() -> Result<reqwest::Client, String> {
+pub fn protected_http_client(connect_seconds: u64) -> Result<reqwest::Client, String> {
     reqwest::Client::builder()
         .redirect(reqwest::redirect::Policy::none())
-        .connect_timeout(std::time::Duration::from_secs(10))
+        .connect_timeout(std::time::Duration::from_secs(connect_seconds))
         .user_agent(concat!("Sepia/", env!("CARGO_PKG_VERSION")))
         .build()
         .map_err(|e| e.to_string())
@@ -67,24 +67,21 @@ pub fn authorize(
         Protocol::Gemini => request.header("x-goog-api-key", secret),
     }
 }
-pub async fn call(
-    client: &reqwest::Client,
-    provider: &Provider,
-    secret: &str,
-    request: &ChatRequest,
-    model: &str,
-    protocol: Protocol,
-) -> Result<reqwest::Response, String> {
-    call_with_overrides(
-        client,
-        provider,
-        secret,
-        request,
-        model,
-        protocol,
-        &Overrides::default(),
-    )
-    .await
+/// Per-attempt outbound budgets from the runtime settings snapshot. The TCP
+/// connect budget lives on the shared reqwest client (`AppState::http()`
+/// rebuilds it when the setting changes); these two bound the response wait.
+#[derive(Clone, Copy)]
+pub struct Timeouts {
+    pub first_byte_seconds: u64,
+    pub stream_idle_seconds: u64,
+}
+impl Default for Timeouts {
+    fn default() -> Self {
+        Self {
+            first_byte_seconds: 60,
+            stream_idle_seconds: 60,
+        }
+    }
 }
 /// Plugin upstream-rewrite hook output: an optional replacement outbound JSON
 /// body and non-sensitive headers. Auth and URL always derive from the leg protocol.
@@ -93,6 +90,7 @@ pub struct Overrides {
     pub body: Option<serde_json::Value>,
     pub headers: Vec<(String, String)>,
 }
+#[allow(clippy::too_many_arguments)] // One outbound leg: target, credentials, request, protocol, plugin overrides, budgets.
 pub async fn call_with_overrides(
     client: &reqwest::Client,
     provider: &Provider,
@@ -101,6 +99,7 @@ pub async fn call_with_overrides(
     model: &str,
     protocol: Protocol,
     overrides: &Overrides,
+    timeouts: Timeouts,
 ) -> Result<reqwest::Response, String> {
     let body = match &overrides.body {
         Some(value) => value.clone(),
@@ -112,11 +111,30 @@ pub async fn call_with_overrides(
     for (name, value) in &overrides.headers {
         outgoing = outgoing.header(name.as_str(), value.as_str());
     }
-    authorize(outgoing, protocol, secret)
-        .timeout(std::time::Duration::from_secs(60))
-        .send()
+    let outgoing = authorize(outgoing, protocol, secret);
+    let sent = if request.stream {
+        // A reqwest total timeout would also bound the SSE body and cut long
+        // streams; bound only the header wait here. The chunk gap is bounded
+        // by `stream_idle_seconds` inside `stream_response`.
+        tokio::time::timeout(
+            std::time::Duration::from_secs(timeouts.first_byte_seconds),
+            outgoing.send(),
+        )
         .await
-        .map_err(|_| "upstream unavailable".into())
+        .map_err(|_| "upstream timed out".to_string())?
+    } else {
+        outgoing
+            .timeout(std::time::Duration::from_secs(timeouts.first_byte_seconds))
+            .send()
+            .await
+    };
+    sent.map_err(|error| {
+        if error.is_timeout() {
+            "upstream timed out".into()
+        } else {
+            "upstream unavailable".into()
+        }
+    })
 }
 /// Bodies are stored verbatim up to a hard cap so one huge multimodal payload
 /// cannot bloat the log database; truncation is explicit, never silent.
@@ -211,6 +229,8 @@ pub struct StreamContext {
     /// Inflight slot held for the whole stream; dropped at stream end or on
     /// client disconnect (the stream is dropped mid-flight).
     pub inflight: Option<crate::strategy::InflightGuard>,
+    /// Maximum gap between upstream SSE chunks before the stream is failed.
+    pub stream_idle_seconds: u64,
     pub log_bodies: bool,
     pub inbound_protocol: Protocol,
     pub response_context: Option<crate::responses::ResponseContext>,
@@ -275,7 +295,7 @@ pub fn stream_response(
         let mut failed = false;
         let mut decoder = SseDecoder::new(outbound);
         loop {
-            let chunk = match tokio::time::timeout(std::time::Duration::from_secs(60), bytes.next()).await {
+            let chunk = match tokio::time::timeout(std::time::Duration::from_secs(context.stream_idle_seconds), bytes.next()).await {
                 Ok(Some(chunk)) => chunk,
                 Ok(None) => break,
                 Err(_) => { failed = true; break; },

@@ -1,5 +1,7 @@
 use axum::{Router, routing::post};
-use sepia_gateway::{Provider, ProviderProtocol, protocol::ChatRequest, relay::call};
+use sepia_gateway::{
+    Provider, ProviderProtocol, protocol::ChatRequest, relay::call_with_overrides,
+};
 use tokio::net::TcpListener;
 
 #[tokio::test]
@@ -28,13 +30,15 @@ async fn upstream_redirects_do_not_forward_provider_credentials() {
         model: "x".into(),
         ..ChatRequest::default()
     };
-    let response = call(
-        &sepia_gateway::relay::protected_http_client().unwrap(),
+    let response = call_with_overrides(
+        &sepia_gateway::relay::protected_http_client(10).unwrap(),
         &provider,
         "secret",
         &request,
         "x",
         sepia_gateway::protocol::Protocol::Anthropic,
+        &sepia_gateway::relay::Overrides::default(),
+        sepia_gateway::relay::Timeouts::default(),
     )
     .await
     .unwrap();

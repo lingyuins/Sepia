@@ -177,7 +177,7 @@ async fn harness() -> (
     let state = AppState {
         store: store.clone(),
         keys: KeyStore::testing(),
-        http: reqwest::Client::new(),
+        http: std::sync::Arc::new(std::sync::Mutex::new((10, reqwest::Client::new()))),
         bootstrap_token: "bootstrap".into(),
         data_directory: directory.path().to_path_buf(),
         frontend_directory: "frontend/dist".into(),

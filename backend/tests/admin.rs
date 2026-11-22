@@ -15,7 +15,7 @@ async fn management_requires_session_and_client_secret_is_returned_once() {
     let state = AppState {
         store: store.clone(),
         keys: KeyStore::testing(),
-        http: reqwest::Client::new(),
+        http: std::sync::Arc::new(std::sync::Mutex::new((10, reqwest::Client::new()))),
         bootstrap_token: "bootstrap".into(),
         data_directory: directory.path().to_path_buf(),
         frontend_directory: "frontend/dist".into(),
@@ -273,7 +273,7 @@ async fn provider_creation_discovers_models_before_persisting() {
     let state = AppState {
         store: store.clone(),
         keys: KeyStore::testing(),
-        http: reqwest::Client::new(),
+        http: std::sync::Arc::new(std::sync::Mutex::new((10, reqwest::Client::new()))),
         bootstrap_token: "bootstrap".into(),
         data_directory: directory.path().to_path_buf(),
         frontend_directory: "frontend/dist".into(),
@@ -372,7 +372,7 @@ async fn model_normalize_settings_round_trip_and_unknown_key_rejected() {
     let state = AppState {
         store: store.clone(),
         keys: KeyStore::testing(),
-        http: reqwest::Client::new(),
+        http: std::sync::Arc::new(std::sync::Mutex::new((10, reqwest::Client::new()))),
         bootstrap_token: "bootstrap".into(),
         data_directory: directory.path().to_path_buf(),
         frontend_directory: "frontend/dist".into(),
@@ -488,7 +488,7 @@ async fn workspace_and_gateway_address_settings_round_trip() {
     let state = AppState {
         store: store.clone(),
         keys: KeyStore::testing(),
-        http: reqwest::Client::new(),
+        http: std::sync::Arc::new(std::sync::Mutex::new((10, reqwest::Client::new()))),
         bootstrap_token: "bootstrap".into(),
         data_directory: directory.path().to_path_buf(),
         frontend_directory: "frontend/dist".into(),

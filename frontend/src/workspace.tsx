@@ -132,8 +132,11 @@ export type Settings = {
   allowLan: boolean
   requestLogging: boolean
   logBodies: boolean
-  timeout: string
   retries: string
+  connectTimeout: string
+  firstByteTimeout: string
+  streamIdleTimeout: string
+  retryAfterCap: string
   strategy: string
   affinity: boolean
   affinityTtl: string

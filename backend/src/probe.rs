@@ -52,7 +52,19 @@ pub async fn probe_model_for(
     legs: &[Protocol],
 ) -> ProbeOutcome {
     if provider.plugin_id.is_none() {
-        return probe_model(&state.http, provider, secret, model, legs).await;
+        let snapshot = state.snapshots.get();
+        return probe_model(
+            &state.http(),
+            provider,
+            secret,
+            model,
+            legs,
+            crate::relay::Timeouts {
+                first_byte_seconds: snapshot.first_byte_timeout_seconds,
+                stream_idle_seconds: snapshot.stream_idle_timeout_seconds,
+            },
+        )
+        .await;
     }
     let request = ChatRequest {
         model: model.to_string(),
@@ -123,6 +135,7 @@ pub async fn probe_model(
     secret: &str,
     model: &str,
     legs: &[Protocol],
+    timeouts: crate::relay::Timeouts,
 ) -> ProbeOutcome {
     // Reasoning models spend output tokens on hidden reasoning before any
     // visible content; a tiny budget makes them answer with empty content,
@@ -138,14 +151,24 @@ pub async fn probe_model(
     for protocol in legs {
         let endpoint = crate::relay::endpoint_label(*protocol);
         let started = Instant::now();
-        let response =
-            match crate::relay::call(client, provider, secret, &request, model, *protocol).await {
-                Ok(response) => response,
-                Err(message) => {
-                    last = Some(failure(started, endpoint, message));
-                    continue;
-                }
-            };
+        let response = match crate::relay::call_with_overrides(
+            client,
+            provider,
+            secret,
+            &request,
+            model,
+            *protocol,
+            &crate::relay::Overrides::default(),
+            timeouts,
+        )
+        .await
+        {
+            Ok(response) => response,
+            Err(message) => {
+                last = Some(failure(started, endpoint, message));
+                continue;
+            }
+        };
         let latency_ms = started.elapsed().as_millis() as i64;
         let status = response.status();
         if !status.is_success() {

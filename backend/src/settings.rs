@@ -2,6 +2,14 @@ use crate::Store;
 use serde_json::Value;
 use sqlx::Row;
 
+/// (key, inclusive maximum); minimum is always 1.
+const NUMERIC_SETTINGS: &[(&str, u64)] = &[
+    ("connect_timeout_seconds", 60),
+    ("first_byte_timeout_seconds", 600),
+    ("stream_idle_timeout_seconds", 600),
+    ("max_attempts", 16),
+    ("retry_after_cap_seconds", 60),
+];
 impl Store {
     pub async fn set_setting(&self, key: &str, value: &Value) -> Result<(), String> {
         if ![
@@ -25,6 +33,14 @@ impl Store {
         .contains(&key)
         {
             return Err("unsupported workspace setting".into());
+        }
+        // Range contract shared with snapshot::bounded_seconds so a persisted
+        // value can never disagree with what the runtime would accept.
+        if let Some((_, max)) = NUMERIC_SETTINGS.iter().find(|(name, _)| *name == key) {
+            match value.as_u64() {
+                Some(number) if (1..=*max).contains(&number) => {}
+                _ => return Err(format!("{key} must be an integer between 1 and {max}")),
+            }
         }
         sqlx::query("INSERT INTO workspace_settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").bind(key).bind(value.to_string()).execute(&self.pool).await.map_err(|e| e.to_string())?;
         Ok(())

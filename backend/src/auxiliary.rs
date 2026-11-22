@@ -553,10 +553,11 @@ fn build_request(
     prepared: &Prepared,
 ) -> reqwest::RequestBuilder {
     let url = upstream_url(provider, prepared);
+    let http = state.http();
     let builder = if prepared.get {
-        state.http.get(url)
+        http.get(url)
     } else {
-        let builder = state.http.post(url);
+        let builder = http.post(url);
         match &prepared.payload {
             Payload::None => builder,
             Payload::Raw {
@@ -588,6 +589,8 @@ fn build_request(
         }
     };
     crate::relay::authorize(builder, crate::protocol::Protocol::OpenAI, secret)
+        // Auxiliary tasks (image/video generation) legitimately run far longer
+        // than inference first-byte budgets; keep their own total budget.
         .timeout(std::time::Duration::from_secs(300))
 }
 
@@ -884,7 +887,7 @@ async fn forward(
                     .and_then(|value| value.to_str().ok())
                     .and_then(|value| value.parse::<u64>().ok())
                     .unwrap_or(0)
-                    .min(5);
+                    .min(snapshot.retry_after_cap_seconds);
                 let bytes = response.bytes().await.unwrap_or_default().to_vec();
                 let retry = matches!(
                     status.as_u16(),

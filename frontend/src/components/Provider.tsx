@@ -221,8 +221,8 @@ export function ProviderDialog({ open, onClose, onSave, onDelete, onTest, provid
         </div>
       </section>
       <div className="switch-row"><span>{t('enableProvider')}</span><Toggle label={t('enableProvider')} checked={enabled} onChange={() => setEnabled(!enabled)} /></div>
-      <DialogActions onClose={onClose} label={provider ? t('saveProvider') : t('connectProvider')} leading={<button type="button" className="button secondary dialog-actions-leading" disabled={busy || !endpoint.trim() || (!provider && !keyDrafts.some((key) => key.value.trim()))} onClick={async () => { setTesting(true); try { const results = await detectAllKeys(); setTested(results.some((result) => result.models?.length)); const failed = results.find((result) => result.error); if (failed?.error) notify(failed.error) } catch (cause) { setTested(false); notify(cause instanceof Error ? cause.message : String(cause)) } finally { setTesting(false) } }}>{testing ? t('testingConnection') : t('testConnection')}</button>} />
-      {tested && <div className="provider-test-result"><Check size={13} />{t('configLooksGood')}</div>}
+      <DialogActions onClose={onClose} label={provider ? t('saveProvider') : t('connectProvider')} leading={<button type="button" className="button secondary dialog-actions-leading" disabled={busy || !endpoint.trim() || (!provider && !keyDrafts.some((key) => key.value.trim()))} onClick={async () => { setTesting(true); try { const results = await detectAllKeys(); setTested(results.some((result) => result.models?.length)); const failed = results.find((result) => result.error); if (failed?.error) notify(failed.error) } catch (cause) { setTested(false); notify(cause instanceof Error ? cause.message : String(cause)) } finally { setTesting(false) } }}>{testing ? t('fetchingModels') : t('fetchModels')}</button>} />
+      {tested && <div className="provider-test-result"><Check size={13} />{t('modelsFetched')}</div>}
       {provider && onDelete && <button type="button" className="dialog-danger-link" onClick={onDelete}>{t('disconnectProvider')}</button>}
     </form>
   </Modal>}

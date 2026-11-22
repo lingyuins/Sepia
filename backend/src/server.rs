@@ -21,7 +21,9 @@ pub struct KeyHealth {
 pub struct AppState {
     pub store: Store,
     pub keys: KeyStore,
-    pub http: reqwest::Client,
+    /// Shared outbound client cached with the connect budget it was built
+    /// for; reqwest only exposes connect_timeout at client level.
+    pub http: std::sync::Arc<std::sync::Mutex<(u64, reqwest::Client)>>,
     pub bootstrap_token: String,
     pub data_directory: std::path::PathBuf,
     pub frontend_directory: std::path::PathBuf,
@@ -33,11 +35,38 @@ pub struct AppState {
     pub routing_stats: std::sync::Arc<crate::strategy::RoutingStats>,
 }
 impl AppState {
+    /// The shared outbound client, rebuilt only when the configured TCP
+    /// connect budget changes. Cheap to call per attempt.
+    pub fn http(&self) -> reqwest::Client {
+        let connect = self.snapshots.get().connect_timeout_seconds;
+        {
+            let cached = self.http.lock().unwrap();
+            if cached.0 == connect {
+                return cached.1.clone();
+            }
+        }
+        // Build outside the lock: client construction is not instantaneous.
+        match crate::relay::protected_http_client(connect) {
+            Ok(client) => {
+                *self.http.lock().unwrap() = (connect, client.clone());
+                client
+            }
+            // A builder failure cannot realistically happen with these
+            // options; keep serving with the previous client.
+            Err(message) => {
+                eprintln!("outbound client rebuild failed: {message}");
+                self.http.lock().unwrap().1.clone()
+            }
+        }
+    }
     pub async fn for_testing(store: Store) -> Self {
         Self {
             store: store.clone(),
             keys: KeyStore::testing(),
-            http: crate::relay::protected_http_client().unwrap(),
+            http: std::sync::Arc::new(std::sync::Mutex::new((
+                10,
+                crate::relay::protected_http_client(10).unwrap(),
+            ))),
             bootstrap_token: "test".into(),
             data_directory: std::env::temp_dir(),
             frontend_directory: "frontend/dist".into(),
@@ -715,7 +744,7 @@ pub async fn relay(
                     .await
                 } else {
                     crate::relay::call_with_overrides(
-                        &state.http,
+                        &state.http(),
                         provider,
                         &secret,
                         &request,
@@ -724,6 +753,10 @@ pub async fn relay(
                         &crate::relay::Overrides {
                             body: Some(out_body),
                             headers: out_headers,
+                        },
+                        crate::relay::Timeouts {
+                            first_byte_seconds: snapshot.first_byte_timeout_seconds,
+                            stream_idle_seconds: snapshot.stream_idle_timeout_seconds,
                         },
                     )
                     .await
@@ -818,7 +851,7 @@ pub async fn relay(
                                 .and_then(|value| value.to_str().ok())
                                 .and_then(|value| value.parse::<u64>().ok())
                                 .unwrap_or(0)
-                                .min(5);
+                                .min(snapshot.retry_after_cap_seconds);
                             if delay > 0 {
                                 tokio::time::sleep(std::time::Duration::from_secs(delay)).await;
                             }
@@ -881,6 +914,7 @@ pub async fn relay(
                             started,
                             first_byte_ms,
                             inflight: Some(inflight),
+                            stream_idle_seconds: snapshot.stream_idle_timeout_seconds,
                             log_bodies: snapshot.log_bodies,
                             inbound_protocol,
                             response_context,
