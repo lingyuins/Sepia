@@ -20,6 +20,7 @@ async fn client_keys_reject_invalid_or_elapsed_expirations_when_created() {
                     rpm: 0,
                     tpm: 0,
                     expires_at,
+                    secret: None,
                 })
                 .await
                 .is_err()
@@ -63,6 +64,7 @@ async fn amount_budget_reserves_and_charges_actual_model_usage() {
             rpm: 0,
             tpm: 0,
             expires_at: None,
+            secret: None,
         })
         .await
         .unwrap();
@@ -87,6 +89,7 @@ async fn amount_budget_reserves_and_charges_actual_model_usage() {
             rpm: 0,
             tpm: 0,
             expires_at: None,
+            secret: None,
         })
         .await
         .unwrap();

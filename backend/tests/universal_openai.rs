@@ -104,6 +104,7 @@ async fn store_with_route(
             rpm: 0,
             tpm: 0,
             expires_at: None,
+            secret: None,
         })
         .await
         .unwrap()
@@ -347,6 +348,7 @@ async fn authentication_failures_rotate_keys_before_switching_endpoint() {
             rpm: 0,
             tpm: 0,
             expires_at: None,
+            secret: None,
         })
         .await
         .unwrap()
@@ -450,6 +452,7 @@ async fn failing_both_endpoints_advances_to_next_candidate() {
             rpm: 0,
             tpm: 0,
             expires_at: None,
+            secret: None,
         })
         .await
         .unwrap()

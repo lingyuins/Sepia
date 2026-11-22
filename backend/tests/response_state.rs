@@ -65,6 +65,7 @@ async fn gateway(upstream: Router) -> (SocketAddr, Store, String, tempfile::Temp
             rpm: 0,
             tpm: 0,
             expires_at: None,
+            secret: None,
         })
         .await
         .unwrap()
@@ -338,6 +339,7 @@ async fn conversation_items_are_scoped_and_paginated() {
             rpm: 0,
             tpm: 0,
             expires_at: None,
+            secret: None,
         })
         .await
         .unwrap()

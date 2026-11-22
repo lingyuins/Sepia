@@ -27,12 +27,12 @@ test('service draft validation mirrors backend limits', () => {
 
 test('service input trims and converts to wire fields', () => {
   const input = aiServiceInput(draft({ name: ' Planner ', endpoint: ' https://ai.example/v1 ', secret: ' sk-test ', timeoutSeconds: '90', concurrency: '4' }))
-  assert.deepEqual(input, { name: 'Planner', endpoint: 'https://ai.example/v1', secret: 'sk-test', model: 'planner-x', models: [], timeout_seconds: 90, concurrency: 4, enabled: true })
+  assert.deepEqual(input, { name: 'Planner', provider_id: null, endpoint: 'https://ai.example/v1', secret: 'sk-test', model: 'planner-x', models: [], timeout_seconds: 90, concurrency: 4, enabled: true })
 })
 
 test('service mapping round-trips through the edit draft', () => {
   const service = mapAiPoolService({ id: 7, name: 'Planner', endpoint: 'https://ai.example/v1', model: 'planner-x', models: ['planner-x', 'planner-y'], timeout_seconds: 45, concurrency: 3, enabled: false, created_at: 'x', updated_at: 'y' })
-  assert.deepEqual(service, { id: 7, name: 'Planner', endpoint: 'https://ai.example/v1', model: 'planner-x', models: ['planner-x', 'planner-y'], timeoutSeconds: 45, concurrency: 3, enabled: false })
+  assert.deepEqual(service, { id: 7, name: 'Planner', providerId: null, endpoint: 'https://ai.example/v1', model: 'planner-x', models: ['planner-x', 'planner-y'], timeoutSeconds: 45, concurrency: 3, enabled: false })
   const edit = serviceDraftFrom(service)
   assert.equal(edit.secret, '')
   assert.equal(edit.timeoutSeconds, '45')

@@ -565,3 +565,89 @@ async fn generation_drops_invented_candidates_and_reports_dead_services() {
     assert_eq!(errors.len(), 2);
     assert!(errors[0].as_str().unwrap().contains("planner offline"));
 }
+
+#[tokio::test]
+async fn provider_backed_pool_service_borrows_provider_credentials() {
+    let (upstream, hits) = ai_upstream(0, vec![]).await;
+    let directory = tempfile::tempdir().unwrap();
+    let store = Store::connect(&directory.path().join("ai_provider.db"))
+        .await
+        .unwrap();
+    let keys = KeyStore::testing();
+    let provider = store
+        .create_provider(
+            NewProvider {
+                name: "relay".into(),
+                protocol: ProviderProtocol::OpenAI,
+                endpoint: format!("http://{upstream}"),
+                models: vec!["m-a".into()],
+                plugin_id: None,
+                mode: "single".into(),
+            },
+            "provider-key",
+            &[],
+            &keys,
+        )
+        .await
+        .unwrap();
+    let state = AppState::for_testing(store).await;
+    let address = serve(app(state.clone())).await;
+    let base = format!("http://{address}");
+    let (client, cookie) = admin(&base, &state).await;
+    enable_pool(&client, &base, &cookie).await;
+    // Provider-backed service: no endpoint or secret in the body.
+    let created = client
+        .post(format!("{base}/api/v1/ai/pool"))
+        .header("cookie", &cookie)
+        .json(&json!({
+            "name":"from-provider","provider_id":provider.id,"model":"planner-x",
+            "models":["planner-x"],"timeout_seconds":10,"concurrency":1,"enabled":true
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        created.status(),
+        200,
+        "{}",
+        created.text().await.unwrap_or_default()
+    );
+    let created: Value = created.json().await.unwrap();
+    let id = created["id"].as_i64().unwrap();
+    assert_eq!(created["provider_id"], json!(provider.id));
+    assert_eq!(created["endpoint"], format!("http://{upstream}"));
+    assert!(created.get("secret").is_none());
+    // Saved-service detection borrows the provider's first key.
+    let detect = client
+        .post(format!("{base}/api/v1/ai/pool/{id}/test"))
+        .header("cookie", &cookie)
+        .json(&json!({}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(detect.status(), 200);
+    let detect: Value = detect.json().await.unwrap();
+    assert_eq!(detect["models"], json!(["planner-x", "planner-y"]));
+    // Draft detection by provider id also borrows the key.
+    let draft = client
+        .post(format!("{base}/api/v1/ai/pool/test"))
+        .header("cookie", &cookie)
+        .json(&json!({"provider_id":provider.id}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(draft.status(), 200);
+    // Generation dispatches through the provider's endpoint and key.
+    let result: Value = client
+        .post(format!("{base}/api/v1/ai/routes/generate"))
+        .header("cookie", &cookie)
+        .json(&json!({"instruction":"group","batch_size":1}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(result["routes"].as_array().unwrap().len(), 1);
+    assert!(!hits.lock().unwrap().is_empty());
+}

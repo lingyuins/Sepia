@@ -52,6 +52,7 @@ async fn anthropic_model_listing_does_not_require_a_version_header() {
             rpm: 0,
             tpm: 0,
             expires_at: None,
+            secret: None,
         })
         .await
         .unwrap();
@@ -139,6 +140,7 @@ async fn a_candidate_permission_exposes_its_route_slug() {
             rpm: 0,
             tpm: 0,
             expires_at: None,
+            secret: None,
         })
         .await
         .unwrap();
@@ -261,6 +263,7 @@ async fn group_only_routes_never_list_member_models() {
             rpm: 0,
             tpm: 0,
             expires_at: None,
+            secret: None,
         })
         .await
         .unwrap();

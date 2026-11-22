@@ -100,6 +100,7 @@ async fn provider_and_route_updates_round_trip_and_analytics_are_real() {
             rpm: 0,
             tpm: 0,
             expires_at: None,
+            secret: None,
         })
         .await
         .unwrap();

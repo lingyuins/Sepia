@@ -87,6 +87,7 @@ async fn failed_first_candidate_fails_over_and_records_attempts() {
             rpm: 0,
             tpm: 0,
             expires_at: None,
+            secret: None,
         })
         .await
         .unwrap()
@@ -168,6 +169,7 @@ async fn assert_anthropic_stream_is_converted_to_openai_sse(line_ending: &str) {
             rpm: 0,
             tpm: 0,
             expires_at: None,
+            secret: None,
         })
         .await
         .unwrap()
@@ -241,6 +243,7 @@ async fn responses_stream_is_converted_to_openai_sse() {
             rpm: 0,
             tpm: 0,
             expires_at: None,
+            secret: None,
         })
         .await
         .unwrap()
@@ -322,6 +325,7 @@ async fn failing_chat_candidate_fails_over_to_responses_only_upstream() {
             rpm: 0,
             tpm: 0,
             expires_at: None,
+            secret: None,
         })
         .await
         .unwrap()
@@ -400,6 +404,7 @@ async fn truncated_stream_is_failed_not_sticky_success() {
             rpm: 0,
             tpm: 0,
             expires_at: None,
+            secret: None,
         })
         .await
         .unwrap()

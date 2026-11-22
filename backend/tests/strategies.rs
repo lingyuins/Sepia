@@ -112,6 +112,7 @@ async fn round_robin_cycles_candidates_in_order() {
             rpm: 0,
             tpm: 0,
             expires_at: None,
+            secret: None,
         })
         .await
         .unwrap()
@@ -172,6 +173,7 @@ async fn cost_optimized_prefers_cheapest_priced_candidate() {
             rpm: 0,
             tpm: 0,
             expires_at: None,
+            secret: None,
         })
         .await
         .unwrap()
@@ -220,6 +222,7 @@ async fn priority_keeps_saved_candidate_order() {
             rpm: 0,
             tpm: 0,
             expires_at: None,
+            secret: None,
         })
         .await
         .unwrap()

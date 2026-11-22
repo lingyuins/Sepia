@@ -3,6 +3,7 @@ import type { RouteCandidate, RouteRule } from './workspace'
 export type AiPoolService = {
   id: number
   name: string
+  providerId: number | null
   endpoint: string
   model: string
   models: string[]
@@ -13,6 +14,7 @@ export type AiPoolService = {
 
 export type AiPoolServiceDraft = {
   name: string
+  providerId: number | null
   endpoint: string
   secret: string
   model: string
@@ -22,7 +24,7 @@ export type AiPoolServiceDraft = {
   enabled: boolean
 }
 
-export const emptyAiServiceDraft: AiPoolServiceDraft = { name: '', endpoint: '', secret: '', model: '', models: [], timeoutSeconds: '60', concurrency: '2', enabled: true }
+export const emptyAiServiceDraft: AiPoolServiceDraft = { name: '', providerId: null, endpoint: '', secret: '', model: '', models: [], timeoutSeconds: '60', concurrency: '2', enabled: true }
 
 export type AiServiceDraftError = { key: string; params?: Record<string, string> }
 
@@ -30,11 +32,15 @@ export type AiServiceDraftError = { key: string; params?: Record<string, string>
 // concurrency 1..16. A blank secret is allowed when editing (keeps stored key).
 export function validateAiServiceDraft(draft: AiPoolServiceDraft, editing: boolean): AiServiceDraftError | null {
   if (!draft.name.trim()) return { key: 'aiServiceNameRequired' }
-  const endpoint = draft.endpoint.trim()
-  let parsed: URL
-  try { parsed = new URL(endpoint) } catch { return { key: 'aiServiceEndpointInvalid' } }
-  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return { key: 'aiServiceEndpointInvalid' }
-  if (!editing && !draft.secret.trim()) return { key: 'aiServiceKeyRequired' }
+  // Provider-backed services borrow the provider's address and key, so the
+  // endpoint/secret fields are not required (mirrors backend validate()).
+  if (draft.providerId === null) {
+    const endpoint = draft.endpoint.trim()
+    let parsed: URL
+    try { parsed = new URL(endpoint) } catch { return { key: 'aiServiceEndpointInvalid' } }
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return { key: 'aiServiceEndpointInvalid' }
+    if (!editing && !draft.secret.trim()) return { key: 'aiServiceKeyRequired' }
+  }
   if (!draft.model.trim()) return { key: 'aiServiceModelRequired' }
   const timeout = Number(draft.timeoutSeconds)
   if (!Number.isInteger(timeout) || timeout < 1 || timeout > 600) return { key: 'aiServiceTimeoutInvalid' }
@@ -46,6 +52,7 @@ export function validateAiServiceDraft(draft: AiPoolServiceDraft, editing: boole
 export function aiServiceInput(draft: AiPoolServiceDraft) {
   return {
     name: draft.name.trim(),
+    provider_id: draft.providerId,
     endpoint: draft.endpoint.trim(),
     secret: draft.secret.trim(),
     model: draft.model.trim(),
@@ -56,14 +63,14 @@ export function aiServiceInput(draft: AiPoolServiceDraft) {
   }
 }
 
-export type ApiAiPoolService = { id: number; name: string; endpoint: string; model: string; models: string[]; timeout_seconds: number; concurrency: number; enabled: boolean; created_at: string; updated_at: string }
+export type ApiAiPoolService = { id: number; name: string; provider_id: number | null; endpoint: string; model: string; models: string[]; timeout_seconds: number; concurrency: number; enabled: boolean; created_at: string; updated_at: string }
 
 export function mapAiPoolService(service: ApiAiPoolService): AiPoolService {
-  return { id: service.id, name: service.name, endpoint: service.endpoint, model: service.model, models: service.models, timeoutSeconds: service.timeout_seconds, concurrency: service.concurrency, enabled: service.enabled }
+  return { id: service.id, name: service.name, providerId: service.provider_id ?? null, endpoint: service.endpoint, model: service.model, models: service.models, timeoutSeconds: service.timeout_seconds, concurrency: service.concurrency, enabled: service.enabled }
 }
 
 export function serviceDraftFrom(service: AiPoolService): AiPoolServiceDraft {
-  return { name: service.name, endpoint: service.endpoint, secret: '', model: service.model, models: service.models, timeoutSeconds: String(service.timeoutSeconds), concurrency: String(service.concurrency), enabled: service.enabled }
+  return { name: service.name, providerId: service.providerId, endpoint: service.endpoint, secret: '', model: service.model, models: service.models, timeoutSeconds: String(service.timeoutSeconds), concurrency: String(service.concurrency), enabled: service.enabled }
 }
 
 export type GeneratedRoute = {

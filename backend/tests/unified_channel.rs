@@ -183,6 +183,7 @@ async fn unified_store(
             rpm: 0,
             tpm: 0,
             expires_at: None,
+            secret: None,
         })
         .await
         .unwrap()

@@ -106,6 +106,7 @@ async fn seeded(db: &str, address: SocketAddr) -> (Store, String, tempfile::Temp
             rpm: 0,
             tpm: 0,
             expires_at: None,
+            secret: None,
         })
         .await
         .unwrap()

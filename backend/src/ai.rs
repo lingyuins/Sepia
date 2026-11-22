@@ -31,6 +31,9 @@ pub struct AiPoolService {
     pub timeout_seconds: i64,
     pub concurrency: i64,
     pub enabled: bool,
+    /// When set, endpoint and key are derived live from this gateway provider
+    /// instead of the stored custom-service credentials.
+    pub provider_id: Option<i64>,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -39,22 +42,25 @@ pub struct AiPoolService {
 pub struct AiPoolServiceInput {
     pub name: String,
     pub endpoint: String,
-    /// Empty on update keeps the stored key.
+    /// Empty on update keeps the stored key. Ignored for provider-backed services.
     pub secret: String,
     pub model: String,
     pub models: Vec<String>,
     pub timeout_seconds: i64,
     pub concurrency: i64,
     pub enabled: bool,
+    pub provider_id: Option<i64>,
 }
 
 fn validate(input: &AiPoolServiceInput) -> Result<(), String> {
     if input.name.trim().is_empty() {
         return Err("service name required".into());
     }
-    let parsed = url::Url::parse(input.endpoint.trim()).map_err(|e| e.to_string())?;
-    if !matches!(parsed.scheme(), "http" | "https") {
-        return Err("service endpoint must be HTTP(S)".into());
+    if input.provider_id.is_none() {
+        let parsed = url::Url::parse(input.endpoint.trim()).map_err(|e| e.to_string())?;
+        if !matches!(parsed.scheme(), "http" | "https") {
+            return Err("service endpoint must be HTTP(S)".into());
+        }
     }
     if input.model.trim().is_empty() {
         return Err("service model required; detect models first".into());
@@ -70,7 +76,7 @@ fn validate(input: &AiPoolServiceInput) -> Result<(), String> {
 
 impl Store {
     pub async fn ai_pool_services(&self) -> Result<Vec<AiPoolService>, String> {
-        let rows = sqlx::query("SELECT id, name, endpoint, model, models, timeout_seconds, concurrency, enabled, created_at, updated_at FROM ai_pool_services ORDER BY position, id")
+        let rows = sqlx::query("SELECT id, name, endpoint, model, models, timeout_seconds, concurrency, enabled, provider_id, created_at, updated_at FROM ai_pool_services ORDER BY position, id")
             .fetch_all(&self.pool)
             .await
             .map_err(|e| e.to_string())?;
@@ -85,6 +91,7 @@ impl Store {
                     timeout_seconds: row.get("timeout_seconds"),
                     concurrency: row.get("concurrency"),
                     enabled: row.get("enabled"),
+                    provider_id: row.get("provider_id"),
                     created_at: row.get("created_at"),
                     updated_at: row.get("updated_at"),
                 })
@@ -98,18 +105,42 @@ impl Store {
         key_store: &KeyStore,
     ) -> Result<AiPoolService, String> {
         validate(&input)?;
-        if input.secret.trim().is_empty() {
-            return Err("service API key required".into());
-        }
-        let (nonce, ciphertext) = key_store.encrypt(input.secret.trim())?;
+        // Provider-backed services borrow the provider's endpoint and key live;
+        // store an empty encrypted secret and resolve credentials on demand.
+        let (endpoint, nonce, ciphertext) = match input.provider_id {
+            Some(provider_id) => {
+                let provider = self
+                    .providers()
+                    .await?
+                    .into_iter()
+                    .find(|provider| provider.id == provider_id)
+                    .ok_or("provider not found")?;
+                if provider.key_count == 0 {
+                    return Err("provider has no enabled key".into());
+                }
+                let (nonce, ciphertext) = key_store.encrypt("")?;
+                (provider.endpoint, nonce, ciphertext)
+            }
+            None => {
+                if input.secret.trim().is_empty() {
+                    return Err("service API key required".into());
+                }
+                let (nonce, ciphertext) = key_store.encrypt(input.secret.trim())?;
+                (
+                    input.endpoint.trim().trim_end_matches('/').to_string(),
+                    nonce,
+                    ciphertext,
+                )
+            }
+        };
         let position = sqlx::query("SELECT COALESCE(MAX(position), -1) + 1 FROM ai_pool_services")
             .fetch_one(&self.pool)
             .await
             .map_err(|e| e.to_string())?
             .get::<i64, _>(0);
-        let id = sqlx::query("INSERT INTO ai_pool_services (name, endpoint, nonce, ciphertext, model, models, timeout_seconds, concurrency, enabled, position) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+        let id = sqlx::query("INSERT INTO ai_pool_services (name, endpoint, nonce, ciphertext, model, models, timeout_seconds, concurrency, enabled, provider_id, position) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
             .bind(input.name.trim())
-            .bind(input.endpoint.trim().trim_end_matches('/'))
+            .bind(endpoint)
             .bind(nonce)
             .bind(ciphertext)
             .bind(input.model.trim())
@@ -117,6 +148,7 @@ impl Store {
             .bind(input.timeout_seconds)
             .bind(input.concurrency)
             .bind(input.enabled)
+            .bind(input.provider_id)
             .bind(position)
             .execute(&self.pool)
             .await
@@ -142,17 +174,39 @@ impl Store {
             .await
             .map_err(|e| e.to_string())?
             .ok_or("service not found".to_string())?;
-        let (nonce, ciphertext) = if input.secret.trim().is_empty() {
-            (
-                existing.get::<String, _>("nonce"),
-                existing.get::<String, _>("ciphertext"),
-            )
-        } else {
-            key_store.encrypt(input.secret.trim())?
+        let (endpoint, nonce, ciphertext) = match input.provider_id {
+            Some(provider_id) => {
+                let provider = self
+                    .providers()
+                    .await?
+                    .into_iter()
+                    .find(|provider| provider.id == provider_id)
+                    .ok_or("provider not found")?;
+                if provider.key_count == 0 {
+                    return Err("provider has no enabled key".into());
+                }
+                let (nonce, ciphertext) = key_store.encrypt("")?;
+                (provider.endpoint, nonce, ciphertext)
+            }
+            None => {
+                let (nonce, ciphertext) = if input.secret.trim().is_empty() {
+                    (
+                        existing.get::<String, _>("nonce"),
+                        existing.get::<String, _>("ciphertext"),
+                    )
+                } else {
+                    key_store.encrypt(input.secret.trim())?
+                };
+                (
+                    input.endpoint.trim().trim_end_matches('/').to_string(),
+                    nonce,
+                    ciphertext,
+                )
+            }
         };
-        sqlx::query("UPDATE ai_pool_services SET name = ?, endpoint = ?, nonce = ?, ciphertext = ?, model = ?, models = ?, timeout_seconds = ?, concurrency = ?, enabled = ?, updated_at = datetime('now') WHERE id = ?")
+        sqlx::query("UPDATE ai_pool_services SET name = ?, endpoint = ?, nonce = ?, ciphertext = ?, model = ?, models = ?, timeout_seconds = ?, concurrency = ?, enabled = ?, provider_id = ?, updated_at = datetime('now') WHERE id = ?")
             .bind(input.name.trim())
-            .bind(input.endpoint.trim().trim_end_matches('/'))
+            .bind(endpoint)
             .bind(nonce)
             .bind(ciphertext)
             .bind(input.model.trim())
@@ -160,6 +214,7 @@ impl Store {
             .bind(input.timeout_seconds)
             .bind(input.concurrency)
             .bind(input.enabled)
+            .bind(input.provider_id)
             .bind(id)
             .execute(&self.pool)
             .await
@@ -184,15 +239,34 @@ impl Store {
     }
 
     pub async fn ai_pool_secret(&self, id: i64, key_store: &KeyStore) -> Result<String, String> {
-        let row = sqlx::query("SELECT nonce, ciphertext FROM ai_pool_services WHERE id = ?")
-            .bind(id)
-            .fetch_optional(&self.pool)
-            .await
-            .map_err(|e| e.to_string())?
-            .ok_or("service not found".to_string())?;
+        let row =
+            sqlx::query("SELECT nonce, ciphertext, provider_id FROM ai_pool_services WHERE id = ?")
+                .bind(id)
+                .fetch_optional(&self.pool)
+                .await
+                .map_err(|e| e.to_string())?
+                .ok_or("service not found".to_string())?;
+        if let Some(provider_id) = row.get::<Option<i64>, _>("provider_id") {
+            return self.upstream_key(provider_id, key_store).await;
+        }
         Ok(key_store
             .decrypt(row.get("nonce"), row.get("ciphertext"))?
             .to_string())
+    }
+
+    /// Live endpoint for a service: provider-backed services follow the
+    /// provider's current first address, custom services use the stored one.
+    pub async fn ai_pool_endpoint(&self, service: &AiPoolService) -> Result<String, String> {
+        match service.provider_id {
+            Some(provider_id) => Ok(self
+                .providers()
+                .await?
+                .into_iter()
+                .find(|provider| provider.id == provider_id)
+                .ok_or("provider not found")?
+                .endpoint),
+            None => Ok(service.endpoint.clone()),
+        }
     }
 
     pub async fn ai_pool_enabled(&self) -> Result<bool, String> {
@@ -208,7 +282,10 @@ impl Store {
 #[derive(Deserialize)]
 pub struct PoolServiceBody {
     name: String,
+    #[serde(default)]
     endpoint: String,
+    #[serde(default)]
+    provider_id: Option<i64>,
     #[serde(default)]
     secret: String,
     #[serde(default)]
@@ -242,6 +319,7 @@ impl PoolServiceBody {
             timeout_seconds: self.timeout_seconds,
             concurrency: self.concurrency,
             enabled: self.enabled,
+            provider_id: self.provider_id,
         }
     }
 }
@@ -295,13 +373,33 @@ pub struct PoolTestBody {
     endpoint: String,
     #[serde(default)]
     secret: String,
+    #[serde(default)]
+    provider_id: Option<i64>,
 }
 
-/// Catalog discovery for an unsaved service draft (OpenAI-compatible only).
+/// Catalog discovery for an unsaved service draft. A provider-backed draft
+/// borrows the gateway provider's endpoint and first key; custom drafts need
+/// both endpoint and API key (OpenAI-compatible only).
 async fn test_pool_draft(
     State(state): State<AppState>,
     Json(body): Json<PoolTestBody>,
 ) -> Response {
+    if let Some(provider_id) = body.provider_id {
+        let provider = match state.store.providers().await {
+            Ok(providers) => providers
+                .into_iter()
+                .find(|provider| provider.id == provider_id),
+            Err(message) => return error(StatusCode::INTERNAL_SERVER_ERROR, message),
+        };
+        let Some(provider) = provider else {
+            return error(StatusCode::NOT_FOUND, "provider not found");
+        };
+        let secret = match state.store.upstream_key(provider_id, &state.keys).await {
+            Ok(secret) => secret,
+            Err(message) => return error(StatusCode::BAD_REQUEST, message),
+        };
+        return discover_pool_models(&state, &provider.endpoint, &secret).await;
+    }
     if body.endpoint.trim().is_empty() || body.secret.trim().is_empty() {
         return error(
             StatusCode::BAD_REQUEST,
@@ -325,7 +423,10 @@ async fn test_pool_service(
         return error(StatusCode::NOT_FOUND, "service not found");
     };
     let endpoint = if body.endpoint.trim().is_empty() {
-        service.endpoint.clone()
+        match state.store.ai_pool_endpoint(&service).await {
+            Ok(endpoint) => endpoint,
+            Err(message) => return error(StatusCode::BAD_REQUEST, message),
+        }
     } else {
         body.endpoint.trim().to_string()
     };
@@ -690,6 +791,10 @@ pub async fn generate_routes(
     let mut worker_services: Vec<usize> = Vec::new();
     let mut workers = tokio::task::JoinSet::new();
     for (service_index, (service, secret)) in active.iter().enumerate() {
+        let endpoint = match state.store.ai_pool_endpoint(service).await {
+            Ok(endpoint) => endpoint,
+            Err(message) => return error(StatusCode::BAD_REQUEST, message),
+        };
         for _ in 0..service.concurrency {
             // Channels are indexed by global worker id, never by service
             // index: several workers share one service, and the scheduler
@@ -700,7 +805,7 @@ pub async fn generate_routes(
             worker_services.push(service_index);
             let events = event_tx.clone();
             let client = state.http();
-            let endpoint = service.endpoint.clone();
+            let endpoint = endpoint.clone();
             let model = service.model.clone();
             let timeout = service.timeout_seconds;
             let secret = secret.clone();

@@ -72,6 +72,7 @@ async fn bootstrap_authenticates_sessions_and_persists_configuration() {
             rpm: 10,
             tpm: 1000,
             expires_at: None,
+            secret: None,
         })
         .await
         .unwrap();

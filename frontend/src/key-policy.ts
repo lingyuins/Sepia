@@ -12,6 +12,7 @@ export type KeyPolicy = {
   expiresAt: string | null
   models: string[]
   allowedGroups: string[]
+  modelGroups: number[]
   excludedProviders: string[]
   enabled: boolean
 }

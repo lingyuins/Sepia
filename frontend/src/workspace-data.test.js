@@ -61,6 +61,7 @@ const current = {
   analytics: emptyAnalytics,
   clientKeys: [],
   channelGroups: [],
+  modelGroups: [],
   plugins: [],
   version: '',
   settings: { ...defaultSettings, language: '简体中文', theme: 'Light' },

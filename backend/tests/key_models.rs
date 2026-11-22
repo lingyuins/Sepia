@@ -144,6 +144,7 @@ async fn store_with_scoped_provider(
             rpm: 0,
             tpm: 0,
             expires_at: None,
+            secret: None,
         })
         .await
         .unwrap()
@@ -278,6 +279,7 @@ async fn auth_rotation_stays_within_eligible_scoped_keys() {
             rpm: 0,
             tpm: 0,
             expires_at: None,
+            secret: None,
         })
         .await
         .unwrap()
@@ -348,6 +350,7 @@ async fn unscoped_keys_still_serve_every_model() {
             rpm: 0,
             tpm: 0,
             expires_at: None,
+            secret: None,
         })
         .await
         .unwrap()
@@ -524,4 +527,252 @@ async fn management_discovers_models_per_key_and_persists_scopes() {
         discoveries,
         vec!["Bearer claude-key", "Bearer gpt-key", "Bearer gpt-key"]
     );
+}
+
+// Model groups widen a key's scope by union; they never rewrite routing.
+async fn store_with_group_route(
+    db: &str,
+    address: SocketAddr,
+) -> (Store, String, tempfile::TempDir) {
+    let directory = tempfile::tempdir().unwrap();
+    let store = Store::connect(&directory.path().join(db)).await.unwrap();
+    let keys = KeyStore::testing();
+    let provider = store
+        .create_provider(
+            NewProvider {
+                name: "relay".into(),
+                protocol: ProviderProtocol::OpenAI,
+                endpoint: format!("http://{address}"),
+                models: vec!["claude-a".into(), "claude-b".into(), "gpt-a".into()],
+                plugin_id: None,
+                mode: "single".into(),
+            },
+            "claude-key",
+            &[(
+                "claude-key".into(),
+                vec!["claude-a".into(), "claude-b".into()],
+            )],
+            &keys,
+        )
+        .await
+        .unwrap();
+    store
+        .add_provider_key(provider.id, "gpt-key", Some(&["gpt-a".into()]), None, &keys)
+        .await
+        .unwrap();
+    for model in ["claude-a", "claude-b", "gpt-a"] {
+        store
+            .create_route(NewRoute {
+                slug: model.into(),
+                name: model.into(),
+                description: String::new(),
+                patterns: vec![model.into()],
+                provider_id: provider.id,
+                model: model.into(),
+                is_default: false,
+                list_members: true,
+                candidates: vec![],
+            })
+            .await
+            .unwrap();
+    }
+    let key = store
+        .create_client_key(UpsertClientKey {
+            name: "grouped".into(),
+            models: vec!["gpt-a".into()],
+            token_limit: 0,
+            max_amount_micros: 0,
+            rpm: 0,
+            tpm: 0,
+            expires_at: None,
+            secret: None,
+        })
+        .await
+        .unwrap();
+    (store, key.plaintext, directory)
+}
+
+#[tokio::test]
+async fn model_group_members_union_into_key_scope() {
+    let (upstream, _hits) = relay_upstream().await;
+    let (store, key, _directory) = store_with_group_route("group_union.db", upstream).await;
+    let client = reqwest::Client::new();
+    let key_id = store.client_keys().await.unwrap()[0].id;
+    let address = gateway(&store).await;
+    // Before any group reference, only the key's own model is allowed.
+    let before = client
+        .post(format!("http://{address}/v1/chat/completions"))
+        .bearer_auth(&key)
+        .json(&json!({"model":"claude-a","messages":[{"role":"user","content":"hi"}]}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(before.status(), 403);
+    let group = store
+        .create_model_group("Claude", "", &["claude-a".into(), "claude-b".into()])
+        .await
+        .unwrap();
+    let mut policy = store.client_policy(key_id).await.unwrap();
+    policy.model_groups = vec![group.id];
+    store.set_client_policy(key_id, &policy).await.unwrap();
+    // The group's members now authorize claude-a alongside the key's gpt-a.
+    for model in ["claude-a", "gpt-a"] {
+        let response = client
+            .post(format!("http://{address}/v1/chat/completions"))
+            .bearer_auth(&key)
+            .json(&json!({"model":model,"messages":[{"role":"user","content":"hi"}]}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), 200, "{model}");
+    }
+    // The model list reflects the union of key models and group members.
+    let models: Value = client
+        .get(format!("http://{address}/v1/models"))
+        .bearer_auth(&key)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let ids: Vec<&str> = models["data"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|entry| entry["id"].as_str().unwrap())
+        .collect();
+    assert!(ids.contains(&"claude-a"), "{ids:?}");
+    assert!(ids.contains(&"claude-b"), "{ids:?}");
+    assert!(ids.contains(&"gpt-a"), "{ids:?}");
+}
+
+#[tokio::test]
+async fn deleting_a_referenced_model_group_is_rejected() {
+    let directory = tempfile::tempdir().unwrap();
+    let store = Store::connect(&directory.path().join("group_delete.db"))
+        .await
+        .unwrap();
+    let state = AppState::for_testing(store.clone()).await;
+    let address = serve(app(state)).await;
+    let client = reqwest::Client::new();
+    let url = |path: &str| format!("http://{address}{path}");
+    client
+        .post(url("/api/v1/auth/bootstrap"))
+        .json(&json!({"username":"admin","password":"correct horse","token":AppState::for_testing(store.clone()).await.bootstrap_token}))
+        .send()
+        .await
+        .unwrap();
+    let login = client
+        .post(url("/api/v1/auth/login"))
+        .json(&json!({"username":"admin","password":"correct horse"}))
+        .send()
+        .await
+        .unwrap();
+    let cookie = login
+        .headers()
+        .get("set-cookie")
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .split(';')
+        .next()
+        .unwrap()
+        .to_string();
+    let group: Value = client
+        .post(url("/api/v1/model-groups"))
+        .header("cookie", &cookie)
+        .json(&json!({"name":"Claude","members":["claude-a"]}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let group_id = group["id"].as_i64().unwrap();
+    let key = store
+        .create_client_key(UpsertClientKey {
+            name: "ref".into(),
+            models: vec![],
+            token_limit: 0,
+            max_amount_micros: 0,
+            rpm: 0,
+            tpm: 0,
+            expires_at: None,
+            secret: None,
+        })
+        .await
+        .unwrap();
+    let mut policy = store.client_policy(key.id).await.unwrap();
+    policy.model_groups = vec![group_id];
+    store.set_client_policy(key.id, &policy).await.unwrap();
+    let rejected = client
+        .delete(url(&format!("/api/v1/model-groups/{group_id}")))
+        .header("cookie", &cookie)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(rejected.status(), 409);
+    // Detaching the reference allows deletion.
+    policy.model_groups = vec![];
+    store.set_client_policy(key.id, &policy).await.unwrap();
+    let deleted = client
+        .delete(url(&format!("/api/v1/model-groups/{group_id}")))
+        .header("cookie", &cookie)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(deleted.status(), 200);
+    let listed: Value = client
+        .get(url("/api/v1/model-groups"))
+        .header("cookie", &cookie)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(listed["groups"].as_array().unwrap().len(), 0);
+}
+
+#[tokio::test]
+async fn create_client_key_honors_an_imported_secret() {
+    let directory = tempfile::tempdir().unwrap();
+    let store = Store::connect(&directory.path().join("imported_secret.db"))
+        .await
+        .unwrap();
+    let imported = store
+        .create_client_key(UpsertClientKey {
+            name: "imported".into(),
+            models: vec!["*".into()],
+            token_limit: 0,
+            max_amount_micros: 0,
+            rpm: 0,
+            tpm: 0,
+            expires_at: None,
+            secret: Some("sk-octopus-imported".into()),
+        })
+        .await
+        .unwrap();
+    assert_eq!(imported.plaintext, "sk-octopus-imported");
+    let authenticated = store
+        .authenticate_client("sk-octopus-imported")
+        .await
+        .unwrap();
+    assert!(authenticated.is_some());
+    // A blank or absent secret still generates a fresh sk-sepia- token.
+    let generated = store
+        .create_client_key(UpsertClientKey {
+            name: "generated".into(),
+            models: vec!["*".into()],
+            token_limit: 0,
+            max_amount_micros: 0,
+            rpm: 0,
+            tpm: 0,
+            expires_at: None,
+            secret: Some("   ".into()),
+        })
+        .await
+        .unwrap();
+    assert!(generated.plaintext.starts_with("sk-sepia-"));
 }

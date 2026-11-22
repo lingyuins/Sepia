@@ -121,6 +121,7 @@ pub struct UpsertClientKey {
     pub rpm: i64,
     pub tpm: i64,
     pub expires_at: Option<String>,
+    pub secret: Option<String>,
 }
 #[derive(Debug, Clone, Serialize)]
 pub struct ChannelGroup {
@@ -1184,7 +1185,10 @@ impl Store {
                 return Err("client key expiration must be in the future".into());
             }
         }
-        let plaintext = random_token("sk-sepia-");
+        let plaintext = input
+            .secret
+            .filter(|secret| !secret.trim().is_empty())
+            .unwrap_or_else(|| random_token("sk-sepia-"));
         let id = sqlx::query("INSERT INTO client_keys (token_hash, name, models, token_limit, max_amount_micros, rpm, tpm, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)").bind(token_hash(&plaintext)).bind(input.name).bind(serde_json::to_string(&input.models).map_err(|e| e.to_string())?).bind(input.token_limit).bind(input.max_amount_micros).bind(input.rpm).bind(input.tpm).bind(expires_at).execute(&self.pool).await.map_err(|e| e.to_string())?.last_insert_rowid();
         Ok(CreatedClientKey { id, plaintext })
     }
@@ -1199,10 +1203,20 @@ impl Store {
         {
             return Ok(None);
         }
+        let id: i64 = row.get("id");
+        let mut models: Vec<String> =
+            serde_json::from_str(row.get("models")).map_err(|e| e.to_string())?;
+        // Model groups widen the key's scope: effective models are the union
+        // of the key's own patterns and every referenced group's members.
+        for member in self.model_group_members(id).await? {
+            if !models.contains(&member) {
+                models.push(member);
+            }
+        }
         Ok(Some(ClientKey {
-            id: row.get("id"),
+            id,
             name: row.get("name"),
-            models: serde_json::from_str(row.get("models")).map_err(|e| e.to_string())?,
+            models,
             token_limit: row.get("token_limit"),
             max_amount_micros: row.get("max_amount_micros"),
             rpm: row.get("rpm"),

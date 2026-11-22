@@ -7,6 +7,7 @@ import {
   type ApiAnalytics,
   type ApiClientKey,
   type ApiGroup,
+  type ApiModelGroup,
   type ApiPlugin,
   type ApiProvider,
   type ApiRequest,
@@ -22,6 +23,7 @@ export const workspaceDomains = [
   'analytics',
   'keys',
   'groups',
+  'modelGroups',
   'settings',
   'plugins',
 ] as const
@@ -35,6 +37,7 @@ export type WorkspaceData = {
   analytics: ApiAnalytics
   clientKeys: ApiClientKey[]
   channelGroups: ChannelGroup[]
+  modelGroups: ApiModelGroup[]
   plugins: Plugin[]
   version: string
   settings: Settings
@@ -101,6 +104,7 @@ export async function loadWorkspaceSnapshot(
   if (requested.has('analytics')) tasks.push({ domain: 'analytics', promise: client<ApiAnalytics>(`/api/v1/analytics?period=${encodeURIComponent(period)}`) })
   if (requested.has('keys')) tasks.push({ domain: 'keys', promise: client<ApiClientKey[]>('/api/v1/keys') })
   if (requested.has('groups')) tasks.push({ domain: 'groups', promise: client<ApiGroup[]>('/api/v1/groups') })
+  if (requested.has('modelGroups')) tasks.push({ domain: 'modelGroups', promise: client<{ groups: ApiModelGroup[] }>('/api/v1/model-groups') })
   if (requested.has('settings')) tasks.push({ domain: 'settings', promise: client<ApiSettings>('/api/v1/settings') })
   if (requested.has('plugins')) tasks.push({ domain: 'plugins', promise: client<ApiPlugin[]>('/api/v1/plugins') })
   if (includeVersion) tasks.push({ domain: 'version', promise: client<{ version: string }>('/api/v1/version') })
@@ -113,6 +117,7 @@ export async function loadWorkspaceSnapshot(
     analytics: ApiAnalytics
     keys: ApiClientKey[]
     groups: ApiGroup[]
+    modelGroups: { groups: ApiModelGroup[] }
     settings: ApiSettings
     plugins: ApiPlugin[]
     version: { version: string }
@@ -128,6 +133,7 @@ export async function loadWorkspaceSnapshot(
   if (raw.analytics) next.analytics = raw.analytics
   if (raw.keys) next.clientKeys = raw.keys
   if (raw.groups) next.channelGroups = raw.groups
+  if (raw.modelGroups) next.modelGroups = raw.modelGroups.groups
   if (raw.settings) next.settings = mergeServerSettings(snapshot.settings, raw.settings)
   if (raw.plugins) next.plugins = raw.plugins.map(mapPlugin)
   if (raw.version) next.version = raw.version.version

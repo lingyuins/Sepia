@@ -6,4 +6,6 @@ dist
 .ryugi/
 .memory/
 backend/plugin-sdk/target/
-backend/plugin-examples/target/
+plugin-examples/target/
+sepia-octopus-receive/target/
+sepia-octopus-receive/octopus-receive.zip

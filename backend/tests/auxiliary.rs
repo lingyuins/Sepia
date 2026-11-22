@@ -186,6 +186,7 @@ async fn client_key(store: &Store, models: Vec<String>) -> String {
             rpm: 0,
             tpm: 0,
             expires_at: None,
+            secret: None,
         })
         .await
         .unwrap()

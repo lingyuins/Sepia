@@ -1,6 +1,6 @@
 //! End-to-end plugin runtime tests: package install, hook rewriting, route
 //! filtering, provider plugins, host capabilities, RPC and lifecycle. The wasm
-//! fixture is built from backend/plugin-examples (wasm32-unknown-unknown).
+//! fixture is built from plugin-examples (wasm32-unknown-unknown).
 use axum::{Router, extract::State, response::IntoResponse, routing::any};
 use sepia_gateway::{
     KeyStore, NewProvider, NewRoute, ProviderProtocol, Store,
@@ -228,6 +228,7 @@ async fn plugin_install_enable_hooks_and_lifecycle() {
             rpm: 0,
             tpm: 0,
             expires_at: None,
+            secret: None,
         })
         .await
         .unwrap();
@@ -469,6 +470,7 @@ async fn route_filter_excludes_candidates() {
             rpm: 0,
             tpm: 0,
             expires_at: None,
+            secret: None,
         })
         .await
         .unwrap();
@@ -592,6 +594,7 @@ async fn plugin_backed_provider_discovers_and_serves() {
             rpm: 0,
             tpm: 0,
             expires_at: None,
+            secret: None,
         })
         .await
         .unwrap();

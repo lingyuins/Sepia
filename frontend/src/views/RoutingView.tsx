@@ -8,6 +8,7 @@ import {
   ChevronRight,
   Copy,
   GripVertical,
+  Layers,
   Pencil,
   Play,
   Plus,
@@ -30,6 +31,7 @@ import { Dropdown } from '../components/Dropdown'
 import { RouteChain } from '../components/RouteChain'
 import { latestSuccessfulRouteRequest, routeDisplayCandidates } from '../route-display'
 import { AiRouteDialog } from '../components/AiRouteDialog'
+import ModelGroupsDialog from '../components/ModelGroupsDialog'
 import {
   ROUTE_STRATEGY_IDS,
   normalizeRouteStrategy,
@@ -107,6 +109,7 @@ function RouteForm({ route, onClose }: { route: RouteRule | null; onClose: () =>
   const [modelListing, setModelListing] = useState(route ? (route.listMembers === false ? 'group' : 'members') : 'group')
   const [strategy, setStrategy] = useState<RouteStrategyId>(normalizeRouteStrategy(route?.strategy))
   const [active, setActive] = useState(route?.active ?? true)
+  const [modelGroupsOpen, setModelGroupsOpen] = useState(false)
 
   const updateCandidate = (id: string, patch: Partial<RouteCandidate>) =>
     setCandidates((current) =>
@@ -206,6 +209,7 @@ function RouteForm({ route, onClose }: { route: RouteRule | null; onClose: () =>
   }
 
   return (
+    <>
     <form className="route-editor" onSubmit={save}>
       <section className="route-editor-section">
         <div className="route-editor-section-title">
@@ -267,7 +271,13 @@ function RouteForm({ route, onClose }: { route: RouteRule | null; onClose: () =>
         </p>
 
         <div className="route-group-patterns">
-          <span className="route-group-label">{t('matchPatterns')}</span>
+          <div className="route-group-label-row">
+            <span className="route-group-label">{t('matchPatterns')}</span>
+            <button type="button" className="button secondary compact" onClick={() => setModelGroupsOpen(true)}>
+              <Layers size={13} />
+              {t('modelGroupManage')}
+            </button>
+          </div>
           <div className="pattern-input-row">
             <input
               className="field"
@@ -533,6 +543,8 @@ function RouteForm({ route, onClose }: { route: RouteRule | null; onClose: () =>
       </div>
       <DialogActions onClose={onClose} label={route ? t('saveRoute') : t('createRoute')} />
     </form>
+    <ModelGroupsDialog open={modelGroupsOpen} onClose={() => setModelGroupsOpen(false)} />
+    </>
   )
 }
 

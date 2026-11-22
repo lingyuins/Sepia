@@ -148,6 +148,8 @@ pub struct KeyInput {
     #[serde(default)]
     tpm: i64,
     expires_at: Option<String>,
+    #[serde(default)]
+    secret: Option<String>,
 }
 fn error(status: StatusCode, message: impl Into<String>) -> Response {
     (status, Json(json!({"error":{"message":message.into()}}))).into_response()
@@ -892,7 +894,19 @@ async fn update_route(
     }
 }
 async fn keys(State(state): State<AppState>) -> Response {
-    match state.store.client_keys().await { Ok(keys) => Json(json!(keys.into_iter().map(|key| json!({"id":key.id,"name":key.name,"models":key.models,"token_limit":key.token_limit,"max_amount_micros":key.max_amount_micros,"rpm":key.rpm,"tpm":key.tpm,"expires_at":key.expires_at})).collect::<Vec<_>>())).into_response(), Err(message) => error(StatusCode::INTERNAL_SERVER_ERROR, message) }
+    let keys = match state.store.client_keys().await {
+        Ok(keys) => keys,
+        Err(message) => return error(StatusCode::INTERNAL_SERVER_ERROR, message),
+    };
+    let mut records = Vec::new();
+    for key in keys {
+        let model_groups = match state.store.client_policy(key.id).await {
+            Ok(policy) => policy.model_groups,
+            Err(message) => return error(StatusCode::INTERNAL_SERVER_ERROR, message),
+        };
+        records.push(json!({"id":key.id,"name":key.name,"models":key.models,"token_limit":key.token_limit,"max_amount_micros":key.max_amount_micros,"rpm":key.rpm,"tpm":key.tpm,"expires_at":key.expires_at,"model_groups":model_groups}));
+    }
+    Json(records).into_response()
 }
 async fn create_key(State(state): State<AppState>, Json(input): Json<KeyInput>) -> Response {
     match state
@@ -905,6 +919,7 @@ async fn create_key(State(state): State<AppState>, Json(input): Json<KeyInput>) 
             rpm: input.rpm,
             tpm: input.tpm,
             expires_at: input.expires_at,
+            secret: input.secret,
         })
         .await
     {
@@ -1190,6 +1205,54 @@ async fn set_policy(
         Err(message) => error(StatusCode::BAD_REQUEST, message),
     }
 }
+async fn model_groups(State(state): State<AppState>) -> Response {
+    match state.store.model_groups().await {
+        Ok(groups) => Json(json!({"groups":groups})).into_response(),
+        Err(message) => error(StatusCode::INTERNAL_SERVER_ERROR, message),
+    }
+}
+#[derive(Deserialize)]
+struct ModelGroupBody {
+    name: String,
+    #[serde(default)]
+    description: String,
+    #[serde(default)]
+    members: Vec<String>,
+}
+async fn create_model_group(
+    State(state): State<AppState>,
+    Json(body): Json<ModelGroupBody>,
+) -> Response {
+    match state
+        .store
+        .create_model_group(&body.name, &body.description, &body.members)
+        .await
+    {
+        Ok(group) => Json(group).into_response(),
+        Err(message) => error(StatusCode::BAD_REQUEST, message),
+    }
+}
+async fn update_model_group(
+    State(state): State<AppState>,
+    Path(id): Path<i64>,
+    Json(body): Json<ModelGroupBody>,
+) -> Response {
+    match state
+        .store
+        .update_model_group(id, &body.name, &body.description, &body.members)
+        .await
+    {
+        Ok(group) => Json(group).into_response(),
+        Err(message) => error(StatusCode::BAD_REQUEST, message),
+    }
+}
+async fn delete_model_group(State(state): State<AppState>, Path(id): Path<i64>) -> Response {
+    match state.store.delete_model_group(id).await {
+        Ok(()) => Json(json!({"deleted":true})).into_response(),
+        Err(message) if message.contains("referenced") => error(StatusCode::CONFLICT, message),
+        Err(message) => error(StatusCode::NOT_FOUND, message),
+    }
+}
 async fn update_settings(
     State(state): State<AppState>,
     Json(input): Json<std::collections::HashMap<String, serde_json::Value>>,
@@ -1429,6 +1492,7 @@ async fn install_plugin(
                 &record,
                 "plugin.migrate",
                 json!({"from_version": previous_version.clone().unwrap_or_default()}),
+                None,
             )
             .await;
     }
@@ -1519,6 +1583,7 @@ async fn plugin_ui_bundle(State(state): State<AppState>, Path(id): Path<String>)
 async fn plugin_rpc(
     State(state): State<AppState>,
     Path((id, path)): Path<(String, String)>,
+    headers: HeaderMap,
     Json(input): Json<serde_json::Value>,
 ) -> Response {
     if path.is_empty()
@@ -1540,6 +1605,38 @@ async fn plugin_rpc(
     if !record.manifest.has_event("http.rpc") {
         return error(StatusCode::FORBIDDEN, "plugin does not expose rpc");
     }
+    // An admin-authenticated RPC may borrow the invoking session so a plugin
+    // with the `admin` permission can drive the management API (e.g. imports).
+    let admin = if record.manifest.has_permission("admin") {
+        let cookie = headers
+            .get(header::COOKIE)
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or("")
+            .to_string();
+        let host = headers
+            .get(header::HOST)
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or("");
+        let forwarded_proto = headers
+            .get("x-forwarded-proto")
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or("");
+        let scheme = if forwarded_proto == "https" || host.ends_with(":443") {
+            "https"
+        } else {
+            "http"
+        };
+        if host.is_empty() || cookie.is_empty() {
+            None
+        } else {
+            Some(crate::plugin::AdminContext {
+                base_url: format!("{scheme}://{host}"),
+                cookie,
+            })
+        }
+    } else {
+        None
+    };
     let runtime = state.plugins.read().await;
     match runtime
         .invoke(
@@ -1549,6 +1646,7 @@ async fn plugin_rpc(
             &record,
             "http.rpc",
             json!({"path": path, "body": input}),
+            admin,
         )
         .await
     {
@@ -1584,6 +1682,11 @@ pub fn router(state: AppState) -> Router<AppState> {
         .route("/keys/{id}/policy", post(set_policy))
         .route("/keys/{id}/enabled", post(client_key_enabled))
         .route("/groups", get(groups).post(set_group))
+        .route("/model-groups", get(model_groups).post(create_model_group))
+        .route(
+            "/model-groups/{id}",
+            axum::routing::put(update_model_group).delete(delete_model_group),
+        )
         .route("/settings", get(settings).post(update_settings))
         .route("/analytics", get(analytics))
         .route("/requests", get(requests).delete(clear_requests))

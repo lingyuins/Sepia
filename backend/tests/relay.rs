@@ -172,6 +172,7 @@ async fn all_native_protocols_relay_to_all_provider_protocols() {
             rpm: 0,
             tpm: 0,
             expires_at: None,
+            secret: None,
         })
         .await
         .unwrap()

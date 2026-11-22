@@ -15,6 +15,7 @@ async fn quota_reservation_is_atomic_and_settles_usage() {
             rpm: 1,
             tpm: 10,
             expires_at: None,
+            secret: None,
         })
         .await
         .unwrap();
@@ -56,6 +57,7 @@ async fn quota_reservation_is_atomic_and_settles_usage() {
             rpm: 0,
             tpm: 0,
             expires_at: None,
+            secret: None,
         })
         .await
         .unwrap();

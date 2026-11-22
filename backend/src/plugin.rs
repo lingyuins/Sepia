@@ -51,6 +51,7 @@ pub const PERMISSIONS: &[&str] = &[
     "provider",
     "rpc:read",
     "rpc:write",
+    "admin",
 ];
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -272,6 +273,21 @@ pub fn ui_document(record: &PluginRecord, session: &str) -> Result<String, Strin
             continue;
         }
         let mime = mime_for(path);
+        if mime == "text/javascript" {
+            // Data-URL scripts are blocked by Chromium in opaque-origin
+            // (sandboxed) frames, so inline JS assets directly instead.
+            use base64::Engine;
+            let bytes = base64::engine::general_purpose::STANDARD
+                .decode(encoded.as_str().unwrap_or_default())
+                .map_err(|_| format!("ui asset {path} is not valid base64"))?;
+            let text = String::from_utf8(bytes)
+                .map_err(|_| format!("ui asset {path} is not utf-8"))?;
+            let inline = format!("<script>{text}</script>");
+            document = document.replace(&format!("<script src=\"{path}\"></script>"), &inline);
+            document = document.replace(&format!("<script src='{path}'></script>"), &inline);
+            continue;
+        }
+        let encoded = encoded.as_str().unwrap_or_default();
         let data_url = format!("data:{mime};base64,{encoded}");
         document = document.replace(&format!("\"{path}\""), &format!("\"{data_url}\""));
         document = document.replace(&format!("'{path}'"), &format!("'{data_url}'"));
@@ -344,6 +360,7 @@ impl PluginRuntime {
             }
         })
     }
+    #[allow(clippy::too_many_arguments)]
     pub async fn invoke(
         &self,
         store: &Store,
@@ -352,6 +369,7 @@ impl PluginRuntime {
         record: &PluginRecord,
         event: &str,
         payload: Value,
+        admin: Option<AdminContext>,
     ) -> Result<Value, String> {
         let module = self
             .modules
@@ -378,6 +396,7 @@ impl PluginRuntime {
             logs: Vec::new(),
             limits: wasmtime::StoreLimitsBuilder::new().build(),
             runtime: tokio::runtime::Handle::current(),
+            admin,
         };
         let engine = self.engine.clone();
         let module = module.clone();
@@ -501,6 +520,7 @@ struct HostState {
     logs: Vec<String>,
     limits: StoreLimits,
     runtime: tokio::runtime::Handle,
+    admin: Option<AdminContext>,
 }
 impl HostState {
     fn read_guest_string(
@@ -588,9 +608,14 @@ fn host_call(mut caller: Caller<'_, HostState>, ptr: i32, len: i32) -> i64 {
     let plugin_id = state.plugin_id.clone();
     let manifest = state.manifest.clone();
     let handle = state.runtime.clone();
-    let outcome = handle.block_on(dispatch_capability(
-        &store, &keys, &http, &plugin_id, &manifest, capability, payload,
-    ));
+    let outcome = if capability == "admin.request" {
+        let admin = state.admin.clone();
+        handle.block_on(host_admin(admin, &manifest, &http, payload))
+    } else {
+        handle.block_on(dispatch_capability(
+            &store, &keys, &http, &plugin_id, &manifest, capability, payload,
+        ))
+    };
     let response = match outcome {
         Ok(value) => json!({"ok": true, "result": value}),
         Err(error) => json!({"ok": false, "error": error}),
@@ -743,6 +768,75 @@ async fn host_http(
     Ok(json!({"status": status, "headers": headers, "body": body}))
 }
 
+/// Session credentials threaded from an admin-authenticated RPC invocation so a
+/// plugin holding the `admin` permission can call the gateway management API
+/// on behalf of the invoking administrator. Never available to non-RPC events.
+#[derive(Clone)]
+pub struct AdminContext {
+    pub base_url: String,
+    pub cookie: String,
+}
+
+async fn host_admin(
+    admin: Option<AdminContext>,
+    manifest: &Manifest,
+    http: &reqwest::Client,
+    payload: Value,
+) -> Result<Value, String> {
+    if !manifest.has_permission("admin") {
+        return Err("permission admin not granted".into());
+    }
+    let admin = admin.ok_or("admin.request requires an admin session")?;
+    let path = payload
+        .get("path")
+        .and_then(Value::as_str)
+        .ok_or("admin path required")?;
+    if !path.starts_with('/')
+        || path[1..]
+            .split('/')
+            .any(|segment| segment.is_empty() || segment.chars().all(|character| character == '.'))
+        || path.contains(['\\', '%', '?', '#'])
+        || path.chars().any(char::is_control)
+    {
+        return Err("invalid admin path".into());
+    }
+    let method = payload
+        .get("method")
+        .and_then(Value::as_str)
+        .unwrap_or("POST")
+        .to_uppercase();
+    let method = reqwest::Method::from_bytes(method.as_bytes()).map_err(|e| e.to_string())?;
+    let url = format!("{}{}", admin.base_url.trim_end_matches('/'), path);
+    let mut builder = http
+        .request(method, &url)
+        .header("cookie", &admin.cookie)
+        .header("origin", &admin.base_url)
+        .timeout(std::time::Duration::from_secs(30));
+    if let Some(body) = payload.get("body") {
+        let text = match body {
+            Value::String(text) => text.clone(),
+            other => other.to_string(),
+        };
+        if text.len() > MAX_IO_BYTES {
+            return Err("admin body exceeds 1 MiB".into());
+        }
+        builder = builder
+            .header("content-type", "application/json")
+            .body(text);
+    }
+    let response = builder
+        .send()
+        .await
+        .map_err(|e| format!("admin request failed: {e}"))?;
+    let status = response.status().as_u16();
+    let bytes = response.bytes().await.map_err(|e| e.to_string())?;
+    if bytes.len() > MAX_IO_BYTES {
+        return Err("admin response exceeds 1 MiB".into());
+    }
+    let body = String::from_utf8_lossy(&bytes).to_string();
+    Ok(json!({"status": status, "body": body}))
+}
+
 /// Shared, swappable runtime handle stored in AppState.
 pub type SharedRuntime = Arc<tokio::sync::RwLock<PluginRuntime>>;
 pub fn shared(runtime: PluginRuntime) -> SharedRuntime {
@@ -784,6 +878,7 @@ pub async fn rewrite_request(
                 &record,
                 "relay.request.before_route",
                 json!({"request": payload}),
+                None,
             )
             .await
             .map_err(|error| format!("plugin {}: {error}", record.id))?;
@@ -820,6 +915,7 @@ pub async fn filter_candidates(
                     &record,
                     event,
                     payload,
+                    None,
                 )
                 .await
                 .map_err(|error| format!("plugin {}: {error}", record.id))?;
@@ -887,6 +983,7 @@ pub async fn rewrite_upstream(
                     "body": current_body,
                     "headers": visible_headers,
                 }),
+                None,
             )
             .await
             .map_err(|error| format!("plugin {}: {error}", record.id))?;
@@ -951,6 +1048,7 @@ pub async fn rewrite_response(
                 &record,
                 "relay.response.before_send",
                 json!({"model": model, "response": current}),
+                None,
             )
             .await
             .map_err(|error| format!("plugin {}: {error}", record.id))?;
@@ -979,6 +1077,7 @@ pub fn observe_completion(state: &crate::server::AppState, payload: Value) {
                     &record,
                     "relay.completed",
                     payload.clone(),
+                    None,
                 )
                 .await;
         }
@@ -1107,6 +1206,7 @@ pub async fn provider_models(
                 "provider": provider_descriptor(provider),
                 "secret": secret,
             }),
+            None,
         )
         .await
         .map_err(|error| format!("plugin {}: {error}", record.id))?;
@@ -1166,6 +1266,7 @@ pub async fn provider_fetch(
                 "stream": request.stream,
                 "request": request_json(request),
             }),
+            None,
         )
         .await
         .map_err(|error| format!("plugin {}: {error}", record.id))?;

@@ -15,6 +15,7 @@ async fn dropping_request_guard_releases_quota_and_marks_cancelled() {
             rpm: 0,
             tpm: 10,
             expires_at: None,
+            secret: None,
         })
         .await
         .unwrap();

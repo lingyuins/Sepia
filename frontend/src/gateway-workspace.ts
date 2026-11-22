@@ -38,6 +38,7 @@ export function useGatewayWorkspace(): GatewayWorkspace {
     analytics: emptyAnalytics,
     clientKeys: [],
     channelGroups: [],
+    modelGroups: [],
     plugins: [],
     version: '',
     settings: readSettings(),
