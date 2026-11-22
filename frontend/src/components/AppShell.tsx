@@ -22,6 +22,7 @@ import {
 import { Dialog } from '@headlessui/react'
 import { useTranslation, useWorkspace } from '../workspace'
 import { StatusDot } from './UI'
+import { gatewayDisplayHost } from '../gateway'
 
 export type Page =
   | 'Overview'
@@ -170,7 +171,7 @@ export function Sidebar({
               <StatusDot />
               <span>{t('gatewayOperational')}</span>
             </span>
-            <code className="mono">{settings.host}:{settings.port}</code>
+            <code className="mono">{gatewayDisplayHost(settings)}</code>
             <small className="tabular">
               {enabledCount} / {providers.length} {t('providersEnabledShort')}
             </small>

@@ -14,3 +14,9 @@ export function gatewayUrl(address: GatewayAddress, path = '/v1') {
   url.pathname = path
   return url.toString()
 }
+
+export function gatewayDisplayHost(address: GatewayAddress) {
+  // Same rules as gatewayUrl: cloud HTTPS hides the display-only stored port,
+  // URL normalization drops default ports (http 80 / https 443).
+  return new URL(gatewayUrl(address)).host
+}

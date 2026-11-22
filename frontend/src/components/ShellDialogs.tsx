@@ -12,7 +12,7 @@ import {
   ShieldCheck,
 } from 'lucide-react'
 import { downloadFile, useWorkspace, useTranslation } from '../workspace'
-import { gatewayUrl } from '../gateway'
+import { gatewayDisplayHost, gatewayUrl } from '../gateway'
 import { Modal, StatusText } from './UI'
 import { CopyButton } from './Provider'
 
@@ -268,7 +268,7 @@ export function WorkspaceDialog({
           <ExternalLink size={16} />
           {t('openGateway')}
           <span className="mono">
-            {settings.host}:{settings.port}
+            {gatewayDisplayHost(settings)}
           </span>
         </button>
 

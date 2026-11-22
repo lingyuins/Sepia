@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import { gatewayUrl } from './gateway.ts'
+import { gatewayDisplayHost, gatewayUrl } from './gateway.ts'
 import { defaultSettings } from './settings.ts'
 
 test('defaults the local gateway to port 5000', () => {
@@ -41,5 +41,27 @@ test('cloud HTTP keeps the explicit port in the URL', () => {
   assert.equal(
     gatewayUrl({ deployment: 'cloud', protocol: 'http', host: 'gateway.example.com', port: '8080' }, '/v1/models'),
     'http://gateway.example.com:8080/v1/models',
+  )
+})
+
+test('cloud HTTPS display hides the stored port', () => {
+  assert.equal(
+    gatewayDisplayHost({ deployment: 'cloud', protocol: 'https', host: 'sepia.example.com', port: '5000' }),
+    'sepia.example.com',
+  )
+})
+
+test('local and cloud HTTP display keep the explicit port', () => {
+  assert.equal(
+    gatewayDisplayHost({ deployment: 'local', protocol: 'http', host: '127.0.0.1', port: '5000' }),
+    '127.0.0.1:5000',
+  )
+  assert.equal(
+    gatewayDisplayHost({ deployment: 'cloud', protocol: 'http', host: 'gateway.example.com', port: '8080' }),
+    'gateway.example.com:8080',
+  )
+  assert.equal(
+    gatewayDisplayHost({ deployment: 'cloud', protocol: 'http', host: 'gateway.example.com', port: '80' }),
+    'gateway.example.com',
   )
 })
