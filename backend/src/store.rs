@@ -58,6 +58,8 @@ pub struct NewProvider {
     pub endpoint: String,
     pub models: Vec<String>,
     pub plugin_id: Option<String>,
+    /// `single` (one address) or `unified` (several addresses, one model set).
+    pub mode: String,
 }
 #[derive(Debug, Clone)]
 pub struct Provider {
@@ -72,9 +74,15 @@ pub struct Provider {
     pub plugin_id: Option<String>,
 }
 #[derive(Debug, Clone)]
+pub struct ProviderEndpoint {
+    pub id: i64,
+    pub endpoint: String,
+}
+#[derive(Debug, Clone)]
 pub struct ProviderKeyInfo {
     pub id: i64,
     pub models: Option<Vec<String>>,
+    pub endpoint_id: Option<i64>,
 }
 #[derive(Debug, Clone)]
 pub struct NewRoute {
@@ -719,13 +727,24 @@ impl Store {
             .execute(&mut *transaction)
             .await
             .map_err(|e| e.to_string())?;
+        let endpoint = input.endpoint.trim_end_matches('/');
         let id = sqlx::query(
-            "INSERT INTO providers (name, protocol, endpoint, plugin_id) VALUES (?, ?, ?, ?)",
+            "INSERT INTO providers (name, protocol, endpoint, plugin_id, mode) VALUES (?, ?, ?, ?, ?)",
         )
         .bind(input.name)
         .bind(input.protocol.as_str())
-        .bind(input.endpoint.trim_end_matches('/'))
+        .bind(endpoint)
         .bind(input.plugin_id)
+        .bind(input.mode)
+        .execute(&mut *transaction)
+        .await
+        .map_err(|e| e.to_string())?
+        .last_insert_rowid();
+        let endpoint_id = sqlx::query(
+            "INSERT INTO provider_endpoints (provider_id, endpoint, position) VALUES (?, ?, 0)",
+        )
+        .bind(id)
+        .bind(endpoint)
         .execute(&mut *transaction)
         .await
         .map_err(|e| e.to_string())?
@@ -739,11 +758,12 @@ impl Store {
                 .map_err(|e| e.to_string())?;
         }
         let (nonce, ciphertext) = key_store.encrypt(secret)?;
-        sqlx::query("INSERT INTO provider_keys (provider_id, nonce, ciphertext, models) VALUES (?, ?, ?, ?)")
+        sqlx::query("INSERT INTO provider_keys (provider_id, nonce, ciphertext, models, endpoint_id) VALUES (?, ?, ?, ?, ?)")
             .bind(id)
             .bind(nonce)
             .bind(ciphertext)
             .bind(provider_key_models(key_scopes, secret)?)
+            .bind(endpoint_id)
             .execute(&mut *transaction)
             .await
             .map_err(|e| e.to_string())?;
@@ -783,33 +803,148 @@ impl Store {
         }
         Ok(providers)
     }
+    pub async fn provider_mode(&self, provider_id: i64) -> Result<String, String> {
+        Ok(sqlx::query("SELECT mode FROM providers WHERE id = ?")
+            .bind(provider_id)
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(|e| e.to_string())?
+            .ok_or("provider not found")?
+            .get("mode"))
+    }
+    pub async fn provider_endpoints(
+        &self,
+        provider_id: i64,
+    ) -> Result<Vec<ProviderEndpoint>, String> {
+        let rows = sqlx::query("SELECT id, endpoint FROM provider_endpoints WHERE provider_id = ? ORDER BY position, id").bind(provider_id).fetch_all(&self.pool).await.map_err(|e| e.to_string())?;
+        Ok(rows
+            .into_iter()
+            .map(|row| ProviderEndpoint {
+                id: row.get("id"),
+                endpoint: row.get("endpoint"),
+            })
+            .collect())
+    }
+    /// Reconcile a unified provider's address list by position: existing rows
+    /// keep their id (and therefore their keys), new addresses are appended,
+    /// removed addresses cascade-delete their keys. The first address stays
+    /// mirrored in `providers.endpoint` for discovery and plugin descriptors.
+    pub async fn sync_provider_endpoints(
+        &self,
+        provider_id: i64,
+        endpoints: &[String],
+    ) -> Result<Vec<ProviderEndpoint>, String> {
+        if endpoints.is_empty() {
+            return Err("at least one endpoint required".into());
+        }
+        let mut transaction = self.pool.begin().await.map_err(|e| e.to_string())?;
+        let existing = sqlx::query(
+            "SELECT id FROM provider_endpoints WHERE provider_id = ? ORDER BY position, id",
+        )
+        .bind(provider_id)
+        .fetch_all(&mut *transaction)
+        .await
+        .map_err(|e| e.to_string())?;
+        for (index, endpoint) in endpoints.iter().enumerate() {
+            let endpoint = endpoint.trim_end_matches('/');
+            if let Some(row) = existing.get(index) {
+                sqlx::query(
+                    "UPDATE provider_endpoints SET endpoint = ?, position = ? WHERE id = ?",
+                )
+                .bind(endpoint)
+                .bind(index as i64)
+                .bind(row.get::<i64, _>("id"))
+                .execute(&mut *transaction)
+                .await
+                .map_err(|e| e.to_string())?;
+            } else {
+                sqlx::query("INSERT INTO provider_endpoints (provider_id, endpoint, position) VALUES (?, ?, ?)")
+                    .bind(provider_id)
+                    .bind(endpoint)
+                    .bind(index as i64)
+                    .execute(&mut *transaction)
+                    .await
+                    .map_err(|e| e.to_string())?;
+            }
+        }
+        for row in existing.iter().skip(endpoints.len()) {
+            sqlx::query("DELETE FROM provider_endpoints WHERE id = ?")
+                .bind(row.get::<i64, _>("id"))
+                .execute(&mut *transaction)
+                .await
+                .map_err(|e| e.to_string())?;
+        }
+        sqlx::query("UPDATE providers SET endpoint = ? WHERE id = ?")
+            .bind(endpoints[0].trim_end_matches('/'))
+            .bind(provider_id)
+            .execute(&mut *transaction)
+            .await
+            .map_err(|e| e.to_string())?;
+        transaction.commit().await.map_err(|e| e.to_string())?;
+        self.provider_endpoints(provider_id).await
+    }
+    pub async fn append_provider_endpoint(
+        &self,
+        provider_id: i64,
+        endpoint: &str,
+    ) -> Result<i64, String> {
+        let position = sqlx::query(
+            "SELECT COALESCE(MAX(position), -1) + 1 FROM provider_endpoints WHERE provider_id = ?",
+        )
+        .bind(provider_id)
+        .fetch_one(&self.pool)
+        .await
+        .map_err(|e| e.to_string())?
+        .get::<i64, _>(0);
+        Ok(sqlx::query(
+            "INSERT INTO provider_endpoints (provider_id, endpoint, position) VALUES (?, ?, ?)",
+        )
+        .bind(provider_id)
+        .bind(endpoint.trim_end_matches('/'))
+        .bind(position)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| e.to_string())?
+        .last_insert_rowid())
+    }
     pub async fn add_provider_key(
         &self,
         provider_id: i64,
         secret: &str,
         models: Option<&[String]>,
+        endpoint_id: Option<i64>,
         key_store: &KeyStore,
     ) -> Result<i64, String> {
+        let endpoint_id = match endpoint_id {
+            Some(id) => Some(id),
+            None => self
+                .provider_endpoints(provider_id)
+                .await?
+                .first()
+                .map(|endpoint| endpoint.id),
+        };
         let (nonce, ciphertext) = key_store.encrypt(secret)?;
         Ok(sqlx::query(
-            "INSERT INTO provider_keys (provider_id, nonce, ciphertext, models) VALUES (?, ?, ?, ?)",
+            "INSERT INTO provider_keys (provider_id, nonce, ciphertext, models, endpoint_id) VALUES (?, ?, ?, ?, ?)",
         )
         .bind(provider_id)
         .bind(nonce)
         .bind(ciphertext)
         .bind(models.map(serde_json::to_string).transpose().map_err(|e| e.to_string())?)
+        .bind(endpoint_id)
         .execute(&self.pool)
         .await
         .map_err(|e| e.to_string())?
         .last_insert_rowid())
     }
     pub async fn provider_keys(&self, provider_id: i64) -> Result<Vec<ProviderKeyInfo>, String> {
-        let rows = sqlx::query("SELECT id, models FROM provider_keys WHERE provider_id = ? AND disabled = 0 ORDER BY id").bind(provider_id).fetch_all(&self.pool).await.map_err(|e| e.to_string())?;
+        let rows = sqlx::query("SELECT id, models, endpoint_id FROM provider_keys WHERE provider_id = ? AND disabled = 0 ORDER BY id").bind(provider_id).fetch_all(&self.pool).await.map_err(|e| e.to_string())?;
         rows.into_iter()
             .map(|row| {
                 let models: Option<String> = row.get("models");
                 Ok(ProviderKeyInfo {
                     id: row.get("id"),
+                    endpoint_id: row.get("endpoint_id"),
                     models: models
                         .map(|models| serde_json::from_str(&models))
                         .transpose()
@@ -862,12 +997,16 @@ impl Store {
     pub async fn upstream_key_for_attempt(
         &self,
         provider_id: i64,
+        endpoint_id: Option<i64>,
         model: &str,
         start_index: usize,
         cooldowns: &std::collections::HashMap<i64, chrono::DateTime<Utc>>,
         key_store: &KeyStore,
     ) -> Result<Option<(i64, String)>, String> {
-        let rows = sqlx::query("SELECT id, nonce, ciphertext, models FROM provider_keys WHERE provider_id = ? AND disabled = 0 ORDER BY id").bind(provider_id).fetch_all(&self.pool).await.map_err(|e| e.to_string())?;
+        let rows = match endpoint_id {
+            Some(endpoint_id) => sqlx::query("SELECT id, nonce, ciphertext, models FROM provider_keys WHERE provider_id = ? AND endpoint_id = ? AND disabled = 0 ORDER BY id").bind(provider_id).bind(endpoint_id).fetch_all(&self.pool).await.map_err(|e| e.to_string())?,
+            None => sqlx::query("SELECT id, nonce, ciphertext, models FROM provider_keys WHERE provider_id = ? AND disabled = 0 ORDER BY id").bind(provider_id).fetch_all(&self.pool).await.map_err(|e| e.to_string())?,
+        };
         // A scoped key only serves requests for models inside its scope; an
         // unscoped (NULL) key serves every provider model.
         let rows: Vec<_> = rows

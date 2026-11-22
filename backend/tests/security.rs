@@ -34,6 +34,7 @@ async fn provider_creation_rolls_back_invalid_models() {
                 endpoint: "file:///secret".into(),
                 models: vec!["x".into()],
                 plugin_id: None,
+                mode: "single".into(),
             },
             "secret",
             &[],

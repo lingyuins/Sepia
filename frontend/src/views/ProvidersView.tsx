@@ -52,15 +52,19 @@ export function ProvidersView() {
       }),
     )
     if (existing) {
-      const scopes = provider.keyScopes || []
-      for (const key of keys.slice(scopes.length)) {
-        await run(() =>
-          api(`/api/v1/providers/${provider.id}/keys`, {
-            method: 'POST',
-            body: JSON.stringify({ secret: key.value, models: key.models }),
-          }),
-        )
+      // New entered keys are persisted with their owning address so unified
+      // channels keep per-endpoint key rotation; stored keys only update scope.
+      for (const key of keys) {
+        if (key.value.trim()) {
+          await run(() =>
+            api(`/api/v1/providers/${provider.id}/keys`, {
+              method: 'POST',
+              body: JSON.stringify({ secret: key.value.trim(), models: key.models, endpoint_id: key.endpointId ?? null }),
+            }),
+          )
+        }
       }
+      const scopes = provider.keyScopes || []
       for (let index = 0; index < Math.min(scopes.length, keys.length); index += 1) {
         const key = keys[index]
         if (

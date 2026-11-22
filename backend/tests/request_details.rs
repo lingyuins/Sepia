@@ -75,6 +75,7 @@ async fn seeded(db: &str, address: SocketAddr) -> (Store, String, tempfile::Temp
                 endpoint: format!("http://{address}/v1"),
                 models: vec!["gpt-test".into()],
                 plugin_id: None,
+                mode: "single".into(),
             },
             "upstream-secret",
             &[],

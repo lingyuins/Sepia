@@ -14,7 +14,8 @@ export function useTranslation() {
 }
 
 export type Page = 'Overview' | 'Providers' | 'Plaza' | 'Routing' | 'Plugins' | 'Requests' | 'Analytics' | 'Settings'
-export type ProviderKeyScope = { id: number; models: string[] | null }
+export type ProviderKeyScope = { id: number; models: string[] | null; endpointId?: number }
+export type ProviderEndpoint = { id: number; endpoint: string; keys: ProviderKeyScope[] }
 export type Provider = {
   id: number
   name: string
@@ -27,6 +28,8 @@ export type Provider = {
   color: string
   enabled: boolean
   endpoint: string
+  mode: 'single' | 'unified'
+  endpoints: ProviderEndpoint[]
   group: string
   modelsList: string[]
   routeOnly?: boolean

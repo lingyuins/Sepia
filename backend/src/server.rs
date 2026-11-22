@@ -663,120 +663,186 @@ pub async fn relay(
         {
             continue;
         }
+        // Unified-channel providers fail over across their addresses; a
+        // single-channel provider has exactly one address, so the loop below
+        // behaves exactly like the address-less path.
+        let addresses = match state.store.provider_endpoints(provider.id).await {
+            Ok(addresses) if !addresses.is_empty() => addresses,
+            _ => vec![crate::store::ProviderEndpoint {
+                id: 0,
+                endpoint: provider.endpoint.clone(),
+            }],
+        };
         let protocols = candidate_protocols(provider, &inbound);
-        'legs: for (leg, protocol) in protocols.iter().enumerate() {
-            let last_leg = leg + 1 == protocols.len();
-            let endpoint = crate::relay::endpoint_label(*protocol);
-            // Auth failures rotate keys within this leg only, bounded by the
-            // number of keys so a fully unauthorized provider still reaches
-            // the other endpoint and later candidates. Each leg restarts at
-            // the provider's first key.
-            let mut key_attempts = 0usize;
-            let key_count = state
-                .store
-                .provider_keys(provider.id)
-                .await
-                .unwrap_or_default()
-                .iter()
-                .filter(|key| {
-                    key.models
-                        .as_ref()
-                        .is_none_or(|models| models.iter().any(|item| item == model))
-                })
-                .count();
-            loop {
-                if let Some(lifecycle) = &response_state
-                    && state
-                        .store
-                        .response(lifecycle.client_key, &lifecycle.id)
-                        .await
-                        .ok()
-                        .flatten()
-                        .is_some_and(|response| response.cancel_requested)
-                {
-                    let _ = guard.complete("cancelled", 0, 0, 0).await;
-                    return error(StatusCode::CONFLICT, "response was cancelled");
-                }
-                if attempts_used >= snapshot.max_attempts {
-                    break 'candidates;
-                }
-                let (key_id, secret) = {
-                    let health = state.key_health.lock().await;
-                    match state
-                        .store
-                        .upstream_key_for_attempt(
-                            provider.id,
-                            model,
-                            key_attempts,
-                            &health.cooldowns,
-                            &state.keys,
+        'addresses: for (address_index, address) in addresses.iter().enumerate() {
+            let last_address = address_index + 1 == addresses.len();
+            let target = crate::Provider {
+                endpoint: address.endpoint.clone(),
+                ..provider.clone()
+            };
+            'legs: for (leg, protocol) in protocols.iter().enumerate() {
+                let last_leg = leg + 1 == protocols.len();
+                let endpoint = crate::relay::endpoint_label(*protocol);
+                // Auth failures rotate keys within this leg only, bounded by the
+                // number of keys so a fully unauthorized provider still reaches
+                // the other endpoint and later candidates. Each leg restarts at
+                // the provider's first key.
+                let mut key_attempts = 0usize;
+                let key_count = state
+                    .store
+                    .provider_keys(provider.id)
+                    .await
+                    .unwrap_or_default()
+                    .iter()
+                    .filter(|key| {
+                        key.endpoint_id
+                            .is_none_or(|endpoint_id| endpoint_id == address.id)
+                            && key
+                                .models
+                                .as_ref()
+                                .is_none_or(|models| models.iter().any(|item| item == model))
+                    })
+                    .count();
+                loop {
+                    if let Some(lifecycle) = &response_state
+                        && state
+                            .store
+                            .response(lifecycle.client_key, &lifecycle.id)
+                            .await
+                            .ok()
+                            .flatten()
+                            .is_some_and(|response| response.cancel_requested)
+                    {
+                        let _ = guard.complete("cancelled", 0, 0, 0).await;
+                        return error(StatusCode::CONFLICT, "response was cancelled");
+                    }
+                    if attempts_used >= snapshot.max_attempts {
+                        break 'candidates;
+                    }
+                    let (key_id, secret) = {
+                        let health = state.key_health.lock().await;
+                        match state
+                            .store
+                            .upstream_key_for_attempt(
+                                provider.id,
+                                Some(address.id),
+                                model,
+                                key_attempts,
+                                &health.cooldowns,
+                                &state.keys,
+                            )
+                            .await
+                        {
+                            Ok(Some(key)) => key,
+                            _ => {
+                                if last_leg {
+                                    continue 'addresses;
+                                }
+                                continue 'legs;
+                            }
+                        }
+                    };
+                    attempts_used += 1;
+                    let attempt_started = Instant::now();
+                    let inflight = state.routing_stats.inflight_slot(provider.id);
+                    let encoded_body = crate::protocol::encode_request(*protocol, &request, model)
+                        .unwrap_or_else(|_| json!({}));
+                    let (out_body, out_headers) = match crate::plugin::rewrite_upstream(
+                        &state,
+                        &target,
+                        model,
+                        &encoded_body,
+                        &[],
+                    )
+                    .await
+                    {
+                        Ok(value) => value,
+                        Err(message) => {
+                            let _ = guard.complete("failed", 0, 0, 0).await;
+                            return error(StatusCode::BAD_GATEWAY, message);
+                        }
+                    };
+                    let upstream = if provider.plugin_id.is_some() {
+                        crate::plugin::provider_fetch(
+                            &state, &target, &secret, &request, model, *protocol,
                         )
                         .await
-                    {
-                        Ok(Some(key)) => key,
-                        _ => continue 'candidates,
-                    }
-                };
-                attempts_used += 1;
-                let attempt_started = Instant::now();
-                let inflight = state.routing_stats.inflight_slot(provider.id);
-                let encoded_body = crate::protocol::encode_request(*protocol, &request, model)
-                    .unwrap_or_else(|_| json!({}));
-                let (out_body, out_headers) = match crate::plugin::rewrite_upstream(
-                    &state,
-                    provider,
-                    model,
-                    &encoded_body,
-                    &[],
-                )
-                .await
-                {
-                    Ok(value) => value,
-                    Err(message) => {
-                        let _ = guard.complete("failed", 0, 0, 0).await;
-                        return error(StatusCode::BAD_GATEWAY, message);
-                    }
-                };
-                let upstream = if provider.plugin_id.is_some() {
-                    crate::plugin::provider_fetch(
-                        &state, provider, &secret, &request, model, *protocol,
-                    )
-                    .await
-                } else {
-                    crate::relay::call_with_overrides(
-                        &state.http(),
-                        provider,
-                        &secret,
-                        &request,
-                        model,
-                        *protocol,
-                        &crate::relay::Overrides {
-                            body: Some(out_body),
-                            headers: out_headers,
-                        },
-                        crate::relay::Timeouts {
-                            first_byte_seconds: snapshot.first_byte_timeout_seconds,
-                            stream_idle_seconds: snapshot.stream_idle_timeout_seconds,
-                        },
-                    )
-                    .await
-                };
-                let response = match upstream {
-                    Ok(response) => response,
-                    Err(message) => {
+                    } else {
+                        crate::relay::call_with_overrides(
+                            &state.http(),
+                            &target,
+                            &secret,
+                            &request,
+                            model,
+                            *protocol,
+                            &crate::relay::Overrides {
+                                body: Some(out_body),
+                                headers: out_headers,
+                            },
+                            crate::relay::Timeouts {
+                                first_byte_seconds: snapshot.first_byte_timeout_seconds,
+                                stream_idle_seconds: snapshot.stream_idle_timeout_seconds,
+                            },
+                        )
+                        .await
+                    };
+                    let response =
+                        match upstream {
+                            Ok(response) => response,
+                            Err(message) => {
+                                state.routing_stats.record(
+                                    route.id,
+                                    provider.id,
+                                    model,
+                                    false,
+                                    attempt_started.elapsed().as_millis() as i64,
+                                );
+                                state.key_health.lock().await.cooldowns.insert(
+                                    key_id,
+                                    chrono::Utc::now() + chrono::Duration::seconds(60),
+                                );
+                                if let Some(response) = record_attempt(
+                                    &state,
+                                    crate::observability::NewAttempt {
+                                        request_id: &request_id,
+                                        provider_id: Some(provider.id),
+                                        provider_key_id: Some(key_id),
+                                        model,
+                                        status: "retry",
+                                        error: Some(&format!("{message} ({endpoint})")),
+                                        input_tokens: 0,
+                                        output_tokens: 0,
+                                        latency_ms: attempt_started.elapsed().as_millis() as i64,
+                                    },
+                                )
+                                .await
+                                {
+                                    return response;
+                                }
+                                if !last_leg {
+                                    continue 'legs;
+                                }
+                                continue 'addresses;
+                            }
+                        };
+                    let first_byte_ms = attempt_started.elapsed().as_millis() as i64;
+                    if !response.status().is_success() {
                         state.routing_stats.record(
                             route.id,
                             provider.id,
                             model,
                             false,
-                            attempt_started.elapsed().as_millis() as i64,
+                            first_byte_ms,
                         );
-                        state
-                            .key_health
-                            .lock()
-                            .await
-                            .cooldowns
-                            .insert(key_id, chrono::Utc::now() + chrono::Duration::seconds(60));
+                    }
+                    if !response.status().is_success() {
+                        let status = response.status();
+                        let retry = status == StatusCode::TOO_MANY_REQUESTS
+                            || status == StatusCode::REQUEST_TIMEOUT
+                            || matches!(status.as_u16(), 500 | 502 | 503 | 504)
+                            || status == StatusCode::UNAUTHORIZED
+                            || status == StatusCode::FORBIDDEN;
+                        let endpoint_unsupported = matches!(status.as_u16(), 404 | 405 | 501);
                         if let Some(response) = record_attempt(
                             &state,
                             crate::observability::NewAttempt {
@@ -784,8 +850,16 @@ pub async fn relay(
                                 provider_id: Some(provider.id),
                                 provider_key_id: Some(key_id),
                                 model,
-                                status: "retry",
-                                error: Some(&format!("{message} ({endpoint})")),
+                                status: if retry
+                                    || !last_leg
+                                    || !last_address
+                                    || endpoint_unsupported
+                                {
+                                    "retry"
+                                } else {
+                                    "failed"
+                                },
+                                error: Some(&format!("upstream HTTP {status} ({endpoint})")),
                                 input_tokens: 0,
                                 output_tokens: 0,
                                 latency_ms: attempt_started.elapsed().as_millis() as i64,
@@ -795,26 +869,176 @@ pub async fn relay(
                         {
                             return response;
                         }
-                        if last_leg {
-                            continue 'candidates;
+                        if retry {
+                            if status == StatusCode::TOO_MANY_REQUESTS {
+                                state.key_health.lock().await.cooldowns.insert(
+                                    key_id,
+                                    chrono::Utc::now() + chrono::Duration::seconds(60),
+                                );
+                                let delay = response
+                                    .headers()
+                                    .get("retry-after")
+                                    .and_then(|value| value.to_str().ok())
+                                    .and_then(|value| value.parse::<u64>().ok())
+                                    .unwrap_or(0)
+                                    .min(snapshot.retry_after_cap_seconds);
+                                if delay > 0 {
+                                    tokio::time::sleep(std::time::Duration::from_secs(delay)).await;
+                                }
+                            }
+                            if status == StatusCode::UNAUTHORIZED || status == StatusCode::FORBIDDEN
+                            {
+                                key_attempts += 1;
+                                if key_count > 0 && key_attempts < key_count {
+                                    continue;
+                                }
+                                if !last_leg {
+                                    continue 'legs;
+                                }
+                                continue 'addresses;
+                            }
+                            if !last_leg {
+                                continue 'legs;
+                            }
+                            continue 'addresses;
                         }
-                        continue 'legs;
+                        // An unsupported endpoint often surfaces as 404/405/501; try
+                        // the other leg, then later candidates, before failing terminally.
+                        if !last_leg {
+                            continue 'legs;
+                        }
+                        if endpoint_unsupported {
+                            continue 'addresses;
+                        }
+                        let _ = guard.complete("failed", 0, 0, 0).await;
+                        return error(StatusCode::BAD_GATEWAY, "upstream request failed");
                     }
-                };
-                let first_byte_ms = attempt_started.elapsed().as_millis() as i64;
-                if !response.status().is_success() {
+                    crate::plugin::observe_completion(
+                        &state,
+                        json!({
+                            "request_id": request_id,
+                            "model": model,
+                            "provider_id": provider.id,
+                            "success": true,
+                            "stream": request.stream,
+                        }),
+                    );
+                    if request.stream {
+                        let start = StreamEvent::Start {
+                            id: request_id.clone(),
+                            model: request.model.clone(),
+                        };
+                        let stream = stream_response(
+                            inbound,
+                            *protocol,
+                            response,
+                            start,
+                            crate::relay::StreamContext {
+                                store: state.store.clone(),
+                                routing_stats: state.routing_stats.clone(),
+                                route_id: route.id,
+                                request_id,
+                                provider_id: provider.id,
+                                provider_key_id: key_id,
+                                model: model.clone(),
+                                guard,
+                                started,
+                                first_byte_ms,
+                                inflight: Some(inflight),
+                                stream_idle_seconds: snapshot.stream_idle_timeout_seconds,
+                                log_bodies: snapshot.log_bodies,
+                                inbound_protocol,
+                                response_context,
+                                response_state: response_state
+                                    .map(|lifecycle| (lifecycle.client_key, lifecycle.id)),
+                            },
+                        );
+                        return stream;
+                    }
+                    let value = match response.json().await {
+                        Ok(value) => value,
+                        Err(_) => {
+                            state.routing_stats.record(
+                                route.id,
+                                provider.id,
+                                model,
+                                false,
+                                first_byte_ms,
+                            );
+                            if let Some(response) = record_attempt(
+                                &state,
+                                crate::observability::NewAttempt {
+                                    request_id: &request_id,
+                                    provider_id: Some(provider.id),
+                                    provider_key_id: Some(key_id),
+                                    model,
+                                    status: "retry",
+                                    error: Some(&format!("invalid upstream JSON ({endpoint})")),
+                                    input_tokens: 0,
+                                    output_tokens: 0,
+                                    latency_ms: attempt_started.elapsed().as_millis() as i64,
+                                },
+                            )
+                            .await
+                            {
+                                return response;
+                            }
+                            if !last_leg {
+                                continue 'legs;
+                            }
+                            if !last_address {
+                                continue 'addresses;
+                            }
+                            continue;
+                        }
+                    };
+                    let value = match crate::plugin::rewrite_response(&state, model, &value).await {
+                        Ok(value) => value,
+                        Err(message) => {
+                            state.routing_stats.record(
+                                route.id,
+                                provider.id,
+                                model,
+                                false,
+                                first_byte_ms,
+                            );
+                            let _ = guard.complete("failed", 0, 0, 0).await;
+                            return error(StatusCode::BAD_GATEWAY, message);
+                        }
+                    };
+                    let decoded: ChatResponse = match decode_response(*protocol, value) {
+                        Ok(response) => response,
+                        Err(_) => {
+                            state.routing_stats.record(
+                                route.id,
+                                provider.id,
+                                model,
+                                false,
+                                first_byte_ms,
+                            );
+                            if !last_leg {
+                                continue 'legs;
+                            }
+                            if !last_address {
+                                continue 'addresses;
+                            }
+                            continue;
+                        }
+                    };
+                    // Success telemetry only after the body decoded: headers alone
+                    // must not mark the candidate healthy or sticky.
                     state
                         .routing_stats
-                        .record(route.id, provider.id, model, false, first_byte_ms);
-                }
-                if !response.status().is_success() {
-                    let status = response.status();
-                    let retry = status == StatusCode::TOO_MANY_REQUESTS
-                        || status == StatusCode::REQUEST_TIMEOUT
-                        || matches!(status.as_u16(), 500 | 502 | 503 | 504)
-                        || status == StatusCode::UNAUTHORIZED
-                        || status == StatusCode::FORBIDDEN;
-                    let endpoint_unsupported = matches!(status.as_u16(), 404 | 405 | 501);
+                        .record(route.id, provider.id, model, true, first_byte_ms);
+                    let _ = state
+                        .store
+                        .set_request_details(
+                            &request_id,
+                            first_byte_ms,
+                            decoded.cached_tokens,
+                            decoded.reasoning_tokens,
+                        )
+                        .await;
                     if let Some(response) = record_attempt(
                         &state,
                         crate::observability::NewAttempt {
@@ -822,14 +1046,10 @@ pub async fn relay(
                             provider_id: Some(provider.id),
                             provider_key_id: Some(key_id),
                             model,
-                            status: if retry || !last_leg || endpoint_unsupported {
-                                "retry"
-                            } else {
-                                "failed"
-                            },
-                            error: Some(&format!("upstream HTTP {status} ({endpoint})")),
-                            input_tokens: 0,
-                            output_tokens: 0,
+                            status: "success",
+                            error: None,
+                            input_tokens: decoded.input_tokens,
+                            output_tokens: decoded.output_tokens,
                             latency_ms: attempt_started.elapsed().as_millis() as i64,
                         },
                     )
@@ -837,217 +1057,35 @@ pub async fn relay(
                     {
                         return response;
                     }
-                    if retry {
-                        if status == StatusCode::TOO_MANY_REQUESTS {
-                            state
-                                .key_health
-                                .lock()
-                                .await
-                                .cooldowns
-                                .insert(key_id, chrono::Utc::now() + chrono::Duration::seconds(60));
-                            let delay = response
-                                .headers()
-                                .get("retry-after")
-                                .and_then(|value| value.to_str().ok())
-                                .and_then(|value| value.parse::<u64>().ok())
-                                .unwrap_or(0)
-                                .min(snapshot.retry_after_cap_seconds);
-                            if delay > 0 {
-                                tokio::time::sleep(std::time::Duration::from_secs(delay)).await;
-                            }
-                        }
-                        if status == StatusCode::UNAUTHORIZED || status == StatusCode::FORBIDDEN {
-                            key_attempts += 1;
-                            if key_count > 0 && key_attempts < key_count {
-                                continue;
-                            }
-                            if !last_leg {
-                                continue 'legs;
-                            }
-                            continue 'candidates;
-                        }
-                        if last_leg {
-                            continue 'candidates;
-                        }
-                        continue 'legs;
-                    }
-                    // An unsupported endpoint often surfaces as 404/405/501; try
-                    // the other leg, then later candidates, before failing terminally.
-                    if !last_leg {
-                        continue 'legs;
-                    }
-                    if endpoint_unsupported {
-                        continue 'candidates;
-                    }
-                    let _ = guard.complete("failed", 0, 0, 0).await;
-                    return error(StatusCode::BAD_GATEWAY, "upstream request failed");
-                }
-                crate::plugin::observe_completion(
-                    &state,
-                    json!({
-                        "request_id": request_id,
-                        "model": model,
-                        "provider_id": provider.id,
-                        "success": true,
-                        "stream": request.stream,
-                    }),
-                );
-                if request.stream {
-                    let start = StreamEvent::Start {
-                        id: request_id.clone(),
-                        model: request.model.clone(),
-                    };
-                    let stream = stream_response(
-                        inbound,
-                        *protocol,
-                        response,
-                        start,
-                        crate::relay::StreamContext {
-                            store: state.store.clone(),
-                            routing_stats: state.routing_stats.clone(),
-                            route_id: route.id,
-                            request_id,
-                            provider_id: provider.id,
-                            provider_key_id: key_id,
-                            model: model.clone(),
-                            guard,
-                            started,
-                            first_byte_ms,
-                            inflight: Some(inflight),
-                            stream_idle_seconds: snapshot.stream_idle_timeout_seconds,
-                            log_bodies: snapshot.log_bodies,
-                            inbound_protocol,
-                            response_context,
-                            response_state: response_state
-                                .map(|lifecycle| (lifecycle.client_key, lifecycle.id)),
-                        },
-                    );
-                    return stream;
-                }
-                let value = match response.json().await {
-                    Ok(value) => value,
-                    Err(_) => {
-                        state.routing_stats.record(
-                            route.id,
-                            provider.id,
-                            model,
-                            false,
-                            first_byte_ms,
-                        );
-                        if let Some(response) = record_attempt(
-                            &state,
-                            crate::observability::NewAttempt {
-                                request_id: &request_id,
-                                provider_id: Some(provider.id),
-                                provider_key_id: Some(key_id),
-                                model,
-                                status: "retry",
-                                error: Some(&format!("invalid upstream JSON ({endpoint})")),
-                                input_tokens: 0,
-                                output_tokens: 0,
-                                latency_ms: attempt_started.elapsed().as_millis() as i64,
-                            },
-                        )
+                    let cost = state
+                        .store
+                        .model_cost(model, decoded.input_tokens, decoded.output_tokens)
                         .await
-                        {
-                            return response;
-                        }
-                        if !last_leg {
-                            continue 'legs;
-                        }
-                        continue;
-                    }
-                };
-                let value = match crate::plugin::rewrite_response(&state, model, &value).await {
-                    Ok(value) => value,
-                    Err(message) => {
-                        state.routing_stats.record(
-                            route.id,
-                            provider.id,
-                            model,
-                            false,
-                            first_byte_ms,
+                        .unwrap_or(0);
+                    if guard
+                        .complete("success", decoded.input_tokens, decoded.output_tokens, cost)
+                        .await
+                        .is_err()
+                    {
+                        return error(
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            "request settlement unavailable",
                         );
-                        let _ = guard.complete("failed", 0, 0, 0).await;
-                        return error(StatusCode::BAD_GATEWAY, message);
                     }
-                };
-                let decoded: ChatResponse = match decode_response(*protocol, value) {
-                    Ok(response) => response,
-                    Err(_) => {
-                        state.routing_stats.record(
-                            route.id,
-                            provider.id,
-                            model,
-                            false,
-                            first_byte_ms,
-                        );
-                        if !last_leg {
-                            continue 'legs;
-                        }
-                        continue;
-                    }
-                };
-                // Success telemetry only after the body decoded: headers alone
-                // must not mark the candidate healthy or sticky.
-                state
-                    .routing_stats
-                    .record(route.id, provider.id, model, true, first_byte_ms);
-                let _ = state
-                    .store
-                    .set_request_details(
-                        &request_id,
-                        first_byte_ms,
-                        decoded.cached_tokens,
-                        decoded.reasoning_tokens,
+                    return json_response(
+                        inbound,
+                        ChatResponse {
+                            id: request_id.clone(),
+                            ..decoded
+                        },
+                        response_context.as_ref(),
+                        response_state
+                            .as_ref()
+                            .map(|lifecycle| (lifecycle.client_key, lifecycle.id.clone())),
+                        &state,
                     )
                     .await;
-                if let Some(response) = record_attempt(
-                    &state,
-                    crate::observability::NewAttempt {
-                        request_id: &request_id,
-                        provider_id: Some(provider.id),
-                        provider_key_id: Some(key_id),
-                        model,
-                        status: "success",
-                        error: None,
-                        input_tokens: decoded.input_tokens,
-                        output_tokens: decoded.output_tokens,
-                        latency_ms: attempt_started.elapsed().as_millis() as i64,
-                    },
-                )
-                .await
-                {
-                    return response;
                 }
-                let cost = state
-                    .store
-                    .model_cost(model, decoded.input_tokens, decoded.output_tokens)
-                    .await
-                    .unwrap_or(0);
-                if guard
-                    .complete("success", decoded.input_tokens, decoded.output_tokens, cost)
-                    .await
-                    .is_err()
-                {
-                    return error(
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        "request settlement unavailable",
-                    );
-                }
-                return json_response(
-                    inbound,
-                    ChatResponse {
-                        id: request_id.clone(),
-                        ..decoded
-                    },
-                    response_context.as_ref(),
-                    response_state
-                        .as_ref()
-                        .map(|lifecycle| (lifecycle.client_key, lifecycle.id.clone())),
-                    &state,
-                )
-                .await;
             }
         }
     }

@@ -225,6 +225,7 @@ async fn embeddings_passthrough_records_usage_and_bodies() {
                 endpoint: format!("http://{upstream}/v1"),
                 models: vec!["text-embedding-3-small".into()],
                 plugin_id: None,
+                mode: "single".into(),
             },
             "good-key",
             &[],
@@ -322,6 +323,7 @@ async fn auxiliary_failover_rotates_keys_and_skips_non_openai() {
                 endpoint: format!("http://{upstream}/v1"),
                 models: vec!["claude".into()],
                 plugin_id: None,
+                mode: "single".into(),
             },
             "good-key",
             &[],
@@ -337,6 +339,7 @@ async fn auxiliary_failover_rotates_keys_and_skips_non_openai() {
                 endpoint: format!("http://{upstream}/v1"),
                 models: vec!["rerank-model".into()],
                 plugin_id: None,
+                mode: "single".into(),
             },
             "bad-key",
             &[],
@@ -352,6 +355,7 @@ async fn auxiliary_failover_rotates_keys_and_skips_non_openai() {
                 endpoint: format!("http://{upstream}/v1"),
                 models: vec!["rerank-model".into()],
                 plugin_id: None,
+                mode: "single".into(),
             },
             "good-key",
             &[],
@@ -406,6 +410,7 @@ async fn terminal_upstream_error_passes_through_verbatim() {
                 endpoint: format!("http://{upstream}/v1"),
                 models: vec!["strict-model".into()],
                 plugin_id: None,
+                mode: "single".into(),
             },
             "good-key",
             &[],
@@ -456,6 +461,7 @@ async fn multipart_transcription_forwards_model_and_file() {
                 endpoint: format!("http://{upstream}/v1"),
                 models: vec!["whisper-1".into()],
                 plugin_id: None,
+                mode: "single".into(),
             },
             "good-key",
             &[],
@@ -505,6 +511,7 @@ async fn speech_returns_binary_verbatim() {
                 endpoint: format!("http://{upstream}/v1"),
                 models: vec!["tts-1".into()],
                 plugin_id: None,
+                mode: "single".into(),
             },
             "good-key",
             &[],
@@ -553,6 +560,7 @@ async fn video_task_poll_pins_submitting_channel_and_is_client_scoped() {
                 endpoint: format!("http://{upstream}/v1"),
                 models: vec!["sora-2".into()],
                 plugin_id: None,
+                mode: "single".into(),
             },
             "bad-key",
             &[],
@@ -561,7 +569,7 @@ async fn video_task_poll_pins_submitting_channel_and_is_client_scoped() {
         .await
         .unwrap();
     store
-        .add_provider_key(provider.id, "good-key", None, &keys)
+        .add_provider_key(provider.id, "good-key", None, None, &keys)
         .await
         .unwrap();
     default_route(&store, vec![(provider.id, "sora-2".into())]).await;
@@ -624,6 +632,7 @@ async fn suno_submit_and_fetch_use_suno_paths() {
                 endpoint: format!("http://{upstream}/v1"),
                 models: vec!["suno_music".into()],
                 plugin_id: None,
+                mode: "single".into(),
             },
             "good-key",
             &[],
@@ -692,6 +701,7 @@ async fn model_scope_denies_auxiliary_requests() {
                 endpoint: format!("http://{upstream}/v1"),
                 models: vec!["text-embedding-3-small".into()],
                 plugin_id: None,
+                mode: "single".into(),
             },
             "good-key",
             &[],
@@ -741,6 +751,7 @@ async fn search_aliases_forward_to_their_upstream_paths() {
                 endpoint: format!("http://{upstream}/v1"),
                 models: vec!["search-model".into()],
                 plugin_id: None,
+                mode: "single".into(),
             },
             "good-key",
             &[],
@@ -795,6 +806,7 @@ async fn video_generations_poll_pins_submitting_channel() {
                 endpoint: format!("http://{upstream}/v1"),
                 models: vec!["sora-2".into()],
                 plugin_id: None,
+                mode: "single".into(),
             },
             "good-key",
             &[],

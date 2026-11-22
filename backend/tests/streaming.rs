@@ -38,6 +38,7 @@ async fn provider(
                 endpoint,
                 models: vec!["upstream-model".into()],
                 plugin_id: None,
+                mode: "single".into(),
             },
             "upstream-secret",
             &[],

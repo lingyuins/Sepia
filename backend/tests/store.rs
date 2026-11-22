@@ -35,6 +35,7 @@ async fn bootstrap_authenticates_sessions_and_persists_configuration() {
         endpoint: "https://example.test/v1".into(),
         models: vec!["example-1".into()],
         plugin_id: None,
+        mode: "single".into(),
     };
     let provider = store
         .create_provider(provider, "sk-upstream-secret", &[], &key_store)

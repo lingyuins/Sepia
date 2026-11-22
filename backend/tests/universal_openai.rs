@@ -73,6 +73,7 @@ async fn store_with_route(
                 endpoint: format!("http://{address}"),
                 models: vec!["upstream-model".into()],
                 plugin_id: None,
+                mode: "single".into(),
             },
             "first-secret",
             &[],
@@ -310,6 +311,7 @@ async fn authentication_failures_rotate_keys_before_switching_endpoint() {
                 endpoint: format!("http://{upstream}"),
                 models: vec!["upstream-model".into()],
                 plugin_id: None,
+                mode: "single".into(),
             },
             "first-secret",
             &[],
@@ -318,7 +320,7 @@ async fn authentication_failures_rotate_keys_before_switching_endpoint() {
         .await
         .unwrap();
     store
-        .add_provider_key(provider.id, "second-secret", None, &keys)
+        .add_provider_key(provider.id, "second-secret", None, None, &keys)
         .await
         .unwrap();
     store
@@ -396,6 +398,7 @@ async fn failing_both_endpoints_advances_to_next_candidate() {
                 endpoint: format!("http://{broken}"),
                 models: vec!["upstream-model".into()],
                 plugin_id: None,
+                mode: "single".into(),
             },
             "upstream-secret",
             &[],
@@ -412,6 +415,7 @@ async fn failing_both_endpoints_advances_to_next_candidate() {
                 endpoint: format!("http://{success}"),
                 models: vec!["upstream-model".into()],
                 plugin_id: None,
+                mode: "single".into(),
             },
             "upstream-secret",
             &[],

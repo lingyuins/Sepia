@@ -84,6 +84,7 @@ async fn store_with_two_candidates(
                         endpoint: format!("http://{address}"),
                         models: vec!["upstream-model".into()],
                         plugin_id: None,
+                        mode: "single".into(),
                     },
                     "upstream-secret",
                     &[],

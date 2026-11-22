@@ -17,6 +17,7 @@ async fn provider_and_route_updates_round_trip_and_analytics_are_real() {
                 endpoint: "http://localhost/v1".into(),
                 models: vec!["one".into()],
                 plugin_id: None,
+                mode: "single".into(),
             },
             "secret",
             &[],
@@ -34,6 +35,7 @@ async fn provider_and_route_updates_round_trip_and_analytics_are_real() {
             group: "team",
             enabled: true,
             plugin_id: None,
+            mode: "single",
         })
         .await
         .unwrap();

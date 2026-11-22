@@ -48,6 +48,7 @@ async fn provider(store: &Store, name: &str, address: SocketAddr) -> i64 {
                 endpoint: format!("http://{address}"),
                 models: vec!["upstream-model".into()],
                 plugin_id: None,
+                mode: "single".into(),
             },
             "upstream-secret",
             &[],

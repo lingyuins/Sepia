@@ -772,79 +772,164 @@ async fn forward(
         {
             continue;
         }
-        let key_count = if pinned_key.is_some() {
-            1
-        } else {
-            state
-                .store
-                .provider_keys(provider.id)
-                .await
-                .unwrap_or_default()
-                .iter()
-                .filter(|key| {
-                    key.models
-                        .as_ref()
-                        .is_none_or(|models| models.iter().any(|item| item == model))
-                })
-                .count()
-                .max(1)
+        // Unified-channel providers fail over across addresses; pinned async
+        // polls stay on the address their key belongs to.
+        let addresses = match state.store.provider_endpoints(provider.id).await {
+            Ok(addresses) if !addresses.is_empty() => addresses,
+            _ => vec![crate::store::ProviderEndpoint {
+                id: 0,
+                endpoint: provider.endpoint.clone(),
+            }],
         };
-        let mut key_attempts = 0usize;
-        loop {
-            if attempts_used >= snapshot.max_attempts {
-                break 'candidates;
-            }
-            let (key_id, secret) = match pinned_key {
-                Some(key_id) => match state
+        let addresses: Vec<_> = match pinned_key {
+            Some(key_id) => {
+                let owner = state
                     .store
-                    .upstream_key_by_id(provider.id, *key_id, &state.keys)
+                    .provider_keys(provider.id)
                     .await
-                {
-                    Ok(secret) => (*key_id, secret),
-                    Err(_) => continue 'candidates,
-                },
-                None => {
-                    let health = state.key_health.lock().await;
-                    match state
+                    .unwrap_or_default()
+                    .into_iter()
+                    .find(|key| key.id == *key_id)
+                    .and_then(|key| key.endpoint_id);
+                addresses
+                    .into_iter()
+                    .filter(|address| owner.is_none_or(|owner| owner == address.id))
+                    .collect()
+            }
+            None => addresses,
+        };
+        'addresses: for (address_index, address) in addresses.iter().enumerate() {
+            let last_address = address_index + 1 == addresses.len();
+            let target = crate::Provider {
+                endpoint: address.endpoint.clone(),
+                ..provider.clone()
+            };
+            let key_count = if pinned_key.is_some() {
+                1
+            } else {
+                state
+                    .store
+                    .provider_keys(provider.id)
+                    .await
+                    .unwrap_or_default()
+                    .iter()
+                    .filter(|key| {
+                        key.endpoint_id
+                            .is_none_or(|endpoint_id| endpoint_id == address.id)
+                            && key
+                                .models
+                                .as_ref()
+                                .is_none_or(|models| models.iter().any(|item| item == model))
+                    })
+                    .count()
+                    .max(1)
+            };
+            let mut key_attempts = 0usize;
+            loop {
+                if attempts_used >= snapshot.max_attempts {
+                    break 'candidates;
+                }
+                let (key_id, secret) = match pinned_key {
+                    Some(key_id) => match state
                         .store
-                        .upstream_key_for_attempt(
-                            provider.id,
-                            model,
-                            key_attempts,
-                            &health.cooldowns,
-                            &state.keys,
-                        )
+                        .upstream_key_by_id(provider.id, *key_id, &state.keys)
                         .await
                     {
-                        Ok(Some(key)) => key,
-                        _ => continue 'candidates,
+                        Ok(secret) => (*key_id, secret),
+                        Err(_) => continue 'addresses,
+                    },
+                    None => {
+                        let health = state.key_health.lock().await;
+                        match state
+                            .store
+                            .upstream_key_for_attempt(
+                                provider.id,
+                                Some(address.id),
+                                model,
+                                key_attempts,
+                                &health.cooldowns,
+                                &state.keys,
+                            )
+                            .await
+                        {
+                            Ok(Some(key)) => key,
+                            _ => continue 'addresses,
+                        }
                     }
-                }
-            };
-            attempts_used += 1;
-            let attempt_started = Instant::now();
-            let _inflight = state.routing_stats.inflight_slot(provider.id);
-            let upstream = build_request(&state, provider, &secret, &prepared)
-                .send()
-                .await;
-            let response = match upstream {
-                Ok(response) => response,
-                Err(_) => {
-                    if let Some(route) = route {
-                        state.routing_stats.record(
-                            route.id,
-                            provider.id,
-                            model,
-                            false,
-                            attempt_started.elapsed().as_millis() as i64,
-                        );
-                    }
-                    state
-                        .key_health
-                        .lock()
+                };
+                attempts_used += 1;
+                let attempt_started = Instant::now();
+                let _inflight = state.routing_stats.inflight_slot(provider.id);
+                let upstream = build_request(&state, &target, &secret, &prepared)
+                    .send()
+                    .await;
+                let response = match upstream {
+                    Ok(response) => response,
+                    Err(_) => {
+                        if let Some(route) = route {
+                            state.routing_stats.record(
+                                route.id,
+                                provider.id,
+                                model,
+                                false,
+                                attempt_started.elapsed().as_millis() as i64,
+                            );
+                        }
+                        state
+                            .key_health
+                            .lock()
+                            .await
+                            .cooldowns
+                            .insert(key_id, chrono::Utc::now() + chrono::Duration::seconds(60));
+                        if let Some(response) = record_attempt(
+                            &state,
+                            crate::observability::NewAttempt {
+                                request_id: &request_id,
+                                provider_id: Some(provider.id),
+                                provider_key_id: Some(key_id),
+                                model,
+                                status: "retry",
+                                error: Some("upstream unavailable"),
+                                input_tokens: 0,
+                                output_tokens: 0,
+                                latency_ms: attempt_started.elapsed().as_millis() as i64,
+                            },
+                        )
                         .await
-                        .cooldowns
-                        .insert(key_id, chrono::Utc::now() + chrono::Duration::seconds(60));
+                        {
+                            return response;
+                        }
+                        continue 'addresses;
+                    }
+                };
+                let first_byte_ms = attempt_started.elapsed().as_millis() as i64;
+                let status = response.status();
+                if !status.is_success()
+                    && let Some(route) = route
+                {
+                    state
+                        .routing_stats
+                        .record(route.id, provider.id, model, false, first_byte_ms);
+                }
+                let content_type = response
+                    .headers()
+                    .get(reqwest::header::CONTENT_TYPE)
+                    .and_then(|value| value.to_str().ok())
+                    .map(str::to_owned);
+                if !status.is_success() {
+                    let retry_after = response
+                        .headers()
+                        .get("retry-after")
+                        .and_then(|value| value.to_str().ok())
+                        .and_then(|value| value.parse::<u64>().ok())
+                        .unwrap_or(0)
+                        .min(snapshot.retry_after_cap_seconds);
+                    let bytes = response.bytes().await.unwrap_or_default().to_vec();
+                    let retry = matches!(
+                        status.as_u16(),
+                        429 | 408 | 500 | 502 | 503 | 504 | 401 | 403
+                    );
+                    let endpoint_unsupported = matches!(status.as_u16(), 404 | 405 | 501);
                     if let Some(response) = record_attempt(
                         &state,
                         crate::observability::NewAttempt {
@@ -852,8 +937,12 @@ async fn forward(
                             provider_id: Some(provider.id),
                             provider_key_id: Some(key_id),
                             model,
-                            status: "retry",
-                            error: Some("upstream unavailable"),
+                            status: if retry || endpoint_unsupported || !last_address {
+                                "retry"
+                            } else {
+                                "failed"
+                            },
+                            error: Some(&format!("upstream HTTP {status} ({})", prepared.path)),
                             input_tokens: 0,
                             output_tokens: 0,
                             latency_ms: attempt_started.elapsed().as_millis() as i64,
@@ -863,37 +952,80 @@ async fn forward(
                     {
                         return response;
                     }
-                    continue 'candidates;
+                    if retry {
+                        if status == StatusCode::TOO_MANY_REQUESTS {
+                            state
+                                .key_health
+                                .lock()
+                                .await
+                                .cooldowns
+                                .insert(key_id, chrono::Utc::now() + chrono::Duration::seconds(60));
+                            if retry_after > 0 {
+                                tokio::time::sleep(std::time::Duration::from_secs(retry_after))
+                                    .await;
+                            }
+                        }
+                        if status == StatusCode::UNAUTHORIZED || status == StatusCode::FORBIDDEN {
+                            key_attempts += 1;
+                            if key_attempts < key_count {
+                                continue;
+                            }
+                        }
+                        continue 'addresses;
+                    }
+                    if endpoint_unsupported {
+                        continue 'addresses;
+                    }
+                    // Terminal upstream errors pass through verbatim so clients
+                    // see the provider's own status and error body.
+                    let _ = guard.complete("failed", 0, 0, 0).await;
+                    return passthrough(status, content_type.as_deref(), bytes);
                 }
-            };
-            let first_byte_ms = attempt_started.elapsed().as_millis() as i64;
-            let status = response.status();
-            if !status.is_success()
-                && let Some(route) = route
-            {
-                state
-                    .routing_stats
-                    .record(route.id, provider.id, model, false, first_byte_ms);
-            }
-            let content_type = response
-                .headers()
-                .get(reqwest::header::CONTENT_TYPE)
-                .and_then(|value| value.to_str().ok())
-                .map(str::to_owned);
-            if !status.is_success() {
-                let retry_after = response
-                    .headers()
-                    .get("retry-after")
-                    .and_then(|value| value.to_str().ok())
-                    .and_then(|value| value.parse::<u64>().ok())
-                    .unwrap_or(0)
-                    .min(snapshot.retry_after_cap_seconds);
-                let bytes = response.bytes().await.unwrap_or_default().to_vec();
-                let retry = matches!(
-                    status.as_u16(),
-                    429 | 408 | 500 | 502 | 503 | 504 | 401 | 403
-                );
-                let endpoint_unsupported = matches!(status.as_u16(), 404 | 405 | 501);
+                let bytes = match response.bytes().await {
+                    Ok(bytes) => bytes.to_vec(),
+                    Err(_) => {
+                        if let Some(route) = route {
+                            state.routing_stats.record(
+                                route.id,
+                                provider.id,
+                                model,
+                                false,
+                                first_byte_ms,
+                            );
+                        }
+                        if let Some(response) = record_attempt(
+                            &state,
+                            crate::observability::NewAttempt {
+                                request_id: &request_id,
+                                provider_id: Some(provider.id),
+                                provider_key_id: Some(key_id),
+                                model,
+                                status: "retry",
+                                error: Some("upstream body unavailable"),
+                                input_tokens: 0,
+                                output_tokens: 0,
+                                latency_ms: attempt_started.elapsed().as_millis() as i64,
+                            },
+                        )
+                        .await
+                        {
+                            return response;
+                        }
+                        continue 'addresses;
+                    }
+                };
+                if let Some(route) = route {
+                    state
+                        .routing_stats
+                        .record(route.id, provider.id, model, true, first_byte_ms);
+                }
+                let value: Option<Value> = serde_json::from_slice(&bytes).ok();
+                let (input_tokens, output_tokens) =
+                    value.as_ref().map(usage_tokens).unwrap_or((0, 0));
+                let _ = state
+                    .store
+                    .set_request_details(&request_id, first_byte_ms, 0, 0)
+                    .await;
                 if let Some(response) = record_attempt(
                     &state,
                     crate::observability::NewAttempt {
@@ -901,14 +1033,10 @@ async fn forward(
                         provider_id: Some(provider.id),
                         provider_key_id: Some(key_id),
                         model,
-                        status: if retry || endpoint_unsupported {
-                            "retry"
-                        } else {
-                            "failed"
-                        },
-                        error: Some(&format!("upstream HTTP {status} ({})", prepared.path)),
-                        input_tokens: 0,
-                        output_tokens: 0,
+                        status: "success",
+                        error: None,
+                        input_tokens,
+                        output_tokens,
                         latency_ms: attempt_started.elapsed().as_millis() as i64,
                     },
                 )
@@ -916,139 +1044,50 @@ async fn forward(
                 {
                     return response;
                 }
-                if retry {
-                    if status == StatusCode::TOO_MANY_REQUESTS {
-                        state
-                            .key_health
-                            .lock()
-                            .await
-                            .cooldowns
-                            .insert(key_id, chrono::Utc::now() + chrono::Duration::seconds(60));
-                        if retry_after > 0 {
-                            tokio::time::sleep(std::time::Duration::from_secs(retry_after)).await;
-                        }
-                    }
-                    if status == StatusCode::UNAUTHORIZED || status == StatusCode::FORBIDDEN {
-                        key_attempts += 1;
-                        if key_attempts < key_count {
-                            continue;
-                        }
-                    }
-                    continue 'candidates;
-                }
-                if endpoint_unsupported {
-                    continue 'candidates;
-                }
-                // Terminal upstream errors pass through verbatim so clients
-                // see the provider's own status and error body.
-                let _ = guard.complete("failed", 0, 0, 0).await;
-                return passthrough(status, content_type.as_deref(), bytes);
-            }
-            let bytes = match response.bytes().await {
-                Ok(bytes) => bytes.to_vec(),
-                Err(_) => {
-                    if let Some(route) = route {
-                        state.routing_stats.record(
-                            route.id,
-                            provider.id,
-                            model,
-                            false,
-                            first_byte_ms,
-                        );
-                    }
-                    if let Some(response) = record_attempt(
-                        &state,
-                        crate::observability::NewAttempt {
-                            request_id: &request_id,
-                            provider_id: Some(provider.id),
-                            provider_key_id: Some(key_id),
-                            model,
-                            status: "retry",
-                            error: Some("upstream body unavailable"),
-                            input_tokens: 0,
-                            output_tokens: 0,
-                            latency_ms: attempt_started.elapsed().as_millis() as i64,
-                        },
-                    )
-                    .await
-                    {
-                        return response;
-                    }
-                    continue 'candidates;
-                }
-            };
-            if let Some(route) = route {
-                state
-                    .routing_stats
-                    .record(route.id, provider.id, model, true, first_byte_ms);
-            }
-            let value: Option<Value> = serde_json::from_slice(&bytes).ok();
-            let (input_tokens, output_tokens) = value.as_ref().map(usage_tokens).unwrap_or((0, 0));
-            let _ = state
-                .store
-                .set_request_details(&request_id, first_byte_ms, 0, 0)
-                .await;
-            if let Some(response) = record_attempt(
-                &state,
-                crate::observability::NewAttempt {
-                    request_id: &request_id,
-                    provider_id: Some(provider.id),
-                    provider_key_id: Some(key_id),
-                    model,
-                    status: "success",
-                    error: None,
-                    input_tokens,
-                    output_tokens,
-                    latency_ms: attempt_started.elapsed().as_millis() as i64,
-                },
-            )
-            .await
-            {
-                return response;
-            }
-            let cost = state
-                .store
-                .model_cost(model, input_tokens, output_tokens)
-                .await
-                .unwrap_or(0);
-            if guard
-                .complete("success", input_tokens, output_tokens, cost)
-                .await
-                .is_err()
-            {
-                return error(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "request settlement unavailable",
-                );
-            }
-            if let (Some(kind), Some(value)) = (prepared.task_kind, value.as_ref())
-                && let Some(task_id) = extract_task_id(value)
-            {
-                insert_task(
-                    &state.store,
-                    &task_id,
-                    client.id,
-                    provider.id,
-                    key_id,
-                    kind,
-                    model,
-                )
-                .await;
-            }
-            if snapshot.log_bodies
-                && content_type
-                    .as_deref()
-                    .is_some_and(|kind| kind.contains("json") || kind.starts_with("text/"))
-            {
-                let _ = state
+                let cost = state
                     .store
-                    .save_response_body(
-                        &request_id,
-                        &crate::relay::capped_body(&String::from_utf8_lossy(&bytes)),
+                    .model_cost(model, input_tokens, output_tokens)
+                    .await
+                    .unwrap_or(0);
+                if guard
+                    .complete("success", input_tokens, output_tokens, cost)
+                    .await
+                    .is_err()
+                {
+                    return error(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "request settlement unavailable",
+                    );
+                }
+                if let (Some(kind), Some(value)) = (prepared.task_kind, value.as_ref())
+                    && let Some(task_id) = extract_task_id(value)
+                {
+                    insert_task(
+                        &state.store,
+                        &task_id,
+                        client.id,
+                        provider.id,
+                        key_id,
+                        kind,
+                        model,
                     )
                     .await;
+                }
+                if snapshot.log_bodies
+                    && content_type
+                        .as_deref()
+                        .is_some_and(|kind| kind.contains("json") || kind.starts_with("text/"))
+                {
+                    let _ = state
+                        .store
+                        .save_response_body(
+                            &request_id,
+                            &crate::relay::capped_body(&String::from_utf8_lossy(&bytes)),
+                        )
+                        .await;
+                }
+                return passthrough(StatusCode::OK, content_type.as_deref(), bytes);
             }
-            return passthrough(StatusCode::OK, content_type.as_deref(), bytes);
         }
     }
     let _ = guard.complete("failed", 0, 0, 0).await;

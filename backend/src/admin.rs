@@ -60,6 +60,12 @@ pub struct ProviderInput {
     enabled: bool,
     #[serde(default)]
     plugin_id: Option<String>,
+    #[serde(default = "default_mode")]
+    mode: String,
+    /// Unified-channel providers: ordered addresses, each with its own keys.
+    /// Ignored when `mode` is `single`.
+    #[serde(default)]
+    endpoints: Vec<ProviderEndpointInput>,
 }
 #[derive(Deserialize)]
 pub struct ProviderPreviewInput {
@@ -72,10 +78,21 @@ pub struct ProviderPreviewInput {
     #[serde(default)]
     plugin_id: Option<String>,
 }
-#[derive(Deserialize)]
+#[derive(Deserialize, Clone)]
 pub struct KeyModelsInput {
     secret: String,
     models: Vec<String>,
+}
+#[derive(Deserialize, Clone)]
+pub struct ProviderEndpointInput {
+    endpoint: String,
+    #[serde(default)]
+    secrets: Vec<String>,
+    #[serde(default)]
+    key_models: Vec<KeyModelsInput>,
+}
+fn default_mode() -> String {
+    "single".into()
 }
 #[derive(Deserialize)]
 pub struct ProviderKeyModelsUpdate {
@@ -341,7 +358,15 @@ async fn providers(State(state): State<AppState>) -> Response {
             Ok(keys) => keys,
             Err(message) => return error(StatusCode::INTERNAL_SERVER_ERROR, message),
         };
-        output.push(json!({"id":provider.id,"name":provider.name,"protocol":provider.protocol,"endpoint":provider.endpoint,"models":provider.models,"key_count":provider.key_count,"group_id":provider.group_id,"enabled":provider.enabled,"plugin_id":provider.plugin_id,"keys":keys.iter().map(|key| json!({"id":key.id,"models":key.models})).collect::<Vec<_>>()}));
+        let mode = match state.store.provider_mode(provider.id).await {
+            Ok(mode) => mode,
+            Err(message) => return error(StatusCode::INTERNAL_SERVER_ERROR, message),
+        };
+        let endpoints = match state.store.provider_endpoints(provider.id).await {
+            Ok(endpoints) => endpoints,
+            Err(message) => return error(StatusCode::INTERNAL_SERVER_ERROR, message),
+        };
+        output.push(json!({"id":provider.id,"name":provider.name,"protocol":provider.protocol,"endpoint":provider.endpoint,"models":provider.models,"key_count":provider.key_count,"group_id":provider.group_id,"enabled":provider.enabled,"plugin_id":provider.plugin_id,"mode":mode,"keys":keys.iter().map(|key| json!({"id":key.id,"models":key.models,"endpoint_id":key.endpoint_id})).collect::<Vec<_>>(),"endpoints":endpoints.iter().map(|endpoint| json!({"id":endpoint.id,"endpoint":endpoint.endpoint,"keys":keys.iter().filter(|key| key.endpoint_id == Some(endpoint.id)).map(|key| json!({"id":key.id,"models":key.models})).collect::<Vec<_>>()})).collect::<Vec<_>>()}));
     }
     Json(output).into_response()
 }
@@ -504,7 +529,49 @@ async fn create_provider(
         group_id,
         enabled,
         plugin_id,
+        mode,
+        endpoints,
     } = input;
+    if mode != "single" && mode != "unified" {
+        return error(StatusCode::BAD_REQUEST, "mode must be single or unified");
+    }
+    let unified = mode == "unified";
+    let (endpoint, secret, secrets, key_models, extra_endpoints) = if unified {
+        let mut entries = endpoints;
+        for entry in &mut entries {
+            entry.secrets = entry
+                .secrets
+                .iter()
+                .map(|value| value.trim().to_string())
+                .filter(|value| !value.is_empty())
+                .collect();
+        }
+        let entries: Vec<_> = entries
+            .into_iter()
+            .filter(|entry| !entry.endpoint.trim().is_empty())
+            .collect();
+        if entries.is_empty() {
+            return error(StatusCode::BAD_REQUEST, "at least one endpoint required");
+        }
+        for entry in &entries {
+            if entry.secrets.is_empty() {
+                return error(
+                    StatusCode::BAD_REQUEST,
+                    "each unified endpoint needs at least one key",
+                );
+            }
+        }
+        let first = &entries[0];
+        (
+            first.endpoint.clone(),
+            first.secrets[0].clone(),
+            first.secrets[1..].to_vec(),
+            first.key_models.clone(),
+            entries[1..].to_vec(),
+        )
+    } else {
+        (endpoint, secret, secrets, key_models, Vec::new())
+    };
     let key_scopes: Vec<(String, Vec<String>)> = key_models
         .into_iter()
         .map(|entry| (entry.secret, entry.models))
@@ -567,6 +634,7 @@ async fn create_provider(
                 endpoint,
                 models,
                 plugin_id: plugin_id.clone(),
+                mode: mode.clone(),
             },
             &secret,
             &key_scopes,
@@ -586,6 +654,7 @@ async fn create_provider(
                     group: &group_id,
                     enabled,
                     plugin_id: plugin_id.as_deref(),
+                    mode: &mode,
                 })
                 .await
             {
@@ -600,10 +669,40 @@ async fn create_provider(
                     .map(|(_, models)| models.as_slice());
                 if let Err(message) = state
                     .store
-                    .add_provider_key(provider.id, additional_secret, scope, &state.keys)
+                    .add_provider_key(provider.id, additional_secret, scope, None, &state.keys)
                     .await
                 {
                     return error(StatusCode::BAD_REQUEST, message);
+                }
+            }
+            for entry in &extra_endpoints {
+                let endpoint_id = match state
+                    .store
+                    .append_provider_endpoint(provider.id, &entry.endpoint)
+                    .await
+                {
+                    Ok(id) => id,
+                    Err(message) => return error(StatusCode::BAD_REQUEST, message),
+                };
+                for entry_secret in &entry.secrets {
+                    let scope = entry
+                        .key_models
+                        .iter()
+                        .find(|scoped| scoped.secret == *entry_secret)
+                        .map(|scoped| scoped.models.as_slice());
+                    if let Err(message) = state
+                        .store
+                        .add_provider_key(
+                            provider.id,
+                            entry_secret,
+                            scope,
+                            Some(endpoint_id),
+                            &state.keys,
+                        )
+                        .await
+                    {
+                        return error(StatusCode::BAD_REQUEST, message);
+                    }
                 }
             }
             if let Err(message) = state.snapshots.refresh(&state.store).await {
@@ -671,17 +770,59 @@ async fn update_provider(
     Path(id): Path<i64>,
     Json(input): Json<ProviderInput>,
 ) -> Response {
+    if input.mode != "single" && input.mode != "unified" {
+        return error(StatusCode::BAD_REQUEST, "mode must be single or unified");
+    }
+    let mut endpoint = input.endpoint.clone();
+    if input.mode == "unified" {
+        let addresses: Vec<String> = input
+            .endpoints
+            .iter()
+            .map(|entry| entry.endpoint.trim().to_string())
+            .filter(|value| !value.is_empty())
+            .collect();
+        if addresses.is_empty() {
+            return error(StatusCode::BAD_REQUEST, "at least one endpoint required");
+        }
+        endpoint = addresses[0].clone();
+        let synced_endpoints = match state.store.sync_provider_endpoints(id, &addresses).await {
+            Ok(endpoints) => endpoints,
+            Err(message) => return error(StatusCode::BAD_REQUEST, message),
+        };
+        for (entry, stored) in input.endpoints.iter().zip(&synced_endpoints) {
+            for entry_secret in entry
+                .secrets
+                .iter()
+                .map(|value| value.trim())
+                .filter(|value| !value.is_empty())
+            {
+                let scope = entry
+                    .key_models
+                    .iter()
+                    .find(|scoped| scoped.secret == entry_secret)
+                    .map(|scoped| scoped.models.as_slice());
+                if let Err(message) = state
+                    .store
+                    .add_provider_key(id, entry_secret, scope, Some(stored.id), &state.keys)
+                    .await
+                {
+                    return error(StatusCode::BAD_REQUEST, message);
+                }
+            }
+        }
+    }
     match state
         .store
         .update_provider(ProviderUpdate {
             id,
             name: &input.name,
             protocol: input.protocol,
-            endpoint: &input.endpoint,
+            endpoint: &endpoint,
             models: &input.models,
             group: &input.group_id,
             enabled: input.enabled,
             plugin_id: input.plugin_id.as_deref(),
+            mode: &input.mode,
         })
         .await
     {
@@ -846,13 +987,28 @@ async fn resolve_test_secret(
     if let Some(secret) = input_secret.filter(|secret| !secret.trim().is_empty()) {
         return Ok(secret);
     }
+    // Detection targets the provider's first address only: unified channels
+    // share one model catalog across addresses, and key_index addresses the
+    // first address's keys (the list the dialog shows for detection).
+    let first_endpoint = state
+        .store
+        .provider_endpoints(provider_id)
+        .await
+        .ok()
+        .and_then(|endpoints| endpoints.first().map(|endpoint| endpoint.id));
+    let keys = state
+        .store
+        .provider_keys(provider_id)
+        .await
+        .map_err(|message| Box::new(error(StatusCode::INTERNAL_SERVER_ERROR, message)))?;
+    let keys: Vec<_> = keys
+        .into_iter()
+        .filter(|key| {
+            first_endpoint.is_none_or(|endpoint| key.endpoint_id.is_none_or(|id| id == endpoint))
+        })
+        .collect();
     match key_index {
         Some(index) => {
-            let keys = state
-                .store
-                .provider_keys(provider_id)
-                .await
-                .map_err(|message| Box::new(error(StatusCode::INTERNAL_SERVER_ERROR, message)))?;
             let Some(key) = keys.get(index) else {
                 return Err(Box::new(error(
                     StatusCode::BAD_REQUEST,
@@ -865,11 +1021,17 @@ async fn resolve_test_secret(
                 .await
                 .map_err(|message| Box::new(error(StatusCode::BAD_REQUEST, message)))
         }
-        None => state
-            .store
-            .upstream_key(provider_id, &state.keys)
-            .await
-            .map_err(|message| Box::new(error(StatusCode::BAD_REQUEST, message))),
+        None => match keys.first() {
+            Some(key) => state
+                .store
+                .upstream_key_by_id(provider_id, key.id, &state.keys)
+                .await
+                .map_err(|message| Box::new(error(StatusCode::BAD_REQUEST, message))),
+            None => Err(Box::new(error(
+                StatusCode::BAD_REQUEST,
+                "provider has no enabled key",
+            ))),
+        },
     }
 }
 async fn test_route(State(state): State<AppState>, Path(id): Path<i64>) -> Response {
@@ -899,7 +1061,14 @@ async fn test_route(State(state): State<AppState>, Path(id): Path<i64>) -> Respo
         }
         let secret = match state
             .store
-            .upstream_key_for_attempt(provider.id, model, 0, &Default::default(), &state.keys)
+            .upstream_key_for_attempt(
+                provider.id,
+                None,
+                model,
+                0,
+                &Default::default(),
+                &state.keys,
+            )
             .await
         {
             Ok(Some((_, secret))) => secret,
@@ -936,9 +1105,10 @@ async fn add_key(
             Err(_) => return error(StatusCode::BAD_REQUEST, "models must be a string array"),
         },
     };
+    let endpoint_id = input.get("endpoint_id").and_then(serde_json::Value::as_i64);
     match state
         .store
-        .add_provider_key(id, secret, models.as_deref(), &state.keys)
+        .add_provider_key(id, secret, models.as_deref(), endpoint_id, &state.keys)
         .await
     {
         Ok(id) => Json(json!({"id":id})).into_response(),
@@ -949,7 +1119,7 @@ async fn list_provider_keys(State(state): State<AppState>, Path(id): Path<i64>) 
     match state.store.provider_keys(id).await {
         Ok(keys) => Json(json!(
             keys.into_iter()
-                .map(|key| json!({"id":key.id,"models":key.models}))
+                .map(|key| json!({"id":key.id,"models":key.models,"endpoint_id":key.endpoint_id}))
                 .collect::<Vec<_>>()
         ))
         .into_response(),

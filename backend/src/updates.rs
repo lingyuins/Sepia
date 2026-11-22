@@ -24,6 +24,7 @@ pub struct ProviderUpdate<'a> {
     pub group: &'a str,
     pub enabled: bool,
     pub plugin_id: Option<&'a str>,
+    pub mode: &'a str,
 }
 
 impl Store {
@@ -37,10 +38,11 @@ impl Store {
             group,
             enabled,
             plugin_id,
+            mode,
         } = input;
         let mut tx = self.pool.begin().await.map_err(|e| e.to_string())?;
         sqlx::query(
-            "UPDATE providers SET name = ?, protocol = ?, endpoint = ?, group_id = ?, enabled = ?, plugin_id = ? WHERE id = ?",
+            "UPDATE providers SET name = ?, protocol = ?, endpoint = ?, group_id = ?, enabled = ?, plugin_id = ?, mode = ? WHERE id = ?",
         )
         .bind(name)
         .bind(protocol.as_str())
@@ -48,6 +50,7 @@ impl Store {
         .bind(group)
         .bind(enabled)
         .bind(plugin_id)
+        .bind(mode)
         .bind(id)
         .execute(&mut *tx)
         .await

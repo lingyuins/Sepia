@@ -33,6 +33,7 @@ async fn gateway(upstream: Router) -> (SocketAddr, Store, String, tempfile::Temp
                 endpoint: format!("http://{upstream}"),
                 models: vec!["upstream-model".into()],
                 plugin_id: None,
+                mode: "single".into(),
             },
             "upstream-secret",
             &[],

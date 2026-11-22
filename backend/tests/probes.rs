@@ -127,6 +127,7 @@ async fn route_test_probes_every_candidate_with_real_upstream_calls() {
                 endpoint: format!("http://{upstream}"),
                 models: vec!["gpt-a".into()],
                 plugin_id: None,
+                mode: "single".into(),
             },
             "gpt-key",
             &[],
@@ -142,6 +143,7 @@ async fn route_test_probes_every_candidate_with_real_upstream_calls() {
                 endpoint: format!("http://{upstream}"),
                 models: vec!["gpt-a".into()],
                 plugin_id: None,
+                mode: "single".into(),
             },
             "revoked-key",
             &[],
@@ -254,6 +256,7 @@ async fn route_test_reports_missing_key_scope_and_universal_fallback() {
                 endpoint: format!("http://{upstream}"),
                 models: vec!["gpt-a".into(), "other".into()],
                 plugin_id: None,
+                mode: "single".into(),
             },
             "gpt-key",
             &[("gpt-key".into(), vec!["gpt-a".into()])],
@@ -269,6 +272,7 @@ async fn route_test_reports_missing_key_scope_and_universal_fallback() {
                 endpoint: format!("http://{responses}"),
                 models: vec!["gpt-a".into()],
                 plugin_id: None,
+                mode: "single".into(),
             },
             "gpt-key",
             &[],
@@ -326,6 +330,7 @@ async fn provider_test_detects_catalog_with_saved_key_index_or_entered_secret() 
                 endpoint: format!("http://{upstream}"),
                 models: vec!["gpt-a".into()],
                 plugin_id: None,
+                mode: "single".into(),
             },
             "revoked-key",
             &[],
@@ -334,7 +339,7 @@ async fn provider_test_detects_catalog_with_saved_key_index_or_entered_secret() 
         .await
         .unwrap();
     store
-        .add_provider_key(provider.id, "gpt-key", None, &keys)
+        .add_provider_key(provider.id, "gpt-key", None, None, &keys)
         .await
         .unwrap();
     let address = serve(app(AppState::for_testing(store.clone()).await)).await;
@@ -440,6 +445,7 @@ async fn probe_budget_lets_reasoning_models_emit_visible_content() {
                 endpoint: format!("http://{upstream}"),
                 models: vec!["qwen-max".into()],
                 plugin_id: None,
+                mode: "single".into(),
             },
             "gpt-key",
             &[],

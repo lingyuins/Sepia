@@ -17,6 +17,7 @@ async fn catalog_aggregates_channels_prices_scopes_and_routes() {
                 endpoint: "http://alpha.example/v1".into(),
                 models: vec!["gpt-x".into(), "embed-x".into()],
                 plugin_id: None,
+                mode: "single".into(),
             },
             "alpha-key",
             &[],
@@ -32,6 +33,7 @@ async fn catalog_aggregates_channels_prices_scopes_and_routes() {
                 endpoint: "http://beta.example".into(),
                 models: vec!["gpt-x".into()],
                 plugin_id: None,
+                mode: "single".into(),
             },
             "beta-key-1",
             &[("beta-key-1".into(), vec!["gpt-x".into()])],
@@ -40,7 +42,7 @@ async fn catalog_aggregates_channels_prices_scopes_and_routes() {
         .await
         .unwrap();
     store
-        .add_provider_key(beta.id, "beta-key-2", Some(&["other".into()]), &keys)
+        .add_provider_key(beta.id, "beta-key-2", Some(&["other".into()]), None, &keys)
         .await
         .unwrap();
     store
@@ -192,6 +194,7 @@ async fn metadata_sync_fetches_source_and_matches_variants() {
                 endpoint: "http://alpha.example/v1".into(),
                 models: vec!["gpt-x-2024-08-06".into(), "gpt-x".into(), "kimi-k3".into()],
                 plugin_id: None,
+                mode: "single".into(),
             },
             "alpha-key",
             &[],

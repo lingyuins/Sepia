@@ -140,6 +140,7 @@ async fn gateway(models: &[String]) -> (SocketAddr, AppState, tempfile::TempDir)
                 endpoint: "http://127.0.0.1:1".into(),
                 models: models.to_vec(),
                 plugin_id: None,
+                mode: "single".into(),
             },
             "relay-key",
             &[],

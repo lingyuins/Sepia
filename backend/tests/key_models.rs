@@ -92,6 +92,7 @@ async fn store_with_scoped_provider(
                 endpoint: format!("http://{address}"),
                 models: vec!["claude-a".into(), "claude-b".into(), "gpt-a".into()],
                 plugin_id: None,
+                mode: "single".into(),
             },
             "claude-key",
             &[(
@@ -103,7 +104,7 @@ async fn store_with_scoped_provider(
         .await
         .unwrap();
     store
-        .add_provider_key(provider.id, "gpt-key", Some(&["gpt-a".into()]), &keys)
+        .add_provider_key(provider.id, "gpt-key", Some(&["gpt-a".into()]), None, &keys)
         .await
         .unwrap();
     store
@@ -232,6 +233,7 @@ async fn auth_rotation_stays_within_eligible_scoped_keys() {
                 endpoint: format!("http://{upstream}"),
                 models: vec!["claude-a".into()],
                 plugin_id: None,
+                mode: "single".into(),
             },
             "bad-claude",
             &[("bad-claude".into(), vec!["claude-a".into()])],
@@ -244,12 +246,13 @@ async fn auth_rotation_stays_within_eligible_scoped_keys() {
             provider.id,
             "good-claude",
             Some(&["claude-a".into()]),
+            None,
             &keys,
         )
         .await
         .unwrap();
     store
-        .add_provider_key(provider.id, "unscoped-key", None, &keys)
+        .add_provider_key(provider.id, "unscoped-key", None, None, &keys)
         .await
         .unwrap();
     store
@@ -314,6 +317,7 @@ async fn unscoped_keys_still_serve_every_model() {
                 endpoint: format!("http://{upstream}"),
                 models: vec!["gpt-a".into()],
                 plugin_id: None,
+                mode: "single".into(),
             },
             "gpt-key",
             &[],

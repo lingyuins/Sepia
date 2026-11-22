@@ -3,7 +3,7 @@ import type { AttemptRecord, Plugin, Provider, RequestRecord, RouteRule } from '
 import { clampWeight, normalizeRouteStrategy } from './route-strategy.ts'
 type ProviderProtocol = 'openai' | 'anthropic' | 'gemini' | 'openai-responses'
 
-export type ApiProvider = { id: number; name: string; protocol: ProviderProtocol; endpoint: string; models: string[]; key_count: number; enabled: boolean; group_id: string; keys?: { id: number; models: string[] | null }[] }
+export type ApiProvider = { id: number; name: string; protocol: ProviderProtocol; endpoint: string; models: string[]; key_count: number; enabled: boolean; group_id: string; mode?: 'single' | 'unified'; keys?: { id: number; models: string[] | null; endpoint_id?: number | null }[]; endpoints?: { id: number; endpoint: string; keys?: { id: number; models: string[] | null }[] }[] }
 export type ApiRoute = { id: number; slug: string; name: string; description: string; patterns: string[]; is_default: boolean; list_members: boolean; enabled: boolean; candidates: [number, string][]; strategy?: string; weights?: number[] }
 export type ApiRequest = { id: string; protocol: string; model: string; route?: string; status: string; input_tokens: number; output_tokens: number; cost_micros: number; latency_ms: number; created_at: string; provider?: string; key?: string; client_ip?: string | null; first_byte_ms?: number | null; cached_tokens?: number; reasoning_tokens?: number; has_body?: boolean }
 export type ApiAttempt = { id: number; request_id: string; provider_id: number | null; provider_key_id: number | null; model: string; status: string; error: string | null; input_tokens: number; output_tokens: number; latency_ms: number; created_at: string }
@@ -35,7 +35,7 @@ export function apiClient(fetcher: typeof fetch = fetch) {
 export const api = apiClient()
 const color = ['#dcf1d2', '#e8cdb7', '#c5d9ef', '#c8c5ee']
 export function mapProvider(provider: ApiProvider): Provider {
-  return { id: provider.id, name: provider.name, short: provider.name.charAt(0).toUpperCase(), type: provider.protocol, models: provider.models.length, latency: 0, success: '—', requests: '0', color: color[provider.id % color.length], enabled: provider.enabled, endpoint: provider.endpoint, group: provider.group_id, modelsList: provider.models, keyCount: provider.key_count, keyScopes: provider.keys }
+  return { id: provider.id, name: provider.name, short: provider.name.charAt(0).toUpperCase(), type: provider.protocol, models: provider.models.length, latency: 0, success: '—', requests: '0', color: color[provider.id % color.length], enabled: provider.enabled, endpoint: provider.endpoint, mode: provider.mode === 'unified' ? 'unified' : 'single', endpoints: (provider.endpoints || []).map((entry) => ({ id: entry.id, endpoint: entry.endpoint, keys: (entry.keys || []).map((key) => ({ id: key.id, models: key.models, endpointId: entry.id })) })), group: provider.group_id, modelsList: provider.models, keyCount: provider.key_count, keyScopes: provider.keys?.map((key) => ({ id: key.id, models: key.models, endpointId: key.endpoint_id ?? undefined })) }
 }
 export function mapRoute(route: ApiRoute, providers: Provider[]): RouteRule {
   const candidates = route.candidates.map(([provider, model], index) => ({ id: `${route.id}-${index}`, provider: providers.find((item) => item.id === provider)?.name || String(provider), model, enabled: true, weight: clampWeight(route.weights?.[index] ?? 1) }))
@@ -53,10 +53,17 @@ export function mapAttempt(attempt: ApiAttempt): AttemptRecord {
 export function mapPlugin(plugin: ApiPlugin): Plugin {
   return { id: plugin.id, name: plugin.name, description: plugin.description, version: plugin.version, enabled: plugin.enabled, status: plugin.status, events: plugin.events, permissions: plugin.permissions, priority: plugin.priority, hasUi: plugin.has_ui, uiTitle: plugin.ui_title, configSchema: plugin.config_schema || {}, config: plugin.config || {}, sha256: plugin.sha256, installedAt: plugin.installed_at, updatedAt: plugin.updated_at }
 }
-export type ProviderKeyDraft = { value: string; models: string[] | null }
+export type ProviderKeyDraft = { value: string; models: string[] | null; endpointId?: number }
 export function providerInput(provider: Provider, keyDrafts: ProviderKeyDraft[] = []) {
   const entered = keyDrafts.filter((key) => key.value.trim())
-  return { name: provider.name, protocol: provider.type, endpoint: provider.endpoint, models: provider.modelsList, secret: entered[0]?.value.trim() || '', secrets: entered.map((key) => key.value.trim()), key_models: entered.filter((key) => key.models !== null).map((key) => ({ secret: key.value.trim(), models: key.models })), group_id: provider.group, enabled: provider.enabled }
+  const base = { name: provider.name, protocol: provider.type, endpoint: provider.endpoint, models: provider.modelsList, secret: entered[0]?.value.trim() || '', secrets: entered.map((key) => key.value.trim()), key_models: entered.filter((key) => key.models !== null).map((key) => ({ secret: key.value.trim(), models: key.models })), group_id: provider.group, enabled: provider.enabled, mode: provider.mode }
+  if (provider.mode !== 'unified') return base
+  const endpoints = provider.endpoints.map((entry) => {
+    const keys = keyDrafts.filter((key) => key.endpointId === entry.id)
+    const enteredKeys = keys.filter((key) => key.value.trim())
+    return { endpoint: entry.endpoint, secrets: enteredKeys.map((key) => key.value.trim()), key_models: enteredKeys.filter((key) => key.models !== null).map((key) => ({ secret: key.value.trim(), models: key.models })) }
+  })
+  return { ...base, endpoint: endpoints[0]?.endpoint || provider.endpoint, secret: endpoints[0]?.secrets[0] || '', secrets: endpoints[0]?.secrets || [], key_models: endpoints[0]?.key_models || [], endpoints }
 }
 export function keyInput(policy: KeyPolicy) {
   const expiresAt = policy.expiresAt ? policy.expiresAt.slice(0, 16) : null
