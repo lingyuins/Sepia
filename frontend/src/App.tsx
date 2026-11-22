@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useWorkspace, useTranslation, type RequestRecord } from './workspace'
 import { api, providerInput } from './api'
-import { ProviderDialog, Toast } from './components/Provider'
+import { ProviderDialog } from './components/Provider'
 import { Modal } from './components/UI'
 import {
   CommandPalette,
@@ -36,7 +36,7 @@ function resolveHashPage(): Page {
 }
 
 function App() {
-  const { settings, providers, notify, toast, clearToast, run, version } = useWorkspace()
+  const { settings, providers, notify, run, version } = useWorkspace()
   const t = useTranslation()
 
   const [page, setPage] = useState<Page>(resolveHashPage)
@@ -125,7 +125,7 @@ function App() {
             api('/api/v1/providers', {
               method: 'POST',
               body: JSON.stringify(providerInput(provider, keys)),
-            }),
+            }), ['providers'],
           )
           setAddProvider(false)
           notify(t('providerConnected', { name: provider.name }))
@@ -153,7 +153,6 @@ function App() {
         onClose={() => setWorkspaceOpen(false)}
         onSettings={() => navigate('Settings')}
       />
-      {toast && <Toast message={toast} onClose={clearToast} />}
     </div>
   )
 }

@@ -1,8 +1,10 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
   ArrowUpRight,
   AudioLines,
   Boxes,
+  ChevronLeft,
+  ChevronRight,
   Film,
   Image as ImageIcon,
   LayoutGrid,
@@ -30,6 +32,7 @@ import {
   groupFamilies,
   mapCatalog,
   modelKind,
+  paginateFamilies,
   plazaChannelVisible,
   routeForModel,
   type CatalogResponse,
@@ -131,7 +134,7 @@ function PriceEditor({
             input_price_micros: Math.round(inputValue * 1_000_000),
             output_price_micros: Math.round(outputValue * 1_000_000),
           }),
-        }),
+        }), ['providers', 'routes'],
       )
       notify(t('plazaPriceSaved'))
       onClose()
@@ -183,6 +186,9 @@ export function PlazaView() {
   const [availableOnly, setAvailableOnly] = useState(true)
   const [routableOnly, setRoutableOnly] = useState(false)
   const [layout, setLayout] = useState<'grid' | 'list'>('grid')
+  const [page, setPage] = useState(1)
+  const [reloadKey, setReloadKey] = useState(0)
+  const [loading, setLoading] = useState(true)
   const [selected, setSelected] = useState<string | null>(null)
   const [priceTarget, setPriceTarget] = useState<{ channel: PlazaChannel; model: string } | null>(
     null,
@@ -190,19 +196,29 @@ export function PlazaView() {
 
   useEffect(() => {
     let cancelled = false
-    api<CatalogResponse>('/api/v1/models/catalog')
-      .then((response) => {
+    const load = async () => {
+      setLoading(true)
+      setLoadError('')
+      try {
+        const response = await api<CatalogResponse>('/api/v1/models/catalog')
         if (!cancelled) {
           setCatalog(response)
           setLoadError('')
         }
-      })
-      .catch((cause) => {
+      } catch (cause) {
         if (!cancelled) setLoadError(cause instanceof Error ? cause.message : String(cause))
-      })
+      } finally {
+        if (!cancelled) setLoading(false)
+      }
+    }
+    void load()
     return () => {
       cancelled = true
     }
+  }, [reloadKey])
+
+  useEffect(() => {
+    if (catalog) setReloadKey((current) => current + 1)
   }, [providers, routes])
 
   const syncMetadata = async () => {
@@ -219,7 +235,7 @@ export function PlazaView() {
             })}`
           : t('plazaSyncDone', { count: result.count }),
       )
-      await refresh()
+      await refresh(undefined, ['providers', 'routes'])
     } catch (cause) {
       notify(cause instanceof Error ? cause.message : String(cause))
     } finally {
@@ -252,7 +268,12 @@ export function PlazaView() {
     () => filterFamilies(families, routes, filters),
     [families, routes, query, kind, groupId, providerId, routableOnly, availableOnly],
   )
+  const modelPage = paginateFamilies(visible, page, layout === 'grid' ? 48 : 60)
   const selectedFamily = families.find((family) => family.base === selected)
+  const resetPage = useCallback(<Value,>(setter: (value: Value) => void) => (value: Value) => {
+    setter(value)
+    setPage(1)
+  }, [])
 
   const providerOptions = useMemo(() => {
     const seen = new Map<number, string>()
@@ -301,7 +322,10 @@ export function PlazaView() {
                 aria-label={t('plazaSearchModels')}
                 placeholder={t('plazaSearchModels')}
                 value={query}
-                onChange={(event) => setQuery(event.target.value)}
+                onChange={(event) => {
+                  setQuery(event.target.value)
+                  setPage(1)
+                }}
               />
             </div>
 
@@ -317,7 +341,7 @@ export function PlazaView() {
                   label: kindLabel(value),
                 })),
               ]}
-              onChange={(value) => setKind(value as 'all' | PlazaKind)}
+              onChange={resetPage((value: string) => setKind(value as 'all' | PlazaKind))}
             />
 
             <Dropdown
@@ -329,7 +353,7 @@ export function PlazaView() {
                 { value: 'all', label: t('plazaAllProviders') },
                 ...providerOptions.map(([id, name]) => ({ value: String(id), label: name })),
               ]}
-              onChange={setProviderId}
+              onChange={resetPage(setProviderId)}
             />
 
             <Dropdown
@@ -341,13 +365,16 @@ export function PlazaView() {
                 { value: 'all', label: t('allGroups') },
                 ...groupOptions.map((id) => ({ value: id, label: groupLabel(id) })),
               ]}
-              onChange={setGroupId}
+              onChange={resetPage(setGroupId)}
             />
 
             <label className="plaza-switch">
               <Toggle
                 checked={availableOnly}
-                onChange={() => setAvailableOnly(!availableOnly)}
+                onChange={() => {
+                  setAvailableOnly(!availableOnly)
+                  setPage(1)
+                }}
                 label={t('plazaAvailableOnly')}
               />
               {t('plazaAvailableOnly')}
@@ -356,7 +383,10 @@ export function PlazaView() {
             <label className="plaza-switch">
               <Toggle
                 checked={routableOnly}
-                onChange={() => setRoutableOnly(!routableOnly)}
+                onChange={() => {
+                  setRoutableOnly(!routableOnly)
+                  setPage(1)
+                }}
                 label={t('plazaRoutableOnly')}
               />
               {t('plazaRoutableOnly')}
@@ -379,7 +409,10 @@ export function PlazaView() {
                 <button
                   type="button"
                   className={layout === 'grid' ? 'active' : ''}
-                  onClick={() => setLayout('grid')}
+                  onClick={() => {
+                    setLayout('grid')
+                    setPage(1)
+                  }}
                   aria-label={t('plazaGridView')}
                 >
                   <LayoutGrid size={15} />
@@ -387,7 +420,10 @@ export function PlazaView() {
                 <button
                   type="button"
                   className={layout === 'list' ? 'active' : ''}
-                  onClick={() => setLayout('list')}
+                  onClick={() => {
+                    setLayout('list')
+                    setPage(1)
+                  }}
                   aria-label={t('plazaListView')}
                 >
                   <List size={15} />
@@ -404,19 +440,29 @@ export function PlazaView() {
           )}
 
           {loadError && (
-            <div className="empty-state glass-panel">
+            <div className="empty-state glass-panel plaza-load-error" role="alert">
               <strong>{t('plazaLoadFailed')}</strong>
               <p>{loadError}</p>
+              {loadError.includes('502') && <p>{t('plazaProxyError')}</p>}
+              <button
+                type="button"
+                className="button secondary"
+                disabled={loading}
+                onClick={() => setReloadKey((current) => current + 1)}
+              >
+                <RefreshCw size={14} className={loading ? 'spin' : ''} />
+                {t('plazaRetry')}
+              </button>
             </div>
           )}
 
-          {!loadError && !catalog && (
+          {loading && (
             <div className="empty-state glass-panel">
               <p>{t('plazaLoading')}</p>
             </div>
           )}
 
-          {catalog && !visible.length && (
+          {!loading && !loadError && catalog && !visible.length && (
             <div className="empty-state glass-panel">
               <Wand2 size={22} />
               <strong>{t('plazaEmpty')}</strong>
@@ -424,9 +470,10 @@ export function PlazaView() {
             </div>
           )}
 
-          {catalog && visible.length > 0 && (
+          {!loading && !loadError && catalog && modelPage.items.length > 0 && (
+            <>
             <div className={layout === 'grid' ? 'plaza-grid' : 'plaza-list'}>
-              {visible.map((family) => {
+              {modelPage.items.map((family) => {
                 const channels = family.channels.filter((channel) =>
                   plazaChannelVisible(channel, filters),
                 )
@@ -528,6 +575,37 @@ export function PlazaView() {
                 )
               })}
             </div>
+            <div className="table-pagination plaza-pagination tabular">
+              <span>
+                {t('plazaPageRange', {
+                  start: (modelPage.page - 1) * (layout === 'grid' ? 48 : 60) + 1,
+                  end: Math.min(modelPage.page * (layout === 'grid' ? 48 : 60), modelPage.total),
+                  total: modelPage.total,
+                })}
+              </span>
+              <div>
+                <button
+                  type="button"
+                  className="icon-button"
+                  disabled={modelPage.page === 1}
+                  onClick={() => setPage(modelPage.page - 1)}
+                  aria-label={t('previousPage')}
+                >
+                  <ChevronLeft size={15} />
+                </button>
+                <span>{t('plazaPageNumber', { page: modelPage.page, pages: modelPage.pages })}</span>
+                <button
+                  type="button"
+                  className="icon-button"
+                  disabled={modelPage.page === modelPage.pages}
+                  onClick={() => setPage(modelPage.page + 1)}
+                  aria-label={t('nextPage')}
+                >
+                  <ChevronRight size={15} />
+                </button>
+              </div>
+            </div>
+            </>
           )}
         </>
       )}

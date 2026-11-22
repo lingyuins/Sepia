@@ -240,6 +240,17 @@ export function filterFamilies(
     .filter((f): f is PlazaFamily => f !== null)
 }
 
+export function paginateFamilies<Item>(items: Item[], requestedPage: number, pageSize: number) {
+  const pages = Math.max(1, Math.ceil(items.length / pageSize))
+  const page = Math.min(pages, Math.max(1, requestedPage))
+  return {
+    items: items.slice((page - 1) * pageSize, page * pageSize),
+    page,
+    pages,
+    total: items.length,
+  }
+}
+
 export function formatPrice(micros: number | null): string {
   if (micros === null) return '—'
   const perMillion = micros / 1_000_000

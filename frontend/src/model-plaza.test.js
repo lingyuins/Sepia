@@ -3,7 +3,7 @@ import test from 'node:test'
 
 import {
   filterFamilies, formatContext, formatPrice, formatReferencePrice, globMatch,
-  groupFamilies, mapCatalog, modelKind, modelRoutable, routeForModel,
+  groupFamilies, mapCatalog, modelKind, modelRoutable, paginateFamilies, routeForModel,
 } from './model-plaza.ts'
 
 const route = (overrides = {}) => ({
@@ -126,6 +126,21 @@ test('filterFamilies combines query, kind, group, provider, routable and availab
   assert.equal(filterFamilies(families, routes, { ...base, availableOnly: true }).length, 2)
   // query matches the family display name even when no variant id contains it
   assert.equal(filterFamilies(families, routes, { ...base, query: 'GPT-X' })[0].base, 'gpt-x')
+})
+
+test('large model catalogs render in bounded pages without losing records', () => {
+  const families = Array.from({ length: 300 }, (_, index) => ({ base: `model-${index}` }))
+  const first = paginateFamilies(families, 1, 48)
+  assert.equal(first.total, 300)
+  assert.equal(first.pages, 7)
+  assert.equal(first.page, 1)
+  assert.equal(first.items.length, 48)
+  assert.equal(first.items[0].base, 'model-0')
+  assert.equal(paginateFamilies(families, 7, 48).items.at(-1).base, 'model-299')
+  assert.equal(paginateFamilies(families, 99, 48).page, 7)
+  assert.equal(paginateFamilies(families, -2, 48).page, 1)
+  assert.equal(paginateFamilies([], 3, 48).pages, 1)
+  assert.equal(paginateFamilies([], 3, 48).items.length, 0)
 })
 
 test('formatPrice renders per-million USD prices', () => {

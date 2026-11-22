@@ -3,10 +3,12 @@ import { ArrowRight, GitBranch, KeyRound } from 'lucide-react'
 import {
   useTranslation,
   useWorkspace,
+  useLocale,
   type AttemptRecord,
   type RequestRecord,
   type RouteRule,
 } from '../workspace'
+import { formatRequestTime } from '../analytics'
 import { routeDisplayCandidates } from '../route-display'
 import { api, mapAttempt, type ApiAttempt } from '../api'
 import { ProviderCell, StatusText } from './UI'
@@ -22,6 +24,7 @@ export function RouteChain({
   compact?: boolean
 }) {
   const t = useTranslation()
+  const locale = useLocale()
   const { providers } = useWorkspace()
   const candidates = routeDisplayCandidates(route)
   const [attempts, setAttempts] = useState<{ requestId: string; records: AttemptRecord[] } | null>(
@@ -128,7 +131,7 @@ export function RouteChain({
             </small>
             <strong className="mono">{latestRequest.model}</strong>
             <span className="tabular">
-              {latestRequest.status} · {latestRequest.time}
+              {latestRequest.status} · {formatRequestTime(latestRequest.createdAt, locale)}
             </span>
           </div>
         </div>

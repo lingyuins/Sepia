@@ -10,7 +10,7 @@ import {
   Users,
 } from 'lucide-react'
 import { api } from '../api'
-import { useWorkspace, useTranslation } from '../workspace'
+import { useWorkspace, useTranslation, useLocale } from '../workspace'
 import type { UserRole } from '../gateway-workspace'
 import { passkeySupported, registrationRequest, registrationResponse } from '../passkey'
 import { Dropdown } from './Dropdown'
@@ -19,15 +19,16 @@ import { DialogActions, Field, Modal } from './UI'
 type Passkey = { id: number; name: string; created_at: string; last_used_at: string | null }
 type ConsoleUser = { id: number; username: string; role: UserRole; created_at: string }
 
-function formatDate(value: string | null): string {
+function formatDate(value: string | null, locale: string): string {
   if (!value) return '—'
   const date = new Date(value)
-  return Number.isNaN(date.getTime()) ? '—' : date.toLocaleString()
+  return Number.isNaN(date.getTime()) ? '—' : date.toLocaleString(locale)
 }
 
 export function PasskeySection() {
   const { notify } = useWorkspace()
   const t = useTranslation()
+  const locale = useLocale()
   const [passkeys, setPasskeys] = useState<Passkey[]>([])
   const [busy, setBusy] = useState(false)
   const [name, setName] = useState('')
@@ -127,8 +128,8 @@ export function PasskeySection() {
           <div>
             <strong>{passkey.name}</strong>
             <span>
-              {t('passkeyCreatedAt', { date: formatDate(passkey.created_at) })} ·{' '}
-              {t('passkeyLastUsed', { date: formatDate(passkey.last_used_at) })}
+              {t('passkeyCreatedAt', { date: formatDate(passkey.created_at, locale) })} ·{' '}
+              {t('passkeyLastUsed', { date: formatDate(passkey.last_used_at, locale) })}
             </span>
           </div>
           <button
@@ -149,6 +150,7 @@ export function PasskeySection() {
 export function UserManagementSection() {
   const { session, notify, checkGateway, logout } = useWorkspace()
   const t = useTranslation()
+  const locale = useLocale()
   const [users, setUsers] = useState<ConsoleUser[]>([])
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
@@ -282,7 +284,7 @@ export function UserManagementSection() {
                 <span className="user-self-marker"> · {t('you')}</span>
               )}
             </strong>
-            <span>{t('userCreatedAt', { date: formatDate(user.created_at) })}</span>
+            <span>{t('userCreatedAt', { date: formatDate(user.created_at, locale) })}</span>
           </div>
           <Dropdown
             label={t('role')}

@@ -2,6 +2,104 @@ use sepia_gateway::{NewProvider, NewRoute, ProviderProtocol, Store, server::AppS
 use serde_json::{Value, json};
 
 #[tokio::test]
+async fn large_catalog_is_compressed_without_changing_records() {
+    let directory = tempfile::tempdir().unwrap();
+    let store = Store::connect(&directory.path().join("large-catalog.db"))
+        .await
+        .unwrap();
+    let state = AppState::for_testing(store.clone()).await;
+    let models: Vec<String> = (0..300).map(|index| format!("model-{index:03}")).collect();
+    let provider = store
+        .create_provider(
+            NewProvider {
+                name: "large-provider".into(),
+                protocol: ProviderProtocol::OpenAI,
+                endpoint: "http://provider.example/v1".into(),
+                models,
+                plugin_id: None,
+                mode: "single".into(),
+            },
+            "provider-key",
+            &[],
+            &state.keys,
+        )
+        .await
+        .unwrap();
+    for model in &provider.models {
+        store
+            .set_model_price(provider.id, model, 1_000_000, 2_000_000)
+            .await
+            .unwrap();
+    }
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    tokio::spawn(
+        axum::serve(
+            listener,
+            sepia_gateway::server::app(state.clone())
+                .into_make_service_with_connect_info::<std::net::SocketAddr>(),
+        )
+        .into_future(),
+    );
+    let client = reqwest::Client::new();
+    let base = format!("http://{address}");
+    client
+        .post(format!("{base}/api/v1/auth/bootstrap"))
+        .json(&json!({"username":"admin","password":"correct horse","token":state.bootstrap_token}))
+        .send()
+        .await
+        .unwrap();
+    let login = client
+        .post(format!("{base}/api/v1/auth/login"))
+        .json(&json!({"username":"admin","password":"correct horse"}))
+        .send()
+        .await
+        .unwrap();
+    let cookie = login
+        .headers()
+        .get("set-cookie")
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .split(';')
+        .next()
+        .unwrap();
+    let response = client
+        .get(format!("{base}/api/v1/models/catalog"))
+        .header("cookie", cookie)
+        .header("accept-encoding", "gzip")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 200);
+    assert_eq!(
+        response
+            .headers()
+            .get("content-encoding")
+            .and_then(|value| value.to_str().ok()),
+        Some("gzip"),
+    );
+    let encoded = response.bytes().await.unwrap();
+    assert!(
+        encoded.len() < 50_000,
+        "compressed catalog was {} bytes",
+        encoded.len()
+    );
+    let mut decoder = flate2::read::GzDecoder::new(encoded.as_ref());
+    let catalog: Value = serde_json::from_reader(&mut decoder).unwrap();
+    let entries = catalog["models"].as_array().unwrap();
+    assert_eq!(entries.len(), 300);
+    assert_eq!(entries[0]["model"], "model-000");
+    assert_eq!(entries[299]["model"], "model-299");
+    assert_eq!(entries[0]["channels"][0]["key_count"], 1);
+    assert_eq!(entries[0]["channels"][0]["input_price_micros"], 1_000_000);
+    assert_eq!(
+        entries[299]["channels"][0]["output_price_micros"],
+        2_000_000
+    );
+}
+
+#[tokio::test]
 async fn catalog_aggregates_channels_prices_scopes_and_routes() {
     let directory = tempfile::tempdir().unwrap();
     let store = Store::connect(&directory.path().join("catalog.db"))

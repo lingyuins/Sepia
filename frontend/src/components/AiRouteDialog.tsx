@@ -43,7 +43,7 @@ export function AiRouteDialog({ open, onClose }: { open: boolean; onClose: () =>
           await api('/api/v1/routes', { method: 'POST', body: JSON.stringify(routeInput(generatedRouteRule(route, index), providers)) })
           created.push(route.slug)
         }
-      })
+      }, ['routes'])
       notify(t('aiRoutesApplied', { count: chosen.length }))
       onClose()
     } catch (cause) {
@@ -54,7 +54,9 @@ export function AiRouteDialog({ open, onClose }: { open: boolean; onClose: () =>
         setResult((current) => current && { ...current, routes: current.routes.filter((route) => !created.includes(route.slug)) })
         setSelected((current) => new Set([...current].filter((slug) => !created.includes(slug))))
       }
-      try { await refresh() } catch { /* Keep the original failure visible. */ }
+      try {
+        await refresh(undefined, ['routes'])
+      } catch {}
       notify(cause instanceof Error ? cause.message : String(cause))
     } finally { setApplying(false) }
   }

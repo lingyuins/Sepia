@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Copy, ShieldCheck } from 'lucide-react'
-import { useTranslation, useWorkspace, type RequestRecord } from '../workspace'
+import { useTranslation, useWorkspace, useLocale, type RequestRecord } from '../workspace'
+import { formatRequestTime } from '../analytics'
 import { api } from '../api'
 import { ProviderCell, StatusText } from './UI'
 
@@ -110,6 +111,7 @@ function BodyViewer({ request }: { request: RequestRecord }) {
 
 export function RequestDetails({ request }: { request: RequestRecord }) {
   const t = useTranslation()
+  const locale = useLocale()
   const statusTone =
     request.status === 'Failed'
       ? 'danger'
@@ -126,7 +128,7 @@ export function RequestDetails({ request }: { request: RequestRecord }) {
         </div>
         <div>
           <dt>{t('time')}</dt>
-          <dd className="mono tabular">{request.time}</dd>
+          <dd className="mono tabular">{formatRequestTime(request.createdAt, locale)}</dd>
         </div>
         <div>
           <dt>{t('model')}</dt>
@@ -156,26 +158,26 @@ export function RequestDetails({ request }: { request: RequestRecord }) {
           <dt>{t('tokensDetail')}</dt>
           <dd className="tabular">
             {t('inputOutput', {
-              input: request.inputTokens.toLocaleString(),
-              output: request.outputTokens.toLocaleString(),
+              input: request.inputTokens.toLocaleString(locale),
+              output: request.outputTokens.toLocaleString(locale),
             })}
           </dd>
         </div>
         <div>
           <dt>{t('totalTokens')}</dt>
           <dd className="tabular">
-            {(request.inputTokens + request.outputTokens).toLocaleString()}
+            {(request.inputTokens + request.outputTokens).toLocaleString(locale)}
           </dd>
         </div>
         <div>
           <dt>{t('cachedTokens')}</dt>
           <dd className="tabular">
-            {request.cachedTokens.toLocaleString()} · {cacheHitRate(request)}
+            {request.cachedTokens.toLocaleString(locale)} · {cacheHitRate(request)}
           </dd>
         </div>
         <div>
           <dt>{t('reasoningTokens')}</dt>
-          <dd className="tabular">{request.reasoningTokens.toLocaleString()}</dd>
+          <dd className="tabular">{request.reasoningTokens.toLocaleString(locale)}</dd>
         </div>
         {request.firstByteMs !== null && (
           <div>

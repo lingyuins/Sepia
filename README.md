@@ -324,6 +324,13 @@ cargo run --manifest-path backend/Cargo.toml
 
 Vite 将 `/api` 和 `/v1` 代理到 `http://127.0.0.1:5000`。可通过 `SEPIA_GATEWAY_URL` 为 Vite 指定其他网关地址。
 
+### 控制台数据与资源
+
+- 模型广场保留完整目录数据，网格每页显示 48 个模型家族、列表每页显示 60 个；搜索和筛选后再分页。加载失败提供重试，不会把失败响应显示为空目录。
+- 管理接口响应支持 gzip；大型模型目录不再以未压缩 JSON 穿过反向代理。若代理仍返回 502，请同时检查网关与代理日志，并确认代理没有剥离或改写 `Accept-Encoding` / `Content-Encoding`。
+- 请求页的搜索、分页和 CSV/JSON 导出只覆盖网关返回的最近 200 条记录，界面和导出文件均注明范围；这不是完整审计导出。
+- 变更操作按受影响的数据域刷新，图表按需加载，界面字体随构建产物自托管，不依赖 Google Fonts CDN。
+
 ### 目录结构
 
 | 位置 | 职责 |
@@ -688,6 +695,13 @@ cargo run --manifest-path backend/Cargo.toml
 ```
 
 Vite proxies `/api` and `/v1` to `http://127.0.0.1:5000`. Set `SEPIA_GATEWAY_URL` to use another gateway for the Vite proxy.
+
+### Console data and assets
+
+- Model Plaza keeps the complete catalog and paginates after filtering: 48 model families per grid page or 60 per list page. Load failures offer retry instead of presenting an empty catalog.
+- Management responses support gzip, including large model catalogs. If a reverse proxy still returns 502, inspect both gateway and proxy logs and ensure the proxy does not strip or rewrite `Accept-Encoding` / `Content-Encoding`.
+- Request search, pagination, and CSV/JSON exports cover only the latest 200 records returned by the gateway. The UI and exported files disclose this scope; this is not a complete audit export.
+- Mutations refresh only affected data domains, charts load on demand, and interface fonts are bundled locally without a Google Fonts CDN dependency.
 
 ### Project layout
 

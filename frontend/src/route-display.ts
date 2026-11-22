@@ -1,11 +1,7 @@
 import type { RequestRecord, RouteCandidate, RouteRule } from './workspace'
 
 export function routeDisplayCandidates(route: RouteRule): RouteCandidate[] {
-  const candidates = route.candidates?.length ? route.candidates : [
-    { id: `${route.id}-primary`, provider: route.primary, model: route.primaryModel, enabled: true, weight: 1 },
-    ...(route.fallback ? [{ id: `${route.id}-fallback`, provider: route.fallback, model: route.fallbackModel, enabled: true, weight: 1 }] : []),
-  ]
-  return candidates.filter((candidate) => candidate.enabled)
+  return (route.candidates || []).filter((candidate) => candidate.enabled)
 }
 
 export function latestSuccessfulRouteRequest(route: RouteRule, requests: RequestRecord[]) {

@@ -141,6 +141,48 @@ async fn install(
 }
 
 #[tokio::test]
+async fn rpc_rejects_encoded_paths_outside_the_plugin_namespace() {
+    let directory = tempfile::tempdir().unwrap();
+    let store = Store::connect(&directory.path().join("rpc-boundary.db"))
+        .await
+        .unwrap();
+    let state = AppState::for_testing(store.clone()).await;
+    state.plugins.write().await.reload(&store).await.unwrap();
+    let address = serve(app(state.clone())).await;
+    let base = format!("http://{address}");
+    let (client, cookie) = admin(address, &state).await;
+    let installed = install(
+        &client,
+        &base,
+        &cookie,
+        package_bytes(
+            &manifest_json(),
+            Some("<html><head></head><body>echo</body></html>"),
+        ),
+    )
+    .await;
+    assert_eq!(installed.status(), 200);
+    for path in [
+        "..%2F..%2Fkeys",
+        "nested%2F..%2F..%2Fsettings",
+        "%2e%2e%2f%2e%2e%2fusers",
+        "..%5Ckeys",
+        "action%00tail",
+        "%2Fkeys",
+    ] {
+        let response = client
+            .post(format!("{base}/api/v1/plugins/echo/rpc/{path}"))
+            .header("cookie", &cookie)
+            .json(&json!({}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), 400, "RPC path {path} escaped validation");
+    }
+    assert!(store.client_keys().await.unwrap().is_empty());
+}
+
+#[tokio::test]
 async fn plugin_install_enable_hooks_and_lifecycle() {
     let (upstream, hits) = chat_upstream().await;
     let directory = tempfile::tempdir().unwrap();

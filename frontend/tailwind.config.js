@@ -4,12 +4,8 @@ export default {
   theme: {
     extend: {
       fontFamily: {
-        sans: ['DM Sans', 'sans-serif'],
-        display: ['Manrope', 'sans-serif'],
-      },
-      colors: {
-        ink: '#101411',
-        mint: '#c4f4aa',
+        sans: ['DM Sans Variable', 'sans-serif'],
+        display: ['Manrope Variable', 'sans-serif'],
       },
     },
   },

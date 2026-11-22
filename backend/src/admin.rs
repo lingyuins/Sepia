@@ -1521,6 +1521,16 @@ async fn plugin_rpc(
     Path((id, path)): Path<(String, String)>,
     Json(input): Json<serde_json::Value>,
 ) -> Response {
+    if path.is_empty()
+        || path.starts_with('/')
+        || path
+            .split('/')
+            .any(|segment| segment.is_empty() || segment.chars().all(|character| character == '.'))
+        || path.contains(['\\', '%'])
+        || path.chars().any(char::is_control)
+    {
+        return error(StatusCode::BAD_REQUEST, "invalid plugin RPC path");
+    }
     let Some(record) = state.store.plugin(&id).await.ok().flatten() else {
         return error(StatusCode::NOT_FOUND, "plugin not found");
     };

@@ -26,9 +26,31 @@ export class ApiError extends Error {
 export function apiClient(fetcher: typeof fetch = fetch) {
   return async <T>(url: string, options: RequestInit = {}): Promise<T> => {
     const isForm = typeof FormData !== 'undefined' && options.body instanceof FormData
-    const response = await fetcher(url, { credentials: 'same-origin', ...options, headers: { ...(options.body && !isForm ? { 'content-type': 'application/json' } : {}), ...options.headers } })
-    const body = await response.json().catch(() => ({}))
-    if (!response.ok) throw new ApiError(body.error?.message || `Request failed (${response.status})`, response.status)
+    const response = await fetcher(url, {
+      credentials: 'same-origin',
+      ...options,
+      headers: {
+        ...(options.body && !isForm ? { 'content-type': 'application/json' } : {}),
+        ...options.headers,
+      },
+    })
+    const text = response.status === 204 ? '' : await response.text()
+    let body: unknown = {}
+    if (text.trim()) {
+      try {
+        body = JSON.parse(text)
+      } catch {
+        if (response.ok || response.headers.get('content-type')?.includes('application/json')) {
+          throw new ApiError(`Gateway returned invalid JSON (${response.status})`, response.status)
+        }
+      }
+    }
+    if (!response.ok) {
+      const message = typeof body === 'object' && body !== null && 'error' in body
+        ? (body.error as { message?: string } | null)?.message
+        : undefined
+      throw new ApiError(message || `Request failed (${response.status})`, response.status)
+    }
     return body as T
   }
 }
@@ -38,14 +60,52 @@ export function mapProvider(provider: ApiProvider): Provider {
   return { id: provider.id, name: provider.name, short: provider.name.charAt(0).toUpperCase(), type: provider.protocol, models: provider.models.length, latency: 0, success: '—', requests: '0', color: color[provider.id % color.length], enabled: provider.enabled, endpoint: provider.endpoint, mode: provider.mode === 'unified' ? 'unified' : 'single', endpoints: (provider.endpoints || []).map((entry) => ({ id: entry.id, endpoint: entry.endpoint, keys: (entry.keys || []).map((key) => ({ id: key.id, models: key.models, endpointId: entry.id })) })), group: provider.group_id, modelsList: provider.models, keyCount: provider.key_count, keyScopes: provider.keys?.map((key) => ({ id: key.id, models: key.models, endpointId: key.endpoint_id ?? undefined })) }
 }
 export function mapRoute(route: ApiRoute, providers: Provider[]): RouteRule {
-  const candidates = route.candidates.map(([provider, model], index) => ({ id: `${route.id}-${index}`, provider: providers.find((item) => item.id === provider)?.name || String(provider), model, enabled: true, weight: clampWeight(route.weights?.[index] ?? 1) }))
-  const [primary, fallback] = candidates
-  return { id: route.id, name: route.name || route.slug, slug: route.slug, description: route.description || '', match: route.patterns[0] || '*', primary: primary?.provider || '', primaryModel: primary?.model || '', fallback: fallback?.provider || '', fallbackModel: fallback?.model || '', strategy: normalizeRouteStrategy(route.strategy), active: route.enabled, requests: '0', candidates, patterns: route.patterns, listMembers: route.list_members, isDefault: route.is_default }
+  const candidates = route.candidates.map(([provider, model], index) => ({
+    id: `${route.id}-${index}`,
+    provider: providers.find((item) => item.id === provider)?.name || String(provider),
+    model,
+    enabled: true,
+    weight: clampWeight(route.weights?.[index] ?? 1),
+  }))
+  return {
+    id: route.id,
+    name: route.name || route.slug,
+    slug: route.slug,
+    description: route.description || '',
+    match: route.patterns[0] || '*',
+    strategy: normalizeRouteStrategy(route.strategy),
+    active: route.enabled,
+    requests: '0',
+    candidates,
+    patterns: route.patterns,
+    listMembers: route.list_members,
+    isDefault: route.is_default,
+  }
 }
 export function mapRequest(request: ApiRequest): RequestRecord {
   const total = request.input_tokens + request.output_tokens
-  const time = new Date(request.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false })
-  return { id: request.id, createdAt: request.created_at, time, model: request.model || 'unknown', provider: request.provider || '—', tokens: total.toLocaleString('en-US'), inputTokens: request.input_tokens, outputTokens: request.output_tokens, latency: `${request.latency_ms} ms`, latencyMs: request.latency_ms, status: request.status === 'success' ? '200 OK' : request.status === 'failed' ? 'Failed' : request.status, key: request.key || '—', cost: `$${(request.cost_micros / 1000000).toFixed(6)}`, route: request.route || '—', clientIp: request.client_ip ?? null, firstByteMs: request.first_byte_ms ?? null, cachedTokens: request.cached_tokens ?? 0, reasoningTokens: request.reasoning_tokens ?? 0, protocol: request.protocol, hasBody: request.has_body === true }
+  return {
+    id: request.id,
+    createdAt: request.created_at,
+    time: '',
+    model: request.model || 'unknown',
+    provider: request.provider || '—',
+    tokens: String(total),
+    inputTokens: request.input_tokens,
+    outputTokens: request.output_tokens,
+    latency: `${request.latency_ms} ms`,
+    latencyMs: request.latency_ms,
+    status: request.status === 'success' ? '200 OK' : request.status === 'failed' ? 'Failed' : request.status,
+    key: request.key || '—',
+    cost: `$${(request.cost_micros / 1000000).toFixed(6)}`,
+    route: request.route || '—',
+    clientIp: request.client_ip ?? null,
+    firstByteMs: request.first_byte_ms ?? null,
+    cachedTokens: request.cached_tokens ?? 0,
+    reasoningTokens: request.reasoning_tokens ?? 0,
+    protocol: request.protocol,
+    hasBody: request.has_body === true,
+  }
 }
 export function mapAttempt(attempt: ApiAttempt): AttemptRecord {
   return { id: attempt.id, requestId: attempt.request_id, providerId: attempt.provider_id, providerKeyId: attempt.provider_key_id, model: attempt.model, status: attempt.status, error: attempt.error, inputTokens: attempt.input_tokens, outputTokens: attempt.output_tokens, latencyMs: attempt.latency_ms, createdAt: attempt.created_at }

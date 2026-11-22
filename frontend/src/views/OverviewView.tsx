@@ -9,16 +9,7 @@ import {
   RefreshCw,
   ShieldCheck,
 } from 'lucide-react'
-import {
-  Area,
-  AreaChart,
-  CartesianGrid,
-  ResponsiveContainer,
-  Tooltip,
-  XAxis,
-  YAxis,
-} from 'recharts'
-import { useWorkspace, useTranslation, type Provider, type RequestRecord } from '../workspace'
+import { useWorkspace, useTranslation, useLocale, type Provider, type RequestRecord } from '../workspace'
 import { gatewayUrl } from '../gateway'
 import { CopyButton } from '../components/Provider'
 import {
@@ -33,6 +24,7 @@ import { RouteChain } from '../components/RouteChain'
 import { chartTimeLabel } from '../analytics'
 import { latestSuccessfulRouteRequest, selectOverviewRoute } from '../route-display'
 import { RequestsTable } from './RequestsView'
+import { LazyTrafficChart } from '../components/LazyChart'
 import type { Page } from '../components/AppShell'
 
 type Period = '24 hours' | '7 days' | '30 days'
@@ -52,6 +44,7 @@ export function OverviewView({
 }) {
   const { requests, routes, settings, analytics, refresh } = useWorkspace()
   const t = useTranslation()
+  const locale = useLocale()
   const endpoint = gatewayUrl(settings)
   const [period, setPeriod] = useState<Period>('30 days')
   const [selectedRouteId, setSelectedRouteId] = useState<number>()
@@ -72,13 +65,6 @@ export function OverviewView({
     ? latestSuccessfulRouteRequest(selectedRoute, requests)
     : undefined
 
-  const locale =
-    settings.language === '简体中文'
-      ? 'zh-CN'
-      : settings.language === '日本語'
-        ? 'ja-JP'
-        : 'en-US'
-
   const data = (analytics.series || []).map((point) => ({
     ...point,
     time: chartTimeLabel(point.time, period, locale),
@@ -90,7 +76,7 @@ export function OverviewView({
   const refreshData = async () => {
     setRefreshing(true)
     try {
-      await refresh(period)
+      await refresh(period, ['requests', 'analytics'])
       onNotify(t('metricsRefreshed'))
     } finally {
       setRefreshing(false)
@@ -134,7 +120,7 @@ export function OverviewView({
       <div className="metrics-grid">
         <MetricCard
           title={t('requestsInPeriod')}
-          value={analytics.requests.toLocaleString()}
+          value={analytics.requests.toLocaleString(locale)}
           foot={periodLabel}
           icon={Inbox}
         />
@@ -145,7 +131,7 @@ export function OverviewView({
               ? `${((analytics.successful / analytics.requests) * 100).toFixed(2)}%`
               : '—'
           }
-          foot={`${analytics.successful.toLocaleString()} ${t('successful')}`}
+          foot={`${analytics.successful.toLocaleString(locale)} ${t('successful')}`}
           icon={ShieldCheck}
         />
         <MetricCard
@@ -176,7 +162,7 @@ export function OverviewView({
                   className={period === item ? 'active' : ''}
                   onClick={() => {
                     setPeriod(item)
-                    void refresh(item)
+                    void refresh(item, ['requests', 'analytics'])
                   }}
                   key={item}
                 >
@@ -188,64 +174,21 @@ export function OverviewView({
           <div className="chart-legend tabular">
             <span>
               <i className="legend-mint" />
-              {t('allRequests')} <strong>{analytics.requests.toLocaleString()}</strong>
+              {t('allRequests')} <strong>{analytics.requests.toLocaleString(locale)}</strong>
             </span>
             <span>
               <i className="legend-grey" />
-              {t('successful')} <strong>{analytics.successful.toLocaleString()}</strong>
+              {t('successful')} <strong>{analytics.successful.toLocaleString(locale)}</strong>
             </span>
           </div>
           <div className="traffic-chart">
-            <ResponsiveContainer width="100%" height="100%">
-              <AreaChart data={data} margin={{ top: 14, right: 6, left: -20, bottom: 0 }}>
-                <defs>
-                  <linearGradient id="requestGradient" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="0%" stopColor="var(--chart-accent)" stopOpacity={0.2} />
-                    <stop offset="100%" stopColor="var(--chart-accent)" stopOpacity={0} />
-                  </linearGradient>
-                </defs>
-                <CartesianGrid vertical={false} stroke="var(--chart-grid)" />
-                <XAxis
-                  dataKey="time"
-                  axisLine={false}
-                  tickLine={false}
-                  tick={{ fill: 'var(--chart-text)', fontSize: 11 }}
-                  interval={2}
-                  dy={10}
-                />
-                <YAxis
-                  axisLine={false}
-                  tickLine={false}
-                  tick={{ fill: 'var(--chart-text)', fontSize: 11 }}
-                  allowDecimals={false}
-                  width={44}
-                />
-                <Tooltip
-                  contentStyle={{
-                    background: 'var(--panel-solid)',
-                    border: '1px solid var(--border-strong)',
-                    borderRadius: 10,
-                    color: 'var(--text)',
-                    fontSize: 12,
-                  }}
-                />
-                <Area
-                  type="monotone"
-                  dataKey="requests"
-                  stroke="var(--chart-accent)"
-                  strokeWidth={2}
-                  fill="url(#requestGradient)"
-                />
-                <Area
-                  type="monotone"
-                  dataKey="successful"
-                  stroke="var(--chart-series-2)"
-                  strokeDasharray="4 4"
-                  strokeWidth={1.75}
-                  fill="transparent"
-                />
-              </AreaChart>
-            </ResponsiveContainer>
+            <LazyTrafficChart
+              data={data}
+              showSuccessful
+              gradientId="requestGradient"
+              interval={2}
+              margin={{ top: 14, right: 6, left: -20, bottom: 0 }}
+            />
           </div>
         </section>
 

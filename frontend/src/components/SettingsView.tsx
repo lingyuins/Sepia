@@ -23,7 +23,7 @@ import {
   Sun,
   Trash2,
 } from 'lucide-react'
-import { downloadFile, useWorkspace, useTranslation, type Settings } from '../workspace'
+import { downloadFile, useWorkspace, useTranslation, useLocale, type Settings } from '../workspace'
 import { api, keyInput, policyInput } from '../api'
 import type { KeyPolicy } from '../key-policy'
 import { gatewayUrl } from '../gateway'
@@ -176,6 +176,7 @@ export default function SettingsView() {
     session,
   } = useWorkspace()
   const t = useTranslation()
+  const locale = useLocale()
   const [tab, setTab] = useState<SettingsTab>('General')
   const isAdmin = session?.role === 'admin'
   const [draft, setDraft] = useState(settings)
@@ -282,7 +283,7 @@ export default function SettingsView() {
               model_normalize_explicit_mappings: nextSettings.normalizeMappings,
               ai_pool_enabled: nextSettings.aiPoolEnabled,
             }),
-          }),
+          }), ['settings'],
         )
       }
       setSettings(persisted)
@@ -334,17 +335,17 @@ export default function SettingsView() {
       api<{ id: number; plaintext: string }>('/api/v1/keys', {
         method: 'POST',
         body: JSON.stringify(keyInput(policy)),
-      }),
+      }), ['keys'],
     )
     try {
       await run(() =>
         api(`/api/v1/keys/${created.id}/policy`, {
           method: 'POST',
           body: JSON.stringify(policyInput(policy, providers)),
-        }),
+        }), ['keys'],
       )
     } catch (cause) {
-      await run(() => api(`/api/v1/keys/${created.id}/revoke`, { method: 'POST' })).catch(
+      await run(() => api(`/api/v1/keys/${created.id}/revoke`, { method: 'POST' }), ['keys']).catch(
         () => undefined,
       )
       throw cause
@@ -354,7 +355,7 @@ export default function SettingsView() {
         api(`/api/v1/keys/${created.id}/enabled`, {
           method: 'POST',
           body: JSON.stringify({ enabled: false }),
-        }),
+        }), ['keys'],
       )
     }
     setCreatedKey({ ...policy, id: created.id, value: created.plaintext, created: t('justNow') })
@@ -365,7 +366,7 @@ export default function SettingsView() {
 
   const revokeKey = async (id: number) => {
     try {
-      await run(() => api(`/api/v1/keys/${id}/revoke`, { method: 'POST' }))
+      await run(() => api(`/api/v1/keys/${id}/revoke`, { method: 'POST' }), ['keys'])
       if (createdKey?.id === id) setCreatedKey(null)
       notify(t('keyRemoved'))
     } catch (cause) {
@@ -575,11 +576,7 @@ export default function SettingsView() {
                   <span>
                     <strong>{t('local')}</strong>
                     <small>
-                      {settings.language === '简体中文'
-                        ? '本机或局域网中的网关'
-                        : settings.language === '日本語'
-                          ? 'マシンまたはローカルネットワーク'
-                          : 'On your machine or network'}
+                      {t('localDeploymentHint')}
                     </small>
                   </span>
                   {draft.deployment === 'local' && <Check size={15} />}
@@ -596,11 +593,7 @@ export default function SettingsView() {
                   <span>
                     <strong>{t('cloud')}</strong>
                     <small>
-                      {settings.language === '简体中文'
-                        ? '可通过公网访问的网关'
-                        : settings.language === '日本語'
-                          ? 'インターネットからアクセス'
-                          : 'Reachable over the internet'}
+                      {t('cloudDeploymentHint')}
                     </small>
                   </span>
                   {draft.deployment === 'cloud' && <Check size={15} />}
@@ -612,11 +605,7 @@ export default function SettingsView() {
                   <span>{t('gatewayEndpoint')}</span>
                   <code className="mono">{gatewayUrl(draft)}</code>
                   <small>
-                    {settings.language === '简体中文'
-                      ? '将此地址配置为你的应用 API 基础地址'
-                      : settings.language === '日本語'
-                        ? 'アプリケーションの API ベースアドレスとして使用'
-                        : 'Use this as the API base address in your application'}
+                    {t('gatewayEndpointHint')}
                   </small>
                 </div>
                 <button type="button" className="button secondary" onClick={copyEndpoint}>
@@ -633,11 +622,7 @@ export default function SettingsView() {
                       <ShieldCheck size={14} />
                       HTTP
                       <small>
-                        {settings.language === '简体中文'
-                          ? '本地部署固定使用'
-                          : settings.language === '日本語'
-                            ? 'ローカルでは固定'
-                            : 'Required for local deployment'}
+                        {t('localProtocolHint')}
                       </small>
                     </div>
                   ) : (
@@ -999,7 +984,7 @@ export default function SettingsView() {
                     description={
                       updateCheck.published_at
                         ? t('updatePublishedAt', {
-                            date: new Date(updateCheck.published_at).toLocaleString(),
+                            date: new Date(updateCheck.published_at).toLocaleString(locale),
                           })
                         : t('latestVersionDescription')
                     }

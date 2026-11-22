@@ -5,6 +5,8 @@ import { scopedModels } from './key-models.ts'
 
 const remoteProvider = { id: 7, name: 'Local OpenAI', protocol: 'openai', endpoint: 'http://127.0.0.1:9000/v1', models: ['local-model'], key_count: 2, enabled: true, group_id: 'official' }
 const remoteRoute = { id: 4, slug: 'chat', name: 'Chat route', description: 'Real description', patterns: ['chat-*'], is_default: true, list_members: true, enabled: true, candidates: [[7, 'local-model']] }
+const thirdProvider = { ...remoteProvider, id: 8, name: 'Third provider' }
+const threeCandidateRoute = { ...remoteRoute, candidates: [[7, 'local-model'], [8, 'local-model'], [7, 'backup-model']] }
 const remoteRequest = { id: 'req-real', protocol: 'openai', model: 'local-model', route: 'chat', status: 'success', input_tokens: 10, output_tokens: 5, cost_micros: 42, latency_ms: 25, created_at: '2026-11-11T10:00:00Z' }
 
 test('offers smart route groups separately from provider models', () => {
@@ -21,7 +23,7 @@ test('maps real backend records to existing UI shapes', () => {
   assert.equal(mapRoute(remoteRoute, [mapProvider(remoteProvider)]).slug, 'chat')
   assert.equal(mapRoute(remoteRoute, [mapProvider(remoteProvider)]).name, 'Chat route')
   assert.equal(mapRoute(remoteRoute, [mapProvider(remoteProvider)]).description, 'Real description')
-  assert.equal(mapRoute(remoteRoute, [mapProvider(remoteProvider)]).primaryModel, 'local-model')
+  assert.equal(mapRoute(remoteRoute, [mapProvider(remoteProvider)]).candidates[0].model, 'local-model')
   assert.equal(mapRequest(remoteRequest).tokens, '15')
   assert.equal(mapRequest(remoteRequest).status, '200 OK')
   assert.equal(mapRequest(remoteRequest).cost, '$0.000042')
@@ -51,6 +53,17 @@ test('round-trips strategy and per-candidate weights through the route API shape
   const legacy = mapRoute(remoteRoute, [provider])
   assert.equal(legacy.strategy, 'priority')
   assert.deepEqual(routeInput(legacy, [provider]).weights, [1])
+})
+
+test('routes retain every candidate without primary/fallback copies', () => {
+  const route = mapRoute(threeCandidateRoute, [mapProvider(remoteProvider), mapProvider(thirdProvider)])
+  assert.deepEqual(route.candidates.map(({ provider, model }) => ({ provider, model })), [
+    { provider: 'Local OpenAI', model: 'local-model' },
+    { provider: 'Third provider', model: 'local-model' },
+    { provider: 'Local OpenAI', model: 'backup-model' },
+  ])
+  assert.equal('primary' in route, false)
+  assert.equal('fallback' in route, false)
 })
 
 test('uses the first entered secret for discovery and retains additional keys', () => {
@@ -90,14 +103,36 @@ test('preserves the selected client key expiration for the gateway', () => {
 
 test('loads workspace only through real API and surfaces failures', async () => {
   const calls = []
-  const client = apiClient(async (url, options) => { calls.push({ url, options }); return { ok: true, json: async () => [] } })
+  const client = apiClient(async (url, options) => { calls.push({ url, options }); return Response.json([]) })
   await client('/api/v1/providers')
   assert.equal(calls[0].url, '/api/v1/providers')
   assert.equal(calls[0].options.credentials, 'same-origin')
-  await assert.rejects(apiClient(async () => ({ ok: false, status: 503, json: async () => ({ error: { message: 'offline' } }) }))('/api/v1/providers'), (error) => {
+  await assert.rejects(apiClient(async () => Response.json({ error: { message: 'offline' } }, { status: 503 }))('/api/v1/providers'), (error) => {
     assert.ok(error instanceof ApiError)
     assert.equal(error.status, 503)
     assert.equal(error.message, 'offline')
+    return true
+  })
+})
+
+test('malformed JSON responses fail instead of becoming empty successful records', async () => {
+  const client = apiClient(async () => new Response('<html>Bad Gateway</html>', {
+    status: 200,
+    headers: { 'content-type': 'application/json' },
+  }))
+  await assert.rejects(client('/api/v1/models/catalog'), /invalid JSON/)
+})
+
+test('empty and plain-text gateway errors remain readable', async () => {
+  const noContent = apiClient(async () => new Response(null, { status: 204 }))
+  assert.deepEqual(await noContent('/api/v1/requests', { method: 'DELETE' }), {})
+  const badGateway = apiClient(async () => new Response('<html>Bad Gateway</html>', {
+    status: 502,
+    headers: { 'content-type': 'text/html' },
+  }))
+  await assert.rejects(badGateway('/api/v1/models/catalog'), (error) => {
+    assert.equal(error.status, 502)
+    assert.equal(error.message, 'Request failed (502)')
     return true
   })
 })

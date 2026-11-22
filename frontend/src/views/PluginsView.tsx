@@ -11,6 +11,7 @@ import {
 } from 'lucide-react'
 import { useWorkspace, useTranslation, type Plugin } from '../workspace'
 import { api } from '../api'
+import { pluginRpcPath } from '../plugin-rpc'
 import { DialogActions, Field, Modal, SectionHeading, StatusText, Toggle } from '../components/UI'
 
 type ConfigSchema = {
@@ -69,7 +70,7 @@ function ConfigEditor({ plugin, onClose }: { plugin: Plugin; onClose: () => void
         api(`/api/v1/plugins/${plugin.id}/config`, {
           method: 'PUT',
           body: JSON.stringify(config),
-        }),
+        }), ['plugins'],
       )
       notify(t('pluginConfigSaved'))
       onClose()
@@ -155,7 +156,7 @@ function PluginUi({ plugin, onClose }: { plugin: Plugin; onClose: () => void }) 
       }
       try {
         const result = await api(
-          `/api/v1/plugins/${plugin.id}/rpc/${data.method.replace(/^\/+/, '')}`,
+          pluginRpcPath(plugin.id, data.method),
           { method: 'POST', body: JSON.stringify(data.params ?? {}) },
         )
         reply(result)
@@ -218,7 +219,7 @@ export function PluginsView() {
     try {
       const form = new FormData()
       form.append('package', packageFile)
-      await run(() => api('/api/v1/plugins/install', { method: 'POST', body: form }))
+      await run(() => api('/api/v1/plugins/install', { method: 'POST', body: form }), ['plugins'])
       notify(t('pluginInstalled'))
       setInstallOpen(false)
       setPackageFile(null)
@@ -237,7 +238,7 @@ export function PluginsView() {
           api(`/api/v1/plugins/${plugin.id}/enabled`, {
             method: 'POST',
             body: JSON.stringify({ enabled: !plugin.enabled }),
-          }),
+          }), ['plugins'],
         )
         notify(plugin.enabled ? t('pluginDisabled') : t('pluginEnabled'))
       } catch (cause) {
@@ -253,7 +254,7 @@ export function PluginsView() {
     if (!uninstallTarget) return
     setBusyId(uninstallTarget.id)
     try {
-      await run(() => api(`/api/v1/plugins/${uninstallTarget.id}`, { method: 'DELETE' }))
+      await run(() => api(`/api/v1/plugins/${uninstallTarget.id}`, { method: 'DELETE' }), ['plugins'])
       notify(t('pluginUninstalled'))
       setUninstallTarget(null)
     } catch (cause) {

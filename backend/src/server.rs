@@ -12,6 +12,7 @@ use axum::{
 };
 use serde_json::{Value, json};
 use std::{net::SocketAddr, time::Instant};
+use tower_http::compression::CompressionLayer;
 
 #[derive(Default)]
 pub struct KeyHealth {
@@ -120,6 +121,7 @@ pub fn app(state: AppState) -> Router {
         .route("/v1beta/models/{*path}", post(gemini))
         .route("/v1/models/{*path}", post(gemini))
         .nest("/api/v1", crate::admin::router(state.clone()))
+        .layer(CompressionLayer::new().gzip(true))
         .fallback_service(
             tower_http::services::ServeDir::new(&state.frontend_directory).fallback(
                 tower_http::services::ServeFile::new(state.frontend_directory.join("index.html")),

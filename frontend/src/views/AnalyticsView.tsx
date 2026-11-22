@@ -1,23 +1,11 @@
 import { useState } from 'react'
 import { ArrowDownRight, Gauge, Layers3, Route } from 'lucide-react'
-import {
-  Area,
-  AreaChart,
-  Bar,
-  BarChart,
-  CartesianGrid,
-  Cell,
-  Pie,
-  PieChart,
-  ResponsiveContainer,
-  Tooltip,
-  XAxis,
-  YAxis,
-} from 'recharts'
-import { useWorkspace, useTranslation } from '../workspace'
-import { chartTimeLabel } from '../analytics'
+import { useWorkspace, useTranslation, useLocale } from '../workspace'
+import { chartTimeLabel, routeProviderMetrics } from '../analytics'
+import { routeDisplayCandidates } from '../route-display'
 import { ProviderCell, SectionHeading } from '../components/UI'
 import { strategyLabelKey } from '../route-strategy'
+import { LazyCategoryBars, LazyProviderPie, LazyTrafficChart } from '../components/LazyChart'
 
 const requestCount = (value: string) => {
   const normalized = value.toLowerCase().replace(/,/g, '')
@@ -26,18 +14,11 @@ const requestCount = (value: string) => {
   return amount * (normalized.includes('m') ? 1_000_000 : normalized.includes('k') ? 1_000 : 1)
 }
 
-const tooltipStyle = {
-  background: 'var(--panel-solid)',
-  border: '1px solid var(--border-strong)',
-  borderRadius: 10,
-  color: 'var(--text)',
-  fontSize: 12,
-}
-
 export function AnalyticsView() {
-  const { providers, requests, routes, channelGroups, analytics, refresh, notify, settings } =
+  const { providers, requests, routes, channelGroups, analytics, refresh, notify } =
     useWorkspace()
   const t = useTranslation()
+  const locale = useLocale()
   const [period, setPeriod] = useState('30 days')
   const [metric, setMetric] = useState('Requests')
   const periodLabel = period === '24 hours' ? t('24h') : period === '7 days' ? t('7d') : t('30d')
@@ -49,13 +30,6 @@ export function AnalyticsView() {
       age <= (period === '24 hours' ? 86400000 : period === '7 days' ? 604800000 : 2592000000)
     )
   })
-
-  const locale =
-    settings.language === '简体中文'
-      ? 'zh-CN'
-      : settings.language === '日本語'
-        ? 'ja-JP'
-        : 'en-US'
 
   const data = (analytics.series || []).map((point) => ({
     ...point,
@@ -129,22 +103,12 @@ export function AnalyticsView() {
 
   const strategyLabel = (value: string) => t(strategyLabelKey(value))
   const routeTotals = routes.map((route, index) => {
-    const candidates = route.candidates?.length
-      ? route.candidates.filter((candidate) => candidate.enabled)
-      : [
-          { provider: route.primary, model: route.primaryModel },
-          ...(route.fallback ? [{ provider: route.fallback, model: route.fallbackModel }] : []),
-        ]
+    const candidates = routeDisplayCandidates(route)
     const candidateProviders = candidates.flatMap((candidate) => {
       const provider = providers.find((item) => item.name === candidate.provider)
       return provider ? [provider] : []
     })
-    const latencies = candidateProviders
-      .map((provider) => provider.latency)
-      .filter((latency) => latency > 0)
-    const successRates = candidateProviders
-      .map((provider) => Number.parseFloat(provider.success))
-      .filter((rate) => Number.isFinite(rate))
+    const metrics = routeProviderMetrics(candidateProviders)
     const name = route.name || route.slug || `Route ${route.id}`
     return {
       id: route.id,
@@ -154,12 +118,7 @@ export function AnalyticsView() {
       requests: periodRequests.filter((request) => request.route === route.slug).length,
       candidateCount: candidates.length,
       strategy: strategyLabel(route.strategy),
-      latency: latencies.length
-        ? Math.round(latencies.reduce((sum, latency) => sum + latency, 0) / latencies.length)
-        : 0,
-      success: successRates.length
-        ? `${(successRates.reduce((sum, rate) => sum + rate, 0) / successRates.length).toFixed(2)}%`
-        : '—',
+      ...metrics,
     }
   })
 
@@ -193,12 +152,12 @@ export function AnalyticsView() {
                 className={period === item ? 'active' : ''}
                 onClick={() => {
                   setPeriod(item)
-                  refresh(item).catch((cause) =>
+                  refresh(item, ['requests', 'analytics']).catch((cause) =>
                     notify(cause instanceof Error ? cause.message : String(cause)),
                   )
                 }}
               >
-                {item === '24 hours' ? '24h' : item === '7 days' ? '7d' : '30d'}
+                {item === '24 hours' ? t('24h') : item === '7 days' ? t('7d') : t('30d')}
               </button>
             ))}
           </div>
@@ -210,9 +169,9 @@ export function AnalyticsView() {
           <span className="eyebrow">
             {t('totalRequests')} · {periodLabel}
           </span>
-          <h2 className="tabular">{analytics.requests.toLocaleString()}</h2>
+          <h2 className="tabular">{analytics.requests.toLocaleString(locale)}</h2>
           <span className="tabular">
-            {periodLabel} · {analytics.successful.toLocaleString()} {t('successful')}
+            {periodLabel} · {analytics.successful.toLocaleString(locale)} {t('successful')}
           </span>
         </div>
         <div className="analytics-big-number">
@@ -262,38 +221,12 @@ export function AnalyticsView() {
             </span>
           </div>
           <div className="traffic-chart tall">
-            <ResponsiveContainer width="100%" height="100%">
-              <AreaChart data={data} margin={{ top: 20, right: 10, left: -20 }}>
-                <defs>
-                  <linearGradient id="analyticsGradient" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="0%" stopColor="var(--chart-accent)" stopOpacity={0.22} />
-                    <stop offset="100%" stopColor="var(--chart-accent)" stopOpacity={0} />
-                  </linearGradient>
-                </defs>
-                <CartesianGrid vertical={false} stroke="var(--chart-grid)" />
-                <XAxis
-                  dataKey="time"
-                  axisLine={false}
-                  tickLine={false}
-                  tick={{ fill: 'var(--chart-text)', fontSize: 11 }}
-                />
-                <YAxis
-                  axisLine={false}
-                  tickLine={false}
-                  tick={{ fill: 'var(--chart-text)', fontSize: 11 }}
-                />
-                <Tooltip contentStyle={tooltipStyle} />
-                <Area
-                  dataKey={
-                    metric === 'Requests' ? 'requests' : metric === 'Cost' ? 'cost' : 'latency'
-                  }
-                  type="monotone"
-                  stroke="var(--chart-accent)"
-                  strokeWidth={2}
-                  fill="url(#analyticsGradient)"
-                />
-              </AreaChart>
-            </ResponsiveContainer>
+            <LazyTrafficChart
+              data={data}
+              metric={metric === 'Requests' ? 'requests' : metric === 'Cost' ? 'cost' : 'latency'}
+              gradientId="analyticsGradient"
+              margin={{ top: 20, right: 10, left: -20 }}
+            />
           </div>
         </section>
 
@@ -305,23 +238,7 @@ export function AnalyticsView() {
             </div>
           </div>
           <div className="provider-pie">
-            <ResponsiveContainer width="45%" height={136}>
-              <PieChart>
-                <Pie
-                  data={providerData}
-                  dataKey="value"
-                  innerRadius={38}
-                  outerRadius={56}
-                  paddingAngle={3}
-                  stroke="none"
-                >
-                  {providerData.map((entry) => (
-                    <Cell key={entry.name} fill={entry.color} />
-                  ))}
-                </Pie>
-                <Tooltip contentStyle={tooltipStyle} />
-              </PieChart>
-            </ResponsiveContainer>
+            <LazyProviderPie data={providerData} />
             <div className="provider-pie-legend tabular">
               {providerData.map((provider) => (
                 <div key={provider.name}>
@@ -349,35 +266,7 @@ export function AnalyticsView() {
               className="group-performance-chart"
               style={{ height: Math.max(190, groupData.length * 52) }}
             >
-              <ResponsiveContainer width="100%" height="100%">
-                <BarChart
-                  data={groupData}
-                  layout="vertical"
-                  margin={{ left: 12, right: 24, top: 8, bottom: 8 }}
-                >
-                  <CartesianGrid horizontal={false} stroke="var(--chart-grid)" />
-                  <XAxis
-                    type="number"
-                    axisLine={false}
-                    tickLine={false}
-                    tick={{ fill: 'var(--chart-text)', fontSize: 11 }}
-                  />
-                  <YAxis
-                    type="category"
-                    dataKey="name"
-                    axisLine={false}
-                    tickLine={false}
-                    tick={{ fill: 'var(--text-secondary)', fontSize: 11 }}
-                    width={105}
-                  />
-                  <Tooltip contentStyle={tooltipStyle} cursor={{ fill: 'var(--hover)' }} />
-                  <Bar dataKey="requests" fill="var(--chart-accent)" radius={[0, 4, 4, 0]} barSize={12}>
-                    {groupData.map((group) => (
-                      <Cell key={group.id} fill={group.color} />
-                    ))}
-                  </Bar>
-                </BarChart>
-              </ResponsiveContainer>
+              <LazyCategoryBars data={groupData} />
             </div>
             <div className="group-performance-list tabular">
               {groupData.map((group, index) => (
@@ -397,7 +286,7 @@ export function AnalyticsView() {
                     </div>
                   </div>
                   <div className="group-performance-usage">
-                    <strong>{group.requests.toLocaleString('en-US')}</strong>
+                    <strong>{group.requests.toLocaleString(locale)}</strong>
                     <small>{group.share.toFixed(1)}%</small>
                   </div>
                   <div className="group-performance-health">
@@ -427,35 +316,7 @@ export function AnalyticsView() {
               className="group-performance-chart"
               style={{ height: Math.max(190, routeData.length * 52) }}
             >
-              <ResponsiveContainer width="100%" height="100%">
-                <BarChart
-                  data={routeData}
-                  layout="vertical"
-                  margin={{ left: 12, right: 24, top: 8, bottom: 8 }}
-                >
-                  <CartesianGrid horizontal={false} stroke="var(--chart-grid)" />
-                  <XAxis
-                    type="number"
-                    axisLine={false}
-                    tickLine={false}
-                    tick={{ fill: 'var(--chart-text)', fontSize: 11 }}
-                  />
-                  <YAxis
-                    type="category"
-                    dataKey="chartName"
-                    axisLine={false}
-                    tickLine={false}
-                    tick={{ fill: 'var(--text-secondary)', fontSize: 11 }}
-                    width={125}
-                  />
-                  <Tooltip contentStyle={tooltipStyle} cursor={{ fill: 'var(--hover)' }} />
-                  <Bar dataKey="requests" fill="var(--chart-accent)" radius={[0, 4, 4, 0]} barSize={12}>
-                    {routeData.map((route) => (
-                      <Cell key={route.id} fill={route.color} />
-                    ))}
-                  </Bar>
-                </BarChart>
-              </ResponsiveContainer>
+              <LazyCategoryBars data={routeData} labelKey="chartName" labelWidth={125} />
             </div>
             <div className="group-performance-list tabular">
               {routeData.map((route, index) => (
@@ -475,7 +336,7 @@ export function AnalyticsView() {
                     </div>
                   </div>
                   <div className="group-performance-usage">
-                    <strong>{route.requests.toLocaleString('en-US')}</strong>
+                    <strong>{route.requests.toLocaleString(locale)}</strong>
                     <small>{route.share.toFixed(1)}%</small>
                   </div>
                   <div className="group-performance-health">
@@ -502,27 +363,13 @@ export function AnalyticsView() {
           <Layers3 size={17} />
         </div>
         <div className="model-bars">
-          <ResponsiveContainer width="100%" height="100%">
-            <BarChart data={modelData} layout="vertical" margin={{ left: 15, right: 20 }}>
-              <CartesianGrid horizontal={false} stroke="var(--chart-grid)" />
-              <XAxis
-                type="number"
-                axisLine={false}
-                tickLine={false}
-                tick={{ fill: 'var(--chart-text)', fontSize: 11 }}
-              />
-              <YAxis
-                type="category"
-                dataKey="model"
-                axisLine={false}
-                tickLine={false}
-                tick={{ fill: 'var(--text-secondary)', fontSize: 11 }}
-                width={100}
-              />
-              <Tooltip contentStyle={tooltipStyle} cursor={{ fill: 'var(--hover)' }} />
-              <Bar dataKey="requests" fill="var(--chart-accent)" radius={[0, 4, 4, 0]} barSize={10} />
-            </BarChart>
-          </ResponsiveContainer>
+          <LazyCategoryBars
+            data={modelData}
+            labelKey="model"
+            labelWidth={100}
+            barSize={10}
+            margin={{ left: 15, right: 20 }}
+          />
         </div>
       </section>
 

@@ -49,7 +49,7 @@ export function ProvidersView() {
       api(existing ? `/api/v1/providers/${provider.id}` : '/api/v1/providers', {
         method: existing ? 'PUT' : 'POST',
         body: JSON.stringify(input),
-      }),
+      }), ['providers', 'routes'],
     )
     if (existing) {
       // New entered keys are persisted with their owning address so unified
@@ -60,7 +60,7 @@ export function ProvidersView() {
             api(`/api/v1/providers/${provider.id}/keys`, {
               method: 'POST',
               body: JSON.stringify({ secret: key.value.trim(), models: key.models, endpoint_id: key.endpointId ?? null }),
-            }),
+            }), ['providers'],
           )
         }
       }
@@ -75,7 +75,7 @@ export function ProvidersView() {
             api(`/api/v1/providers/${provider.id}/keys/${scopes[index].id}/models`, {
               method: 'PUT',
               body: JSON.stringify({ models: key.models }),
-            }),
+            }), ['providers'],
           )
         }
       }
@@ -95,7 +95,7 @@ export function ProvidersView() {
       api(`/api/v1/providers/${deleting.id}/enabled`, {
         method: 'POST',
         body: JSON.stringify({ enabled: false }),
-      }),
+      }), ['providers', 'routes'],
     )
     notify(t('providerDisconnected', { name: deleting.name }))
     setDeleting(null)
@@ -203,7 +203,7 @@ export function ProvidersView() {
                       api(`/api/v1/providers/${provider.id}/enabled`, {
                         method: 'POST',
                         body: JSON.stringify({ enabled: !provider.enabled }),
-                      }),
+                      }), ['providers', 'routes'],
                     ).catch((cause) =>
                       notify(cause instanceof Error ? cause.message : String(cause)),
                     )
@@ -314,17 +314,15 @@ export function ProvidersView() {
         onSave={save}
         onTest={async (provider, keyIndex, secret) =>
           (
-            await run(() =>
-              api<{ models: string[] }>(`/api/v1/providers/${provider.id}/test`, {
-                method: 'POST',
-                body: JSON.stringify({
-                  protocol: provider.type,
-                  endpoint: provider.endpoint,
-                  secret,
-                  key_index: secret ? undefined : keyIndex,
-                }),
+            await api<{ models: string[] }>(`/api/v1/providers/${provider.id}/test`, {
+              method: 'POST',
+              body: JSON.stringify({
+                protocol: provider.type,
+                endpoint: provider.endpoint,
+                secret,
+                key_index: secret ? undefined : keyIndex,
               }),
-            )
+            })
           ).models
         }
         onDelete={
@@ -348,8 +346,6 @@ export function ProvidersView() {
           {
             routes.filter(
               (r) =>
-                r.primary === deleting?.name ||
-                r.fallback === deleting?.name ||
                 r.candidates?.some((candidate) => candidate.provider === deleting?.name),
             ).length
           }{' '}

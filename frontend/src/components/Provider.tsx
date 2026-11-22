@@ -3,7 +3,7 @@ import { Check, Copy, Play, Plus, RefreshCw, Search, Settings2, X } from 'lucide
 import { DialogActions, Field, Modal, Toggle } from './UI'
 import { Dropdown } from './Dropdown'
 import { api, type ProviderKeyDraft } from '../api'
-import { protocolOf, useTranslation, useWorkspace, type ProtocolType, type Provider, type ProviderEndpoint } from '../workspace'
+import { protocolOf, useTranslation, useWorkspace, type ChannelGroup, type ProtocolType, type Provider, type ProviderEndpoint } from '../workspace'
 import { addSelectedModels, filterModels, mergeDetectedModels } from '../fetch-models'
 export type { Provider } from '../workspace'
 export type { ProviderKeyDraft } from '../api'
@@ -38,7 +38,7 @@ export function ProviderMark({ name, short, color, small = false }: Pick<Provide
 
 export function ProviderDialog({ open, onClose, onSave, onDelete, onTest, provider }: { open: boolean; onClose: () => void; onSave: (provider: Provider, keys: ProviderKeyDraft[]) => Promise<void>; onDelete?: () => void; onTest?: (provider: Provider, keyIndex?: number, secret?: string) => Promise<string[]>; provider?: Provider | null }) {
   const [name, setName] = useState('')
-  const { channelGroups, run, notify } = useWorkspace()
+  const { channelGroups, setChannelGroups, notify } = useWorkspace()
   const t = useTranslation()
   const [type, setType] = useState<ProtocolType>('openai')
   const [group, setGroup] = useState('official')
@@ -97,7 +97,10 @@ export function ProviderDialog({ open, onClose, onSave, onDelete, onTest, provid
     const secret = key.value.trim()
     if (provider && onTest && key.storedId !== null) return onTest({ ...provider, type, endpoint: address }, index, secret || undefined)
     if (!secret) return Promise.reject(new Error(t('apiKeyRequired')))
-    return run(() => api<{ models: string[] }>('/api/v1/providers/test', { method: 'POST', body: JSON.stringify({ protocol: type, endpoint: address, secret }) })).then((result) => result.models)
+    return api<{ models: string[] }>('/api/v1/providers/test', {
+      method: 'POST',
+      body: JSON.stringify({ protocol: type, endpoint: address, secret }),
+    }).then((result) => result.models)
   }
   const runFetch = async () => {
     setFetching(true)
@@ -199,7 +202,21 @@ export function ProviderDialog({ open, onClose, onSave, onDelete, onTest, provid
     if (!name) { notify(t('groupNameRequired')); return }
     if (channelGroups.some((item) => item.name.toLowerCase() === name.toLowerCase())) { notify(t('groupExists')); return }
     const id = `group-${Date.now()}`
-    try { await run(() => api('/api/v1/groups', { method: 'POST', body: JSON.stringify({ id, name, description: groupDescription.trim() }) })); setGroup(id); setGroupOpen(false); setGroupName(''); setGroupDescription(''); notify(t('groupCreated')) } catch (cause) { notify(cause instanceof Error ? cause.message : String(cause)) }
+    try {
+      await api('/api/v1/groups', {
+        method: 'POST',
+        body: JSON.stringify({ id, name, description: groupDescription.trim() }),
+      })
+      const created: ChannelGroup = { id, name, description: groupDescription.trim() }
+      setChannelGroups((current) => [...current, created])
+      setGroup(created.id)
+      setGroupOpen(false)
+      setGroupName('')
+      setGroupDescription('')
+      notify(t('groupCreated'))
+    } catch (cause) {
+      notify(cause instanceof Error ? cause.message : String(cause))
+    }
   }
   const groupLabel = (id: string) => {
     if (id === 'official') return t('officialChannels')
@@ -337,17 +354,12 @@ export function ProviderDialog({ open, onClose, onSave, onDelete, onTest, provid
   </>
 }
 
-export function Toast({ message, onClose }: { message: string; onClose: () => void }) {
-  return <div className="toast" role="status"><span className="toast-check"><Check size={14} /></span>{message}<ToastClose onClose={onClose} /></div>
-}
-function ToastClose({ onClose }: { onClose: () => void }) {
-  return <button onClick={onClose} aria-label={useTranslation()('dismiss')}><X size={14} /></button>
-}
 export function CopyButton({ value, onCopy }: { value: string; onCopy: () => void }) {
+  const t = useTranslation()
   const [copied, setCopied] = useState(false)
   const copy = async () => {
     try { await navigator.clipboard.writeText(value) } catch { const input = document.createElement('textarea'); input.value = value; document.body.appendChild(input); input.select(); document.execCommand('copy'); input.remove() }
     setCopied(true); onCopy(); setTimeout(() => setCopied(false), 1800)
   }
-  return <button className="icon-button" onClick={copy} aria-label={useTranslation()('copyClipboard')}>{copied ? <Check size={15} /> : <Copy size={15} />}</button>
+  return <button className="icon-button" onClick={copy} aria-label={t('copyClipboard')}>{copied ? <Check size={15} /> : <Copy size={15} />}</button>
 }

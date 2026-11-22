@@ -180,10 +180,6 @@ function RouteForm({ route, onClose }: { route: RouteRule | null; onClose: () =>
       slug: slug.trim() || slugify(name),
       description: route?.description || '',
       match: finalPatterns[0],
-      primary: enabled[0].provider,
-      primaryModel: enabled[0].model,
-      fallback: enabled[1]?.provider || '',
-      fallbackModel: enabled[1]?.model || '',
       strategy,
       active,
       requests: route?.requests || '0',
@@ -200,7 +196,7 @@ function RouteForm({ route, onClose }: { route: RouteRule | null; onClose: () =>
         api(route ? `/api/v1/routes/${route.id}` : '/api/v1/routes', {
           method: route ? 'PUT' : 'POST',
           body: JSON.stringify(routeInput(saved, providers)),
-        }),
+        }), ['routes'],
       )
       notify(route ? t('routeUpdated') : t('routeCreated'))
       onClose()
@@ -557,7 +553,7 @@ export function RoutingView() {
   const filtered = useMemo(
     () =>
       routes.filter((route) =>
-        `${route.name} ${route.slug || ''} ${route.primary} ${route.match} ${routeDisplayCandidates(
+        `${route.name} ${route.slug || ''} ${route.match} ${routeDisplayCandidates(
           route,
         )
           .map((candidate) => `${candidate.provider} ${candidate.model}`)
@@ -581,7 +577,7 @@ export function RoutingView() {
       api(`/api/v1/routes/${id}/enabled`, {
         method: 'POST',
         body: JSON.stringify({ enabled }),
-      }),
+      }), ['routes'],
     ).catch((cause) => notify(cause instanceof Error ? cause.message : String(cause)))
   }
 
@@ -747,7 +743,7 @@ export function RoutingView() {
                       api('/api/v1/routes', {
                         method: 'POST',
                         body: JSON.stringify(routeInput(copy, providers)),
-                      }),
+                      }), ['routes'],
                     )
                       .then(() => notify(t('routeDuplicated')))
                       .catch((cause) =>
@@ -810,7 +806,7 @@ export function RoutingView() {
           onSubmit={(event) => {
             event.preventDefault()
             if (deleting) {
-              run(() => api(`/api/v1/routes/${deleting.id}`, { method: 'DELETE' }))
+              run(() => api(`/api/v1/routes/${deleting.id}`, { method: 'DELETE' }), ['routes'])
                 .then(() => notify(t('routeRemoved')))
                 .catch((cause) => notify(cause instanceof Error ? cause.message : String(cause)))
             }

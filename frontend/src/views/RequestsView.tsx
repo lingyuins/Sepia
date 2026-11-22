@@ -9,10 +9,11 @@ import {
   Search,
   X,
 } from 'lucide-react'
-import { downloadFile, useWorkspace, useTranslation, type RequestRecord } from '../workspace'
+import { downloadFile, useWorkspace, useTranslation, useLocale, type RequestRecord } from '../workspace'
 import { ProviderCell, SectionHeading, StatusText } from '../components/UI'
 import { Dropdown } from '../components/Dropdown'
 import { api } from '../api'
+import { formatRequestTime } from '../analytics'
 
 export function RequestsTable({
   compact = false,
@@ -24,6 +25,8 @@ export function RequestsTable({
   onSelect: (row: RequestRecord) => void
 }) {
   const t = useTranslation()
+  const locale = useLocale()
+  const formatTokens = (value: string) => Number(value.split(',').join('')).toLocaleString(locale)
 
   return (
     <div className="table-scroll">
@@ -51,7 +54,7 @@ export function RequestsTable({
                   : 'positive'
             return (
               <tr key={row.id} onClick={() => onSelect(row)} className="clickable-row">
-                <td className="muted mono tabular">{row.time}</td>
+                <td className="muted mono tabular">{formatRequestTime(row.createdAt, locale)}</td>
                 <td>
                   <span className="model-name mono">
                     <Bot size={13} />
@@ -66,16 +69,10 @@ export function RequestsTable({
                 </td>
                 {!compact && (
                   <td>
-                    <span className="key-label">
-                      {row.key === 'Development'
-                        ? t('development')
-                        : row.key === 'Production'
-                          ? t('production')
-                          : row.key}
-                    </span>
+                    <span className="key-label">{row.key}</span>
                   </td>
                 )}
-                <td className="muted num-col tabular">{row.tokens}</td>
+                <td className="muted num-col tabular">{formatTokens(row.tokens)}</td>
                 <td className="muted num-col tabular">{row.latency}</td>
                 <td>
                   <StatusText tone={tone}>
@@ -108,6 +105,7 @@ export function RequestsTable({
 export function RequestsView({ onSelect }: { onSelect: (row: RequestRecord) => void }) {
   const { requests, notify, run, refresh } = useWorkspace()
   const t = useTranslation()
+  const locale = useLocale()
   const [query, setQuery] = useState('')
   const [provider, setProvider] = useState('All providers')
   const [status, setStatus] = useState('All statuses')
@@ -132,16 +130,26 @@ export function RequestsView({ onSelect }: { onSelect: (row: RequestRecord) => v
   const currentPage = Math.min(page, pages)
 
   const exportLogs = (format: 'json' | 'csv') => {
+    const exported = filtered.map((row) => ({
+      ...row,
+      time: formatRequestTime(row.createdAt, locale),
+      tokens: Number(row.tokens.split(',').join('')).toLocaleString(locale),
+    }))
     if (format === 'json') {
-      downloadFile('sepia-requests.json', JSON.stringify(filtered, null, 2))
+      downloadFile('sepia-requests.json', JSON.stringify({
+        scope: t('requestExportScope'),
+        exported_at: new Date().toISOString(),
+        count: filtered.length,
+        requests: exported,
+      }, null, 2))
     } else {
       const header =
         'id,time,model,route,provider,tokens,input_tokens,output_tokens,cached_tokens,reasoning_tokens,latency_ms,first_byte_ms,client_ip,status,key,cost\n'
       const escape = (value: string | number) => `"${String(value).replace(/"/g, '""')}"`
       downloadFile(
         'sepia-requests.csv',
-        header +
-          filtered
+        `# ${t('requestExportScope')}\n` + header +
+          exported
             .map((row) =>
               [
                 row.id,
@@ -168,7 +176,7 @@ export function RequestsView({ onSelect }: { onSelect: (row: RequestRecord) => v
         'text/csv',
       )
     }
-    notify(`${filtered.length} ${t('requestRecordsExported')} · ${format.toUpperCase()}`)
+    notify(`${filtered.length} ${t('requestRecordsExported')} · ${format.toUpperCase()} · ${t('requestWindowNote')}`)
   }
 
   return (
@@ -183,7 +191,7 @@ export function RequestsView({ onSelect }: { onSelect: (row: RequestRecord) => v
               type="button"
               className="button secondary"
               onClick={() => {
-                refresh().catch((cause) =>
+                refresh(undefined, ['requests', 'analytics']).catch((cause) =>
                   notify(cause instanceof Error ? cause.message : String(cause)),
                 )
               }}
@@ -213,9 +221,10 @@ export function RequestsView({ onSelect }: { onSelect: (row: RequestRecord) => v
       <div className="request-summary tabular">
         <span>{t('localHistory')}</span>
         <span>
-          {requests.length} {t('records')} · {t('metadataShort')}
+          {requests.length.toLocaleString(locale)} {t('records')} · {t('metadataShort')}
         </span>
       </div>
+      <p className="request-window-note">{t('requestWindowNote')}</p>
 
       <section className="requests-full glass-panel">
         <div className="request-filters">
@@ -334,7 +343,7 @@ export function RequestsView({ onSelect }: { onSelect: (row: RequestRecord) => v
               type="button"
               className="button text-button danger-text"
               onClick={() => {
-                run(() => api('/api/v1/requests', { method: 'DELETE' }))
+                run(() => api('/api/v1/requests', { method: 'DELETE' }), ['requests', 'analytics'])
                   .then(() => {
                     setClearOpen(false)
                     notify(t('historyCleared'))
