@@ -3,6 +3,7 @@ pub mod ai;
 pub mod attempts;
 pub mod auxiliary;
 pub mod bootstrap;
+pub(crate) mod client_ip;
 pub mod controls;
 pub mod crypto;
 pub mod discovery;

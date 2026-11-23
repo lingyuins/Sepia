@@ -168,6 +168,8 @@ Compose 将端口仅绑定到本机回环地址，并要求在 `.env` 中提供 
 
 远程或局域网部署必须使用 HTTPS 反向代理，设置 `SEPIA_TRUSTED_PROXY=true`，并在容器环境中移除 `SEPIA_HTTP_LOOPBACK_COOKIE`，使管理员 Cookie 保持 `Secure`。不要把容器的 5000 端口直接暴露到不受信网络。镜像不内置主密钥、管理员密码、初始化令牌或供应商凭据。
 
+开启 `SEPIA_TRUSTED_PROXY=true` 后，网关按 `X-Forwarded-For`（取最左侧合法地址，缺失时回退 `X-Real-IP`）识别真实客户端 IP，请求记录的 `client_ip` 与客户端密钥的 IP 白名单都按它判定；关闭时忽略这些请求头，只使用 TCP 直连地址。仅在网关前确有受信代理时开启，直接暴露端口时开启会允许客户端伪造来源 IP。Docker 自身的 `-p` 端口映射不会附加转发头，记录的仍是桥接网关地址；需要真实 IP 时请在容器前部署 nginx / Caddy 等转发 `X-Forwarded-For` 的代理。
+
 ### 环境变量
 
 | 变量 | 用途 |
@@ -178,7 +180,7 @@ Compose 将端口仅绑定到本机回环地址，并要求在 `.env` 中提供 
 | `SEPIA_MASTER_KEY` | Base64 编码 32 字节生产主密钥；优先于 OS Keyring 与数据目录密钥文件，不能轮换；容器可选（缺省时自动生成并持久化到数据目录 `master-key`） |
 | `SEPIA_FRONTEND_DIR` | 可选的控制台构建目录绝对路径；容器已设置 |
 | `SEPIA_HTTP_LOOPBACK_COOKIE=true` | 仅允许 `0.0.0.0:5000` 的本机 HTTP 容器映射省略 `Secure`；远程部署必须移除 |
-| `SEPIA_TRUSTED_PROXY=true` | 非回环监听所必需；由受信代理终止 TLS |
+| `SEPIA_TRUSTED_PROXY=true` | 非回环监听所必需；由受信代理终止 TLS，并按 `X-Forwarded-For` / `X-Real-IP` 识别真实客户端 IP |
 | `SEPIA_DEV_INSECURE_KEYSTORE=1` | 仅 debug 构建使用文件测试密钥；禁止用于生产 |
 | `SEPIA_GATEWAY_URL` | Vite 开发代理目标，不是浏览器管理 API 的跨域地址 |
 | `SEPIA_METADATA_SOURCE` | 模型广场元数据同步源（OpenAI 风格模型列表），默认 `https://openrouter.ai/api/v1/models` |
@@ -371,7 +373,7 @@ cargo test --manifest-path backend/Cargo.toml
 - 上游密钥使用 AES-GCM 加密；桌面条目的生产主密钥默认由操作系统 Keyring（Windows 凭据管理器 / macOS 钥匙串）保护。没有持久 Keyring 且未设置 `SEPIA_MASTER_KEY` 时（如 Linux/容器），主密钥自动生成并持久化到数据目录的 `master-key` 文件（Unix 0600），重启不丢；密钥与数据同目录，需整体保护。显式 `SEPIA_MASTER_KEY` 优先且不能轮换。数据库中的加密校验标记会在监听前拒绝更换后的主密钥。
 - 网关不跟随上游重定向，避免凭据被转发到其他主机。
 - WASM 插件在 wasmtime 沙箱内执行：无 WASI，出站 HTTP 仅允许 manifest 声明的 origin，敏感请求头对插件隐藏且不可写；插件 secret 与上游密钥同样加密存储。
-- 非回环部署应置于启用 TLS 的受信反向代理之后，并显式设置 `SEPIA_TRUSTED_PROXY=true`。
+- 非回环部署应置于启用 TLS 的受信反向代理之后，并显式设置 `SEPIA_TRUSTED_PROXY=true`。该开关让网关信任 `X-Forwarded-For`（最左侧地址）/`X-Real-IP` 以还原真实客户端 IP，请求记录与客户端密钥 IP 白名单都据此判定；仅在网关前确有受信代理时开启，直接暴露端口时开启会允许伪造来源 IP。
 
 ## 文档与反馈
 
@@ -540,6 +542,8 @@ Compose binds the port only to the local loopback address and requires `SEPIA_MA
 
 For remote or LAN deployment, use an HTTPS reverse proxy, set `SEPIA_TRUSTED_PROXY=true`, and remove `SEPIA_HTTP_LOOPBACK_COOKIE` from the container environment so administrator cookies remain `Secure`. Do not expose port 5000 directly to untrusted networks. Images contain no master key, administrator password, bootstrap token, or provider credentials.
 
+With `SEPIA_TRUSTED_PROXY=true` the gateway resolves the real client IP from `X-Forwarded-For` (leftmost valid address, falling back to `X-Real-IP`); the recorded `client_ip` and client-key IP whitelists both use it. When disabled these headers are ignored and the TCP peer stands. Enable it only when a trusted proxy really fronts the gateway — on a directly exposed port it lets clients spoof their source address. Docker's own `-p` publishing adds no forwarding headers, so the recorded IP stays the bridge gateway address; run nginx/Caddy (or another proxy that sets `X-Forwarded-For`) in front of the container to see real addresses.
+
 ### Environment variables
 
 | Variable | Purpose |
@@ -550,7 +554,7 @@ For remote or LAN deployment, use an HTTPS reverse proxy, set `SEPIA_TRUSTED_PRO
 | `SEPIA_MASTER_KEY` | Base64-encoded 32-byte production master key; takes precedence over the OS keyring and the data-directory key file and cannot be rotated; optional in containers (auto-generated and persisted to `master-key` in the data directory when unset) |
 | `SEPIA_FRONTEND_DIR` | Optional absolute path to the built console; set in the container image |
 | `SEPIA_HTTP_LOOPBACK_COOKIE=true` | Omits `Secure` only for a local HTTP container mapping on `0.0.0.0:5000`; must be removed for remote deployments |
-| `SEPIA_TRUSTED_PROXY=true` | Required for non-loopback listening; TLS terminates at a trusted proxy |
+| `SEPIA_TRUSTED_PROXY=true` | Required for non-loopback listening; TLS terminates at a trusted proxy, whose `X-Forwarded-For` / `X-Real-IP` supply the client IP |
 | `SEPIA_DEV_INSECURE_KEYSTORE=1` | Debug builds only; uses a file test key and must never protect production secrets |
 | `SEPIA_GATEWAY_URL` | Vite development proxy target, not a cross-origin browser management API setting |
 | `SEPIA_METADATA_SOURCE` | Model Plaza metadata sync source (OpenAI-style model list); defaults to `https://openrouter.ai/api/v1/models` |
@@ -743,7 +747,7 @@ Backend tests cover native/cross-protocol JSON and SSE, tools and multimodal con
 - Upstream keys use AES-GCM encryption. Desktop production master keys use the OS keyring (Windows Credential Manager / macOS Keychain) by default. Without a persistent keyring and without `SEPIA_MASTER_KEY` (e.g. Linux/containers), the master key is generated once and persisted to the `master-key` file in the data directory (0600 on Unix) so restarts keep working; key and data share one trust boundary and must be protected together. An explicit `SEPIA_MASTER_KEY` takes precedence and cannot be rotated. An encrypted database marker rejects a changed master key before the gateway starts listening.
 - Upstream redirects are not followed, preventing credential forwarding to another host.
 - WASM plugins run in a wasmtime sandbox: no WASI, outbound HTTP restricted to manifest-declared origins, sensitive request headers hidden and unwritable; plugin secrets are encrypted like upstream keys.
-- Deploy non-loopback instances behind a TLS-enabled trusted reverse proxy and explicitly set `SEPIA_TRUSTED_PROXY=true`.
+- Deploy non-loopback instances behind a TLS-enabled trusted reverse proxy and explicitly set `SEPIA_TRUSTED_PROXY=true`. That switch trusts `X-Forwarded-For` (leftmost address) / `X-Real-IP` to restore the real client IP, and both request records and client-key IP whitelists use it; enable it only when a trusted proxy really fronts the gateway, since on a directly exposed port it allows spoofing the source address.
 
 ## Documentation and feedback
 

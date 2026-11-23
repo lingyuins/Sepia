@@ -31,6 +31,9 @@ pub struct AppState {
     pub snapshots: std::sync::Arc<crate::snapshot::Snapshots>,
     pub key_health: std::sync::Arc<tokio::sync::Mutex<KeyHealth>>,
     pub secure_cookie: bool,
+    /// Deployment sits behind a trusted reverse proxy/port mapping, so
+    /// `X-Forwarded-For`/`X-Real-IP` are authoritative for the client address.
+    pub trusted_proxy: bool,
     pub metadata_source: String,
     pub plugins: crate::plugin::SharedRuntime,
     pub routing_stats: std::sync::Arc<crate::strategy::RoutingStats>,
@@ -74,6 +77,7 @@ impl AppState {
             snapshots: std::sync::Arc::new(crate::snapshot::Snapshots::load(&store).await.unwrap()),
             key_health: Default::default(),
             secure_cookie: false,
+            trusted_proxy: false,
             metadata_source: crate::metadata::DEFAULT_SOURCE.into(),
             plugins: crate::plugin::shared(crate::plugin::PluginRuntime::new().unwrap()),
             routing_stats: crate::strategy::RoutingStats::shared(),
@@ -412,6 +416,9 @@ pub async fn relay(
     body: Value,
     response_state: Option<ResponseLifecycle>,
 ) -> Response {
+    // The recorded IP and the policy whitelist must agree, so both read this
+    // one resolved value instead of the raw transport peer.
+    let peer = crate::client_ip::client_ip(&headers, peer, state.trusted_proxy);
     let path = match &inbound {
         InboundProtocol::Gemini { model, stream, .. } => Some((model.as_str(), *stream)),
         _ => None,

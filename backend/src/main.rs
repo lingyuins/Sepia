@@ -98,6 +98,7 @@ async fn main() -> Result<(), String> {
             snapshots,
             key_health: Default::default(),
             secure_cookie,
+            trusted_proxy,
             metadata_source: std::env::var("SEPIA_METADATA_SOURCE")
                 .unwrap_or_else(|_| sepia_gateway::metadata::DEFAULT_SOURCE.into()),
             plugins,

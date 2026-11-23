@@ -145,3 +145,160 @@ async fn provider_and_route_updates_round_trip_and_analytics_are_real() {
         .unwrap();
     assert_eq!(snapshots.get().max_attempts, 1);
 }
+
+async fn seed_recorded_request(
+    store: &Store,
+    key_id: i64,
+    provider_id: i64,
+    model: &str,
+) -> String {
+    let request = store
+        .begin_request(key_id, sepia_gateway::ProviderProtocol::OpenAI, model)
+        .await
+        .unwrap();
+    store
+        .record_attempt(sepia_gateway::observability::NewAttempt {
+            request_id: &request,
+            provider_id: Some(provider_id),
+            provider_key_id: Some(1),
+            model,
+            status: "success",
+            error: None,
+            input_tokens: 10,
+            output_tokens: 5,
+            latency_ms: 25,
+        })
+        .await
+        .unwrap();
+    store
+        .finish_request_with_cost(&request, "success", 10, 5, 42, 25)
+        .await
+        .unwrap();
+    request
+}
+
+async fn backdate_request(store_path: &std::path::Path, request_id: &str, age: &str) {
+    // The Store pool is crate-private; a second connection to the same database file
+    // rewrites only the timestamps of a seeded record.
+    let pool = sqlx::sqlite::SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect(&format!("sqlite://{}", store_path.display()))
+        .await
+        .unwrap();
+    for statement in [
+        "UPDATE requests SET created_at = datetime('now', ?) WHERE id = ?",
+        "UPDATE attempts SET created_at = datetime('now', ?) WHERE request_id = ?",
+    ] {
+        sqlx::query(statement)
+            .bind(age)
+            .bind(request_id)
+            .execute(&pool)
+            .await
+            .unwrap();
+    }
+    pool.close().await;
+}
+
+#[tokio::test]
+async fn analytics_periods_cover_ninety_days_and_all_history() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("analytics-periods.db");
+    let store = Store::connect(&path).await.unwrap();
+    let provider = store
+        .create_provider(
+            sepia_gateway::NewProvider {
+                name: "Periods".into(),
+                protocol: sepia_gateway::ProviderProtocol::OpenAI,
+                endpoint: "http://localhost/v1".into(),
+                models: vec!["recent".into(), "middle".into(), "legacy".into()],
+                plugin_id: None,
+                mode: "single".into(),
+            },
+            "secret",
+            &[],
+            &sepia_gateway::KeyStore::testing(),
+        )
+        .await
+        .unwrap();
+    let key = store
+        .create_client_key(sepia_gateway::UpsertClientKey {
+            name: "periods".into(),
+            models: vec!["*".into()],
+            token_limit: 0,
+            max_amount_micros: 0,
+            rpm: 0,
+            tpm: 0,
+            expires_at: None,
+            secret: None,
+        })
+        .await
+        .unwrap();
+    seed_recorded_request(&store, key.id, provider.id, "recent").await;
+    let middle = seed_recorded_request(&store, key.id, provider.id, "middle").await;
+    let legacy = seed_recorded_request(&store, key.id, provider.id, "legacy").await;
+    backdate_request(&path, &middle, "-60 days").await;
+    backdate_request(&path, &legacy, "-120 days").await;
+
+    let day_buckets = |analytics: &serde_json::Value| {
+        analytics["series"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|point| point["time"].as_str().unwrap().ends_with("T00:00:00Z"))
+    };
+
+    // Unchanged narrow periods still exclude the older seeded records.
+    assert_eq!(
+        store.analytics_for("24 hours").await.unwrap()["requests"],
+        1
+    );
+    assert_eq!(store.analytics_for("7 days").await.unwrap()["requests"], 1);
+    assert_eq!(store.analytics_for("30 days").await.unwrap()["requests"], 1);
+
+    let ninety = store.analytics_for("90 days").await.unwrap();
+    assert_eq!(ninety["requests"], 2);
+    assert_eq!(ninety["input_tokens"], 20);
+    assert!(day_buckets(&ninety));
+    assert_eq!(ninety["by_provider"][0]["requests"], 2);
+    let models = ninety["by_model"].as_array().unwrap();
+    assert_eq!(models.len(), 2);
+    assert!(models.iter().any(|row| row["model"] == "recent"));
+    assert!(models.iter().any(|row| row["model"] == "middle"));
+    assert!(!models.iter().any(|row| row["model"] == "legacy"));
+    assert_eq!(
+        ninety["series"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|point| point["requests"].as_i64().unwrap())
+            .sum::<i64>(),
+        2
+    );
+
+    let all = store.analytics_for("all").await.unwrap();
+    assert_eq!(all["requests"], 3);
+    assert_eq!(all["input_tokens"], 30);
+    assert_eq!(all["output_tokens"], 15);
+    assert_eq!(all["successful"], 3);
+    assert!(day_buckets(&all));
+    assert_eq!(all["by_provider"][0]["requests"], 3);
+    let models = all["by_model"].as_array().unwrap();
+    assert_eq!(models.len(), 3);
+    assert!(models.iter().any(|row| row["model"] == "legacy"));
+    assert!(models.iter().any(|row| row["model"] == "middle"));
+    assert!(models.iter().any(|row| row["model"] == "recent"));
+    assert_eq!(
+        all["series"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|point| point["requests"].as_i64().unwrap())
+            .sum::<i64>(),
+        3
+    );
+
+    assert_eq!(
+        store.analytics_for("2 days").await.unwrap_err(),
+        "unsupported analytics period"
+    );
+}

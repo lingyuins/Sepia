@@ -254,6 +254,7 @@ async fn strategy_and_weights_round_trip_through_management_api() {
         key_health: Default::default(),
         routing_stats: sepia_gateway::strategy::RoutingStats::shared(),
         secure_cookie: false,
+        trusted_proxy: false,
         metadata_source: sepia_gateway::metadata::DEFAULT_SOURCE.into(),
         plugins: sepia_gateway::plugin::shared(
             sepia_gateway::plugin::PluginRuntime::new().unwrap(),

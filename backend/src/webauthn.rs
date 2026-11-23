@@ -220,7 +220,10 @@ pub(crate) async fn login_options(
     headers: HeaderMap,
 ) -> Response {
     // Public endpoint: cap challenge creation per client so it cannot be
-    // used to flood the challenge table.
+    // used to flood the challenge table. The cap follows the resolved client
+    // address so a trusted proxy deployment does not throttle every caller
+    // through one shared bridge address.
+    let client_ip = crate::client_ip::client_ip(&headers, peer.ip(), state.trusted_proxy);
     {
         use std::sync::{LazyLock, Mutex};
         static HITS: LazyLock<
@@ -231,7 +234,7 @@ pub(crate) async fn login_options(
         hits.retain(|_, (_, started)| {
             now.duration_since(*started) < std::time::Duration::from_secs(60)
         });
-        let entry = hits.entry(peer.ip()).or_insert((0, now));
+        let entry = hits.entry(client_ip).or_insert((0, now));
         if entry.0 >= 30 {
             return error(
                 StatusCode::TOO_MANY_REQUESTS,

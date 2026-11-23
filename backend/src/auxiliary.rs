@@ -600,6 +600,7 @@ async fn forward(
     peer: std::net::IpAddr,
     prepared: Prepared,
 ) -> Response {
+    let peer = crate::client_ip::client_ip(&headers, peer, state.trusted_proxy);
     let token = match extract_credential(&headers, ProtocolCredential::OpenAI, None) {
         Ok(token) => token,
         Err(status) => return error(status, "invalid or missing API credentials"),
