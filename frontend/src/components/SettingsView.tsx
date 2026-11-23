@@ -190,6 +190,7 @@ export default function SettingsView() {
     'idle',
   )
   const [updateError, setUpdateError] = useState('')
+  const [aiPoolBusy, setAiPoolBusy] = useState(false)
 
   const dirty = JSON.stringify(draft) !== JSON.stringify(settings)
   const update = <K extends keyof Settings>(key: K, value: Settings[K]) =>
@@ -291,6 +292,27 @@ export default function SettingsView() {
       notify(t('settingsSaved'))
     } catch (cause) {
       notify(cause instanceof Error ? cause.message : String(cause))
+    }
+  }
+
+  // The pool switch persists immediately (like the per-service toggles below),
+  // so the gateway state can never silently diverge from the shown switch.
+  const toggleAiPool = async () => {
+    const next = !draft.aiPoolEnabled
+    setAiPoolBusy(true)
+    try {
+      await run(() =>
+        api('/api/v1/settings', {
+          method: 'POST',
+          body: JSON.stringify({ ai_pool_enabled: next }),
+        }), ['settings'],
+      )
+      setDraft((current) => ({ ...current, aiPoolEnabled: next }))
+      notify(t('settingsSaved'))
+    } catch (cause) {
+      notify(cause instanceof Error ? cause.message : String(cause))
+    } finally {
+      setAiPoolBusy(false)
     }
   }
 
@@ -747,14 +769,14 @@ export default function SettingsView() {
             <>
               <section className="settings-card glass-panel">
                 <h3>{t('aiPoolTitle')}</h3>
-                <fieldset className="settings-readonly-group" disabled={!isAdmin}>
+                <fieldset className="settings-readonly-group" disabled={!isAdmin || aiPoolBusy}>
                   <SettingRow
                     title={t('aiPoolEnable')}
                     description={t('aiPoolEnableDescription')}
                   >
                     <Toggle
                       checked={draft.aiPoolEnabled}
-                      onChange={() => update('aiPoolEnabled', !draft.aiPoolEnabled)}
+                      onChange={() => void toggleAiPool()}
                       label={t('aiPoolEnable')}
                     />
                   </SettingRow>
