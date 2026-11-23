@@ -35,7 +35,7 @@ pub extern "Rust" fn dispatch(event: &str, payload: &Value, _config: &Value) -> 
                     log(&alloc::format!("admin.request failed: {message}"));
                     let mut out = Value::object();
                     out.insert("status", Value::num(502));
-                    out.insert("body", Value::str(message));
+                    out.insert("body", Value::str(&message));
                     out
                 }
             }

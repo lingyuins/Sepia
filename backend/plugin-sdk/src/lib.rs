@@ -11,6 +11,7 @@
 extern crate alloc;
 
 use alloc::alloc::alloc as heap_alloc;
+use alloc::string::String;
 use alloc::vec::Vec;
 use core::slice;
 
@@ -77,7 +78,7 @@ extern "Rust" {
     fn dispatch(event: &str, payload: &json::Value, config: &json::Value) -> json::Value;
 }
 
-pub fn host(capability: &str, payload: json::Value) -> Result<json::Value, &'static str> {
+pub fn host(capability: &str, payload: json::Value) -> Result<json::Value, String> {
     let mut request = json::Value::object();
     request.insert("capability", json::Value::str(capability));
     request.insert("payload", payload);
@@ -86,11 +87,17 @@ pub fn host(capability: &str, payload: json::Value) -> Result<json::Value, &'sta
     let out_ptr = (packed >> 32) as usize;
     let out_len = (packed & 0xffff_ffff) as usize;
     let response = unsafe { slice::from_raw_parts(out_ptr as *const u8, out_len) };
-    let value = json::parse(response).map_err(|_| "host response")?;
+    let value = json::parse(response).map_err(|_| String::from("host response"))?;
     if value.get("ok").and_then(json::Value::as_bool).unwrap_or(false) {
         Ok(value.get("result").cloned().unwrap_or(json::Value::Null))
     } else {
-        Err("host error")
+        // Surface the host's real error (e.g. "origin … not in http_origins")
+        // instead of a generic label so guests can report it verbatim.
+        Err(value
+            .get("error")
+            .and_then(json::Value::as_str)
+            .map(String::from)
+            .unwrap_or_else(|| String::from("host error")))
     }
 }
 
@@ -118,7 +125,7 @@ pub fn secret_set(key: &str, value: &str) {
     p.insert("value", json::Value::str(value));
     let _ = host("secret.set", p);
 }
-pub fn http(url: &str, method: &str, body: Option<&str>) -> Result<json::Value, &'static str> {
+pub fn http(url: &str, method: &str, body: Option<&str>) -> Result<json::Value, String> {
     let mut p = json::Value::object();
     p.insert("url", json::Value::str(url));
     p.insert("method", json::Value::str(method));

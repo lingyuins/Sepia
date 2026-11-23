@@ -280,8 +280,8 @@ pub fn ui_document(record: &PluginRecord, session: &str) -> Result<String, Strin
             let bytes = base64::engine::general_purpose::STANDARD
                 .decode(encoded.as_str().unwrap_or_default())
                 .map_err(|_| format!("ui asset {path} is not valid base64"))?;
-            let text = String::from_utf8(bytes)
-                .map_err(|_| format!("ui asset {path} is not utf-8"))?;
+            let text =
+                String::from_utf8(bytes).map_err(|_| format!("ui asset {path} is not utf-8"))?;
             let inline = format!("<script>{text}</script>");
             document = document.replace(&format!("<script src=\"{path}\"></script>"), &inline);
             document = document.replace(&format!("<script src='{path}'></script>"), &inline);
@@ -658,10 +658,15 @@ async fn dispatch_capability(
     match capability {
         "kv.get" => Ok(json!({ "value": store.plugin_kv_get(plugin_id, &key).await? })),
         "kv.set" => {
-            let value = payload
-                .get("value")
-                .map(|value| value.to_string())
-                .unwrap_or_default();
+            // Store the value verbatim: strings raw (matching kv.get, which
+            // returns a raw string), non-strings as compact JSON. Using
+            // Value::to_string() here would JSON-quote strings ("\"1\""),
+            // breaking numeric counters and round-trips.
+            let value = match payload.get("value") {
+                Some(Value::String(text)) => text.clone(),
+                Some(other) => other.to_string(),
+                None => String::new(),
+            };
             store.plugin_kv_set(plugin_id, &key, &value).await?;
             Ok(json!({}))
         }

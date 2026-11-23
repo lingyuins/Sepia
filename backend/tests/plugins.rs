@@ -264,11 +264,11 @@ async fn plugin_install_enable_hooks_and_lifecycle() {
     assert_eq!(listed[0]["has_ui"], true);
     assert!(listed[0].get("wasm").is_none());
 
-    // Configure model rewrite + enable.
+    // Opt into the rewriting hooks (safe-by-default plugin) + enable.
     client
         .put(format!("{base}/api/v1/plugins/echo/config"))
         .header("cookie", &cookie)
-        .json(&json!({"model": "gpt-a"}))
+        .json(&json!({"model": "gpt-a", "add_header": true, "response_marker": " [plugin]"}))
         .send()
         .await
         .unwrap();
@@ -295,7 +295,7 @@ async fn plugin_install_enable_hooks_and_lifecycle() {
     let recorded = hits.0.lock().unwrap().clone();
     assert_eq!(recorded.len(), 1);
     assert_eq!(
-        recorded[0].0, "echo",
+        recorded[0].0, "example",
         "upstream rewrite header must reach upstream"
     );
 
@@ -535,6 +535,14 @@ async fn plugin_backed_provider_discovers_and_serves() {
         "{}",
         installed.text().await.unwrap()
     );
+    // Opt into the response marker so the synthetic reply gets rewritten.
+    client
+        .put(format!("{base}/api/v1/plugins/echo/config"))
+        .header("cookie", &cookie)
+        .json(&json!({"response_marker": " [plugin]"}))
+        .send()
+        .await
+        .unwrap();
     client
         .post(format!("{base}/api/v1/plugins/echo/enabled"))
         .header("cookie", &cookie)
@@ -629,4 +637,160 @@ async fn anonymous_plugin_routes_are_protected() {
         .await
         .unwrap();
     assert_eq!(response.status(), 401);
+}
+
+#[tokio::test]
+async fn enabled_plugin_without_config_is_transparent() {
+    let (upstream, hits) = chat_upstream().await;
+    let directory = tempfile::tempdir().unwrap();
+    let store = Store::connect(&directory.path().join("noop.db"))
+        .await
+        .unwrap();
+    let provider = store
+        .create_provider(
+            NewProvider {
+                name: "up".into(),
+                protocol: ProviderProtocol::OpenAI,
+                endpoint: format!("http://{upstream}/v1"),
+                models: vec!["gpt-a".into()],
+                plugin_id: None,
+                mode: "single".into(),
+            },
+            "gpt-key",
+            &[],
+            &KeyStore::testing(),
+        )
+        .await
+        .unwrap();
+    store
+        .create_route(NewRoute {
+            slug: "chat".into(),
+            name: "chat".into(),
+            description: String::new(),
+            patterns: vec!["gpt-a".into()],
+            provider_id: provider.id,
+            model: "gpt-a".into(),
+            is_default: true,
+            list_members: true,
+            candidates: vec![(provider.id, "gpt-a".into())],
+        })
+        .await
+        .unwrap();
+    let key = store
+        .create_client_key(sepia_gateway::UpsertClientKey {
+            name: "k".into(),
+            models: vec!["*".into()],
+            token_limit: 0,
+            max_amount_micros: 0,
+            rpm: 0,
+            tpm: 0,
+            expires_at: None,
+            secret: None,
+        })
+        .await
+        .unwrap();
+    let state = AppState::for_testing(store.clone()).await;
+    let address = serve(app(state.clone())).await;
+    let base = format!("http://{address}");
+    let (client, cookie) = admin(address, &state).await;
+    let installed = install(
+        &client,
+        &base,
+        &cookie,
+        package_bytes(&manifest_json(), Some("<html>echo</html>")),
+    )
+    .await;
+    assert_eq!(
+        installed.status(),
+        200,
+        "{}",
+        installed.text().await.unwrap()
+    );
+    // Enable WITHOUT any config: every rewriting hook must be a no-op.
+    client
+        .post(format!("{base}/api/v1/plugins/echo/enabled"))
+        .header("cookie", &cookie)
+        .json(&json!({"enabled": true}))
+        .send()
+        .await
+        .unwrap();
+    let chat = client
+        .post(format!("{base}/v1/chat/completions"))
+        .bearer_auth(&key.plaintext)
+        .json(&json!({"model":"gpt-a","messages":[{"role":"user","content":"hi"}]}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(chat.status(), 200, "{}", chat.text().await.unwrap());
+    let body: Value = chat.json().await.unwrap();
+    // No response_marker configured -> content is the bare upstream reply.
+    assert_eq!(body["choices"][0]["message"]["content"], "pong");
+    let recorded = hits.0.lock().unwrap().clone();
+    assert_eq!(recorded.len(), 1);
+    // No add_header configured -> the upstream rewrite header is absent.
+    assert_eq!(
+        recorded[0].0, "",
+        "unconfigured plugin must not add headers"
+    );
+    // No model rewrite configured -> the upstream saw the original model.
+    assert_eq!(recorded[0].1["model"], "gpt-a");
+}
+
+#[tokio::test]
+async fn rpc_secret_roundtrip_and_http_origin_guard() {
+    let directory = tempfile::tempdir().unwrap();
+    let store = Store::connect(&directory.path().join("caps.db"))
+        .await
+        .unwrap();
+    let state = AppState::for_testing(store.clone()).await;
+    let address = serve(app(state.clone())).await;
+    let base = format!("http://{address}");
+    let (client, cookie) = admin(address, &state).await;
+    let installed = install(
+        &client,
+        &base,
+        &cookie,
+        package_bytes(&manifest_json(), Some("<html>echo</html>")),
+    )
+    .await;
+    assert_eq!(
+        installed.status(),
+        200,
+        "{}",
+        installed.text().await.unwrap()
+    );
+    client
+        .post(format!("{base}/api/v1/plugins/echo/enabled"))
+        .header("cookie", &cookie)
+        .json(&json!({"enabled": true}))
+        .send()
+        .await
+        .unwrap();
+    // secret capability: store then read back through the guest.
+    let stored: Value = client
+        .post(format!("{base}/api/v1/plugins/echo/rpc/store-secret"))
+        .header("cookie", &cookie)
+        .json(&json!({"value": "round-trip"}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(stored["stored"], json!(true));
+    assert_eq!(stored["readback"], "round-trip");
+    // http capability: an origin outside manifest.http_origins is rejected
+    // gracefully (the guest returns ok:false instead of trapping).
+    let blocked: Value = client
+        .post(format!("{base}/api/v1/plugins/echo/rpc/fetch"))
+        .header("cookie", &cookie)
+        .json(&json!({"url": "https://not-allowed.example/"}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(blocked["ok"], json!(false));
+    assert!(blocked["error"].as_str().unwrap().contains("http_origins"));
 }
