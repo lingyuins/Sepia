@@ -7,19 +7,26 @@ pub struct RequestGuard {
     reservation: String,
     started: std::time::Instant,
     state: Arc<Mutex<GuardState>>,
+    events: crate::events::Events,
 }
 #[derive(Clone)]
 struct GuardState {
     completed: bool,
 }
 impl RequestGuard {
-    pub fn new(store: Store, request_id: String, reservation: String) -> Self {
+    pub fn new(
+        store: Store,
+        request_id: String,
+        reservation: String,
+        events: crate::events::Events,
+    ) -> Self {
         Self {
             store,
             request_id,
             reservation,
             started: std::time::Instant::now(),
             state: Arc::new(Mutex::new(GuardState { completed: false })),
+            events,
         }
     }
     pub async fn complete(
@@ -58,6 +65,7 @@ impl RequestGuard {
             .lock()
             .map_err(|_| "request state poisoned")?
             .completed = true;
+        self.events.publish(crate::events::REQUESTS_CHANGED);
         Ok(())
     }
     pub fn reservation(&self) -> &str {
@@ -77,12 +85,14 @@ impl Drop for RequestGuard {
         let store = self.store.clone();
         let request_id = self.request_id.clone();
         let reservation = self.reservation.clone();
+        let events = self.events.clone();
         if let Ok(runtime) = tokio::runtime::Handle::try_current() {
             runtime.spawn(async move {
                 let _ = store.settle_quota(&reservation, 0).await;
                 let _ = store
                     .finish_request(&request_id, "cancelled", 0, 0, 0)
                     .await;
+                events.publish(crate::events::REQUESTS_CHANGED);
             });
         }
     }

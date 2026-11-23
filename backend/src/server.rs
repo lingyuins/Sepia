@@ -37,6 +37,8 @@ pub struct AppState {
     pub metadata_source: String,
     pub plugins: crate::plugin::SharedRuntime,
     pub routing_stats: std::sync::Arc<crate::strategy::RoutingStats>,
+    /// Workspace change fan-out for the console SSE stream.
+    pub events: crate::events::Events,
 }
 impl AppState {
     /// The shared outbound client, rebuilt only when the configured TCP
@@ -63,6 +65,13 @@ impl AppState {
             }
         }
     }
+    /// Marks a request finished before any upstream attempt was recorded and
+    /// notifies open consoles. The pre-relay rejection paths use this instead
+    /// of `store.finish_request` so the request list refreshes live.
+    pub async fn finish_request(&self, request_id: &str, status: &str) {
+        let _ = self.store.finish_request(request_id, status, 0, 0, 0).await;
+        self.events.publish(crate::events::REQUESTS_CHANGED);
+    }
     pub async fn for_testing(store: Store) -> Self {
         Self {
             store: store.clone(),
@@ -81,6 +90,7 @@ impl AppState {
             metadata_source: crate::metadata::DEFAULT_SOURCE.into(),
             plugins: crate::plugin::shared(crate::plugin::PluginRuntime::new().unwrap()),
             routing_stats: crate::strategy::RoutingStats::shared(),
+            events: Default::default(),
         }
     }
 }
@@ -526,10 +536,7 @@ pub async fn relay(
     let mut request = match decoded_request {
         Ok(request) => request,
         Err(message) => {
-            let _ = state
-                .store
-                .finish_request(&request_id, "invalid", 0, 0, 0)
-                .await;
+            state.finish_request(&request_id, "invalid").await;
             return error(StatusCode::BAD_REQUEST, message);
         }
     };
@@ -539,41 +546,26 @@ pub async fn relay(
     match crate::plugin::rewrite_request(&state, &request).await {
         Ok(rewritten) => request = rewritten,
         Err(message) => {
-            let _ = state
-                .store
-                .finish_request(&request_id, "failed", 0, 0, 0)
-                .await;
+            state.finish_request(&request_id, "failed").await;
             return error(StatusCode::BAD_GATEWAY, message);
         }
     }
     let snapshot = state.snapshots.get();
     if !model_allowed(&client, &snapshot.routes, &request.model) {
-        let _ = state
-            .store
-            .finish_request(&request_id, "denied", 0, 0, 0)
-            .await;
+        state.finish_request(&request_id, "denied").await;
         return error(StatusCode::FORBIDDEN, "model is not allowed by this key");
     }
-    let _ = state
-        .store
-        .finish_request(&request_id, "routing", 0, 0, 0)
-        .await;
+    state.finish_request(&request_id, "routing").await;
     let started = Instant::now();
     let Some(route) = route_for_model(&snapshot.routes, &request.model) else {
-        let _ = state
-            .store
-            .finish_request(&request_id, "no_route", 0, 0, 0)
-            .await;
+        state.finish_request(&request_id, "no_route").await;
         return error(StatusCode::NOT_FOUND, "no route for model");
     };
     let candidates =
         match crate::plugin::filter_candidates(&state, &request.model, &route.candidates).await {
             Ok(candidates) => candidates,
             Err(message) => {
-                let _ = state
-                    .store
-                    .finish_request(&request_id, "failed", 0, 0, 0)
-                    .await;
+                state.finish_request(&request_id, "failed").await;
                 return error(StatusCode::BAD_GATEWAY, message);
             }
         };
@@ -619,10 +611,7 @@ pub async fn relay(
         .await
         .is_err()
     {
-        let _ = state
-            .store
-            .finish_request(&request_id, "failed", 0, 0, 0)
-            .await;
+        state.finish_request(&request_id, "failed").await;
         return error(
             StatusCode::INTERNAL_SERVER_ERROR,
             "observability unavailable",
@@ -639,22 +628,20 @@ pub async fn relay(
     {
         Ok(id) => id,
         Err(message) if message.contains("quota") || message.contains("pricing") => {
-            let _ = state
-                .store
-                .finish_request(&request_id, "quota_denied", 0, 0, 0)
-                .await;
+            state.finish_request(&request_id, "quota_denied").await;
             return error(StatusCode::TOO_MANY_REQUESTS, message);
         }
         Err(_) => {
-            let _ = state
-                .store
-                .finish_request(&request_id, "failed", 0, 0, 0)
-                .await;
+            state.finish_request(&request_id, "failed").await;
             return error(StatusCode::INTERNAL_SERVER_ERROR, "quota unavailable");
         }
     };
-    let guard =
-        crate::lifecycle::RequestGuard::new(state.store.clone(), request_id.clone(), reservation);
+    let guard = crate::lifecycle::RequestGuard::new(
+        state.store.clone(),
+        request_id.clone(),
+        reservation,
+        state.events.clone(),
+    );
     let providers = &snapshot.providers;
     let mut attempts_used = 0;
     'candidates: for (provider_id, model) in &candidates {

@@ -103,6 +103,7 @@ async fn main() -> Result<(), String> {
                 .unwrap_or_else(|_| sepia_gateway::metadata::DEFAULT_SOURCE.into()),
             plugins,
             routing_stats: sepia_gateway::strategy::RoutingStats::shared(),
+            events: sepia_gateway::events::Events::new(),
         })
         .into_make_service_with_connect_info::<std::net::SocketAddr>(),
     )

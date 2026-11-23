@@ -7,6 +7,7 @@ pub(crate) mod client_ip;
 pub mod controls;
 pub mod crypto;
 pub mod discovery;
+pub mod events;
 pub mod lifecycle;
 pub mod metadata;
 pub mod observability;

@@ -667,18 +667,12 @@ async fn forward(
             .await;
     }
     if pinned.is_none() && !model_allowed(&client, &snapshot.routes, &model) {
-        let _ = state
-            .store
-            .finish_request(&request_id, "denied", 0, 0, 0)
-            .await;
+        state.finish_request(&request_id, "denied").await;
         return error(StatusCode::FORBIDDEN, "model is not allowed by this key");
     }
     let route = route_for_model(&snapshot.routes, &model);
     if pinned.is_none() && route.is_none() {
-        let _ = state
-            .store
-            .finish_request(&request_id, "no_route", 0, 0, 0)
-            .await;
+        state.finish_request(&request_id, "no_route").await;
         return error(StatusCode::NOT_FOUND, "no route for model");
     }
     let route_label = route
@@ -718,10 +712,7 @@ async fn forward(
         .await
         .is_err()
     {
-        let _ = state
-            .store
-            .finish_request(&request_id, "failed", 0, 0, 0)
-            .await;
+        state.finish_request(&request_id, "failed").await;
         return error(
             StatusCode::INTERNAL_SERVER_ERROR,
             "observability unavailable",
@@ -734,22 +725,20 @@ async fn forward(
     {
         Ok(id) => id,
         Err(message) if message.contains("quota") || message.contains("pricing") => {
-            let _ = state
-                .store
-                .finish_request(&request_id, "quota_denied", 0, 0, 0)
-                .await;
+            state.finish_request(&request_id, "quota_denied").await;
             return error(StatusCode::TOO_MANY_REQUESTS, message);
         }
         Err(_) => {
-            let _ = state
-                .store
-                .finish_request(&request_id, "failed", 0, 0, 0)
-                .await;
+            state.finish_request(&request_id, "failed").await;
             return error(StatusCode::INTERNAL_SERVER_ERROR, "quota unavailable");
         }
     };
-    let guard =
-        crate::lifecycle::RequestGuard::new(state.store.clone(), request_id.clone(), reservation);
+    let guard = crate::lifecycle::RequestGuard::new(
+        state.store.clone(),
+        request_id.clone(),
+        reservation,
+        state.events.clone(),
+    );
     let providers = &snapshot.providers;
     let mut attempts_used = 0;
     'candidates: for (provider_id, model, pinned_key) in &targets {

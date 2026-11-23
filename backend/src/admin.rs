@@ -6,11 +6,15 @@ use axum::{
     extract::{Path, Query, State},
     http::{HeaderMap, StatusCode, header},
     middleware::{self, Next},
-    response::{IntoResponse, Response},
+    response::{
+        IntoResponse, Response,
+        sse::{Event, Sse},
+    },
     routing::{get, post},
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
+use std::convert::Infallible;
 #[derive(Deserialize)]
 struct UserInput {
     username: String,
@@ -1654,9 +1658,101 @@ async fn plugin_rpc(
         Err(message) => error(StatusCode::BAD_GATEWAY, message),
     }
 }
+/// Management mutation path prefixes → workspace domains the console re-reads.
+/// Mirrors the `run(...)` domain sets used by the frontend call sites; paths
+/// outside this table (`/auth`, `/users`, `/update`, `/ai/pool`) do not change
+/// workspace data, so they publish nothing.
+const MUTATION_DOMAINS: &[(&str, &[&str])] = &[
+    ("/providers", &["providers", "routes"]),
+    ("/routes", &["routes"]),
+    ("/models/pricing", &["providers", "routes"]),
+    ("/models/metadata", &["providers", "routes"]),
+    ("/keys", &["keys"]),
+    ("/groups", &["groups"]),
+    ("/model-groups", &["modelGroups"]),
+    ("/settings", &["settings"]),
+    ("/plugins", &["plugins"]),
+];
+
+fn mutation_domains(path: &str, method: &axum::http::Method) -> Option<&'static [&'static str]> {
+    if path == "/requests" && method == axum::http::Method::DELETE {
+        return Some(crate::events::REQUESTS_CHANGED);
+    }
+    // `/providers/test` and `/routes/{id}/test` only probe upstreams.
+    if path.ends_with("/test") {
+        return None;
+    }
+    MUTATION_DOMAINS.iter().find_map(|(prefix, domains)| {
+        (path == *prefix
+            || path
+                .strip_prefix(prefix)
+                .is_some_and(|rest| rest.starts_with('/')))
+        .then_some(*domains)
+    })
+}
+
+/// Announces the workspace domains a successful management mutation invalidated.
+async fn publish_mutation(
+    State(state): State<AppState>,
+    request: axum::extract::Request,
+    next: Next,
+) -> Response {
+    let method = request.method().clone();
+    let raw = request.uri().path().to_string();
+    let response = next.run(request).await;
+    // As in `auth`, the router may or may not have stripped the nest prefix.
+    let path = raw.strip_prefix("/api/v1").unwrap_or(&raw);
+    if method != axum::http::Method::GET
+        && response.status().is_success()
+        && let Some(domains) = mutation_domains(path, &method)
+    {
+        state.events.publish(domains);
+    }
+    response
+}
+
+/// Server-Sent Events stream of workspace change hints (`{domains:[...]}`).
+/// An empty `domains` list means "refresh everything"; it is also sent when a
+/// subscriber lags behind the broadcast channel. Keep-alive comments hold the
+/// connection through idle proxies.
+async fn events(
+    State(state): State<AppState>,
+) -> Sse<impl futures_util::Stream<Item = Result<Event, Infallible>>> {
+    let mut receiver = state.events.subscribe();
+    let stream = async_stream::stream! {
+        let mut keep_alive = tokio::time::interval(std::time::Duration::from_secs(15));
+        keep_alive.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        // Skip the interval's immediate first tick so a quiet stream waits a
+        // full 15 seconds before its first keep-alive.
+        keep_alive.tick().await;
+        loop {
+            tokio::select! {
+                received = receiver.recv() => match received {
+                    Ok(domains) => {
+                        yield Ok::<_, Infallible>(
+                            Event::default().data(json!({"domains": domains}).to_string()),
+                        );
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                        yield Ok::<_, Infallible>(
+                            Event::default().data(json!({"domains": []}).to_string()),
+                        );
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                },
+                _ = keep_alive.tick() => {
+                    yield Ok::<_, Infallible>(Event::default().comment("keep-alive"));
+                }
+            }
+        }
+    };
+    Sse::new(stream)
+}
+
 pub fn router(state: AppState) -> Router<AppState> {
     let protected = Router::new()
         .route("/providers", get(providers).post(create_provider))
+        .route("/events", get(events))
         .route("/providers/test", post(preview_provider_models))
         .route("/providers/{id}", axum::routing::put(update_provider))
         .route("/routes/{id}", axum::routing::put(update_route))
@@ -1710,6 +1806,10 @@ pub fn router(state: AppState) -> Router<AppState> {
         .route("/users/{id}", axum::routing::delete(delete_user))
         .merge(crate::webauthn::protected_routes())
         .merge(crate::ai::routes())
+        .route_layer(middleware::from_fn_with_state(
+            state.clone(),
+            publish_mutation,
+        ))
         .route_layer(middleware::from_fn_with_state(state.clone(), auth));
     Router::new()
         .route("/auth/status", get(status))

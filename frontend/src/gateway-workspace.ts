@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ApiError, api } from './api'
+import { LiveRefreshCoalescer, parseLiveEvent, type LiveRefreshDomains } from './live-refresh'
 import { defaultSettings } from './settings'
 import { applyTheme } from './theme'
 import type { Settings } from './workspace'
@@ -49,7 +50,9 @@ export function useGatewayWorkspace(): GatewayWorkspace {
   const refresh = useCallback(async (
     period = periodRef.current,
     domains: readonly WorkspaceDomain[] = workspaceDomains,
+    options: { background?: boolean } = {},
   ) => {
+    const background = options.background === true
     periodRef.current = period
     const current = ++sequence.current
     const includeVersion = domains.length === workspaceDomains.length && !dataRef.current.version
@@ -65,11 +68,30 @@ export function useGatewayWorkspace(): GatewayWorkspace {
       setError('')
     } catch (cause) {
       if (current !== sequence.current) return
+      // Only an expired session changes the gate. A background (event-driven)
+      // refresh otherwise keeps the last good data and never drops a working
+      // console into the offline screen.
+      if (cause instanceof ApiError && cause.status === 401) {
+        setSession(null)
+        setStatus('login')
+        throw cause
+      }
+      if (background) throw cause
       setError(cause instanceof Error ? cause.message : 'Gateway unavailable')
       setStatus('error')
       throw cause
     }
   }, [])
+  // Live event pushes and mutation-driven `run` refreshes share one debounce
+  // pipeline, so a burst of pushes (or a push racing its own mutation) costs a
+  // single workspace read.
+  const live = useMemo(() => new LiveRefreshCoalescer(
+    (domains, background) => refresh(
+      periodRef.current,
+      domains === 'all' ? workspaceDomains : domains,
+      { background },
+    ),
+  ), [refresh])
   const checkGateway = useCallback(async (): Promise<GatewayStatus> => {
     const current = ++sequence.current
     setError('')
@@ -101,9 +123,9 @@ export function useGatewayWorkspace(): GatewayWorkspace {
     domains?: readonly WorkspaceDomain[],
   ) => {
     const result = await operation()
-    await refresh(periodRef.current, domains)
+    await live.schedule(domains ?? 'all', false)
     return result
-  }, [refresh])
+  }, [live])
   const login = useCallback(async (username: string, password: string) => {
     ++sequence.current
     const info = await api<ConsoleSession>('/api/v1/auth/login', {
@@ -130,6 +152,51 @@ export function useGatewayWorkspace(): GatewayWorkspace {
     setSession(null)
     setStatus('login')
   }, [])
+
+  // Subscribe to gateway change hints once a session exists; EventSource
+  // reconnects on its own, and a re-open means events may have been missed, so
+  // it asks for one full refresh.
+  const liveSession = session !== null && status !== 'login'
+  useEffect(() => {
+    if (!liveSession) return
+    const dirty = new Set<WorkspaceDomain>()
+    let dirtyAll = false
+    let connected = false
+    const source = new EventSource('/api/v1/events')
+    const request = (domains: LiveRefreshDomains) => {
+      if (document.hidden) {
+        if (domains === 'all') dirtyAll = true
+        else for (const domain of domains) dirty.add(domain)
+        return
+      }
+      void live.schedule(domains).catch(() => {
+        // Background failures keep the last good data; the next event or a
+        // reconnect retries. A 401 has already moved the console to login.
+      })
+    }
+    source.onopen = () => {
+      if (connected) request('all')
+      connected = true
+    }
+    source.onmessage = (message) => {
+      const domains = parseLiveEvent(message.data)
+      if (domains !== null) request(domains)
+    }
+    const onVisibility = () => {
+      if (document.hidden) return
+      if (!dirtyAll && dirty.size === 0) return
+      const domains: LiveRefreshDomains = dirtyAll ? 'all' : [...dirty]
+      dirty.clear()
+      dirtyAll = false
+      request(domains)
+    }
+    document.addEventListener('visibilitychange', onVisibility)
+    return () => {
+      document.removeEventListener('visibilitychange', onVisibility)
+      source.close()
+      live.cancel()
+    }
+  }, [live, liveSession])
 
   const setSettings = useCallback((update: React.SetStateAction<Settings>) => {
     setData((current) => {
@@ -189,7 +256,7 @@ export interface GatewayWorkspace extends WorkspaceData {
   session: ConsoleSession | null
   setSettings: React.Dispatch<React.SetStateAction<Settings>>
   setChannelGroups: React.Dispatch<React.SetStateAction<WorkspaceData['channelGroups']>>
-  refresh: (period?: string, domains?: readonly WorkspaceDomain[]) => Promise<void>
+  refresh: (period?: string, domains?: readonly WorkspaceDomain[], options?: { background?: boolean }) => Promise<void>
   checkGateway: () => Promise<GatewayStatus>
   run: <Value>(operation: () => Promise<Value>, domains?: readonly WorkspaceDomain[]) => Promise<Value>
   login: (username: string, password: string) => Promise<void>

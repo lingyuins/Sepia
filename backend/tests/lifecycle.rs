@@ -29,6 +29,7 @@ async fn dropping_request_guard_releases_quota_and_marks_cancelled() {
             store.clone(),
             request.clone(),
             reservation,
+            Default::default(),
         );
     }
     for _ in 0..30 {
