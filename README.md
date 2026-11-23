@@ -339,7 +339,7 @@ Vite 将 `/api` 和 `/v1` 代理到 `http://127.0.0.1:5000`。可通过 `SEPIA_G
 | `backend/` | Rust 网关与集成测试 |
 | `backend/migrations/` | SQLite 版本化迁移（编译进发布二进制） |
 | `backend/plugin-sdk/` | no_std WASM 插件 SDK（wasm32-unknown-unknown） |
-| `plugin-examples/` | 示例插件源码（独立 crate，可拆分为单独仓库） |
+| `plugin-examples/` | 示例插件源码（独立仓库；本地检出目录不纳入本仓库跟踪） |
 | `Dockerfile` | 双架构、非 root 容器构建 |
 | `compose.yaml` | 本机回环端口与命名卷部署 |
 | `scripts/` | 原生包打包与解压启动检查 |
@@ -711,7 +711,7 @@ Vite proxies `/api` and `/v1` to `http://127.0.0.1:5000`. Set `SEPIA_GATEWAY_URL
 | `backend/` | Rust gateway and integration tests |
 | `backend/migrations/` | Versioned SQLite migrations embedded in release binaries |
 | `backend/plugin-sdk/` | no_std WASM plugin SDK (wasm32-unknown-unknown) |
-| `plugin-examples/` | Example plugin sources (standalone crate, splittable into its own repo) |
+| `plugin-examples/` | Example plugin sources (separate repository; a local checkout is not tracked here) |
 | `Dockerfile` | Multi-architecture non-root container build |
 | `compose.yaml` | Loopback-only port and named-volume deployment |
 | `scripts/` | Native archive packaging and extracted-startup checks |
