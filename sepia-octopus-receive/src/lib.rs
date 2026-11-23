@@ -22,6 +22,14 @@ pub extern "Rust" fn dispatch(event: &str, payload: &Value, _config: &Value) -> 
             }
             let body = payload.get("body").cloned().unwrap_or(Value::object());
             let admin_path = body.get("path").and_then(Value::as_str).unwrap_or("");
+            // Defense in depth: only the management API namespace is proxied.
+            // The host also validates the path, but reject anything else here.
+            if !admin_path.starts_with("/api/v1/") {
+                let mut out = Value::object();
+                out.insert("status", Value::num(400));
+                out.insert("body", Value::str("only /api/v1/ paths may be proxied"));
+                return out;
+            }
             let method = body.get("method").and_then(Value::as_str).unwrap_or("POST");
             let mut request = Value::object();
             request.insert("path", Value::str(admin_path));

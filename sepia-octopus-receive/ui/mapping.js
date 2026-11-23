@@ -1,8 +1,10 @@
 // Octopus backup → Sepia management-API request mapping (pure, testable).
 // All functions run in the sandboxed plugin UI; the guest only forwards the
 // resulting {path, method, body} requests through the admin.request capability.
-// Provider/route references use names in the plan and are resolved to ids at
-// execution time (resolveCandidates), because ids only exist after creation.
+//
+// References are resolved to provider ids at execution time: mapProviders
+// returns a channel→name map, the UI swaps it for channel→id once providers
+// exist, and mapRoutes/mapPrices then emit id-based requests directly.
 
 var OctopusMapping = (function () {
 function slugify(name) {
@@ -23,10 +25,26 @@ function uniqueSlug(name, used) {
   return slug
 }
 
-// Octopus outbound type → Sepia provider protocol. 1 = OpenAI Responses;
-// everything else in the backup (0/5/6) is OpenAI-compatible chat.
+// Append " (n)" until the name is unique (providers.name is UNIQUE).
+function uniqueName(name, used) {
+  let candidate = name
+  let n = 2
+  while (used.has(candidate)) candidate = `${name} (${n++})`
+  used.add(candidate)
+  return candidate
+}
+
+// Octopus outbound type → Sepia provider protocol.
+// 0 chat / 5 embedding / 6 mimo → openai; 1 response → openai-responses;
+// 2 anthropic; 3 gemini. Types without a Sepia equivalent return null (skip).
 function protocolFor(type) {
-  return type === 1 ? 'openai-responses' : 'openai'
+  switch (type) {
+    case 0: case 5: case 6: return 'openai'
+    case 1: return 'openai-responses'
+    case 2: return 'anthropic'
+    case 3: return 'gemini'
+    default: return null
+  }
 }
 
 function splitModels(value) {
@@ -44,12 +62,14 @@ function priceMicros(value) {
 }
 
 // Octopus group mode → Sepia routing strategy id.
+// 3 failover → priority (saved order); 5 auto → priority (Sepia has no
+// success-rate strategy; documented approximation).
 function strategyFor(mode) {
   switch (mode) {
     case 1: return 'round-robin'
     case 2: return 'random'
     case 4: return 'weighted'
-    default: return 'priority' // 3 failover, 5 auto
+    default: return 'priority'
   }
 }
 
@@ -64,11 +84,36 @@ function channelKeys(backup, channelId) {
     .sort((a, b) => (a.priority || 0) - (b.priority || 0))
 }
 
+// Convert a simple Octopus match_regex into Sepia glob patterns. Only literal
+// alternations and a trailing ".*" are representable; real regex metacharacters
+// return null so the caller keeps the slug pattern and discloses the loss.
+function regexToGlobs(regex) {
+  let source = String(regex || '').trim()
+  if (!source) return null
+  source = source.replace(/^\^/, '').replace(/\$$/, '')
+  if (/[+?()[\]{}\\]/.test(source) || /\.(?!\*$)/.test(source.replace(/\.\*$/, ''))) return null
+  const branches = source.split('|')
+  const globs = []
+  for (const branch of branches) {
+    const trimmed = branch.trim()
+    if (!trimmed) return null
+    if (/[.*]/.test(trimmed.replace(/\.\*$/, ''))) return null
+    globs.push(trimmed.endsWith('.*') ? trimmed.slice(0, -2) + '*' : trimmed)
+  }
+  return globs
+}
+
 // channels + channel_keys + channel_groups → group/provider create requests.
-// providerMap maps Octopus channel id → the Sepia provider name used later.
+// Existing providers (by name) and groups (by id) are reused, making re-imports
+// idempotent. providerMap maps Octopus channel id → the Sepia provider name.
 function mapProviders(backup, existingProviders, existingGroups) {
   const requests = []
+  const skipped = []
   const providerMap = new Map()
+  const existingByKey = new Map((existingProviders || []).map((provider) => [`${provider.name}\u0000${provider.endpoint}`, provider]))
+  // A renamed collision (e.g. "Dup (2)") no longer matches the raw channel name,
+  // so also index by endpoint: one endpoint maps to exactly one provider.
+  const existingByEndpoint = new Map((existingProviders || []).map((provider) => [provider.endpoint, provider]))
   const usedNames = new Set((existingProviders || []).map((provider) => provider.name))
   const knownGroups = new Set((existingGroups || []).map((group) => group.id))
 
@@ -81,43 +126,48 @@ function mapProviders(backup, existingProviders, existingGroups) {
   }
 
   for (const channel of backup.channels || []) {
+    const rawName = String(channel.name || `channel-${channel.id}`).trim() || `channel-${channel.id}`
     const urls = baseUrls(channel)
     const keys = channelKeys(backup, channel.id)
     const models = splitModels(channel.model)
-    if (urls.length === 0 || keys.length === 0 || models.length === 0) continue
-    let name = String(channel.name || `channel-${channel.id}`).trim() || `channel-${channel.id}`
-    if (usedNames.has(name)) name = `${name} (${channel.id})`
-    usedNames.add(name)
+    const protocol = protocolFor(channel.type)
+    if (protocol === null) { skipped.push({ kind: 'provider', name: rawName, reason: `unsupported channel type ${channel.type}` }); continue }
+    if (urls.length === 0 || keys.length === 0 || models.length === 0) { skipped.push({ kind: 'provider', name: rawName, reason: 'missing endpoint, key or model' }); continue }
+    const reuse = existingByKey.get(`${rawName}\u0000${urls[0]}`) || existingByEndpoint.get(urls[0])
+    if (reuse) { providerMap.set(channel.id, reuse.name); continue }
+    const name = uniqueName(rawName, usedNames)
     providerMap.set(channel.id, name)
     const groupId = channel.group_id != null ? `octopus-${channel.group_id}` : 'official'
-    const protocol = protocolFor(channel.type)
     const enabled = channel.enabled !== false
+    const secrets = keys.map((key) => key.channel_key)
     if (urls.length === 1) {
       requests.push({
         path: '/api/v1/providers', method: 'POST', kind: 'provider', name,
-        body: { name, protocol, endpoint: urls[0], models, secret: keys[0].channel_key, secrets: keys.map((key) => key.channel_key), group_id: groupId, enabled, mode: 'single' },
+        body: { name, protocol, endpoint: urls[0], models, secret: secrets[0], secrets, group_id: groupId, enabled, mode: 'single' },
       })
     } else {
       requests.push({
         path: '/api/v1/providers', method: 'POST', kind: 'provider', name,
         body: {
-          name, protocol, endpoint: urls[0], models, group_id: groupId, enabled, mode: 'unified',
-          endpoints: urls.map((url, index) => ({
-            endpoint: url,
-            secrets: index === 0 ? keys.map((key) => key.channel_key) : [keys[0].channel_key],
-          })),
+          name, protocol, endpoint: urls[0], models, secret: secrets[0], secrets, group_id: groupId, enabled, mode: 'unified',
+          // Every address gets the full key set (Octopus keys are channel-level).
+          // Top-level secret/secrets mirror the first address (backend requires them).
+          endpoints: urls.map((url) => ({ endpoint: url, secrets })),
         },
       })
     }
   }
-  return { requests, providerMap }
+  return { requests, providerMap, skipped }
 }
 
-// groups + group_items → route create requests. Candidates carry provider
-// names; resolveCandidates turns them into [provider_id, model] tuples.
+// groups + group_items → route create requests. providerMap holds provider ids
+// at execution time, so candidates are emitted as [provider_id, model] tuples.
+// Existing routes (by slug) are reused. Non-chat endpoint types are skipped.
 function mapRoutes(backup, providerMap, existingRoutes) {
   const requests = []
-  const usedSlugs = new Set((existingRoutes || []).map((route) => route.slug))
+  const skipped = []
+  const existingSlugs = new Set((existingRoutes || []).map((route) => route.slug))
+  const usedSlugs = new Set(existingSlugs)
   const itemsByGroup = new Map()
   for (const item of backup.group_items || []) {
     const list = itemsByGroup.get(item.group_id) || []
@@ -125,45 +175,40 @@ function mapRoutes(backup, providerMap, existingRoutes) {
     itemsByGroup.set(item.group_id, list)
   }
   for (const group of backup.groups || []) {
+    const endpointType = String(group.endpoint_type || 'chat')
+    if (endpointType !== 'chat') { skipped.push({ kind: 'route', name: String(group.name || ''), reason: `endpoint type ${endpointType} not supported` }); continue }
     const items = (itemsByGroup.get(group.id) || []).slice().sort((a, b) => (a.priority || 0) - (b.priority || 0))
     const candidates = []
     const weights = []
     for (const item of items) {
-      const providerName = providerMap.get(item.channel_id)
-      if (!providerName || !item.model_name) continue
-      candidates.push({ provider: providerName, model: String(item.model_name) })
+      const providerId = providerMap.get(item.channel_id)
+      if (providerId == null || !item.model_name) continue
+      candidates.push([providerId, String(item.model_name)])
       weights.push(Math.min(100, Math.max(1, Number(item.weight) || 1)))
     }
-    if (candidates.length === 0) continue
+    if (candidates.length === 0) { skipped.push({ kind: 'route', name: String(group.name || ''), reason: 'no resolvable candidates' }); continue }
+    const baseSlug = slugify(group.name)
+    if (existingSlugs.has(baseSlug)) continue
     const slug = uniqueSlug(group.name, usedSlugs)
     const strategy = strategyFor(group.mode)
+    let patterns = [slug]
+    const globs = regexToGlobs(group.match_regex)
+    if (globs && globs.length) patterns = [slug, ...globs]
+    else if (String(group.match_regex || '').trim()) skipped.push({ kind: 'route', name: String(group.name || slug), reason: 'match_regex too complex for glob; only slug pattern imported' })
     requests.push({
       path: '/api/v1/routes', method: 'POST', kind: 'route', slug,
       body: {
         slug, name: String(group.name || slug), description: '',
-        patterns: [slug], candidates, strategy,
+        patterns, candidates, strategy,
         weights: strategy === 'weighted' ? weights : undefined,
         list_members: true, enabled: true,
       },
     })
   }
-  return requests
+  return { requests, skipped }
 }
 
-// Resolve a route request's name-based candidates into API tuples using the
-// live provider list. Returns null when any candidate provider is missing.
-function resolveCandidates(request, providers) {
-  const byName = new Map(providers.map((provider) => [provider.name, provider.id]))
-  const tuples = []
-  for (const candidate of request.body.candidates) {
-    const id = byName.get(candidate.provider)
-    if (id == null) return null
-    tuples.push([id, candidate.model])
-  }
-  return { ...request, body: { ...request.body, candidates: tuples } }
-}
-
-// llm_infos → pricing requests keyed by provider name + model.
+// llm_infos → pricing requests keyed by provider id + model.
 function mapPrices(backup, providerMap) {
   const prices = new Map()
   for (const info of backup.llm_infos || []) {
@@ -173,60 +218,131 @@ function mapPrices(backup, providerMap) {
   }
   const requests = []
   for (const channel of backup.channels || []) {
-    const providerName = providerMap.get(channel.id)
-    if (!providerName) continue
+    const providerId = providerMap.get(channel.id)
+    if (providerId == null) continue
     for (const model of splitModels(channel.model)) {
       const price = prices.get(model)
       if (!price) continue
       requests.push({
-        path: '/api/v1/models/pricing', method: 'POST', kind: 'price', provider: providerName,
-        body: { model, input_price_micros: price.input, output_price_micros: price.output },
+        path: '/api/v1/models/pricing', method: 'POST', kind: 'price', providerId,
+        body: { provider_id: providerId, model, input_price_micros: price.input, output_price_micros: price.output },
       })
     }
   }
   return requests
 }
 
-// api_keys → client key create requests. Empty supported-models means all.
-function mapKeys(backup) {
+// Categories restrict which Octopus groups (routes) a key can see. Sepia has no
+// route-category concept, so we narrow the key's model scope to the slugs and
+// member models of the matching routes instead of granting everything.
+function categoryModels(backup, categories) {
+  const wanted = new Set(categories.map((category) => category.toLowerCase()))
+  const models = new Set()
+  const groupIds = new Set()
+  for (const group of backup.groups || []) {
+    if (group.category && wanted.has(String(group.category).toLowerCase())) {
+      models.add(slugify(group.name))
+      groupIds.add(group.id)
+    }
+  }
+  for (const item of backup.group_items || []) {
+    if (groupIds.has(item.group_id) && item.model_name) models.add(String(item.model_name))
+  }
+  return Array.from(models)
+}
+
+// api_keys → client key create requests + per-key policies. Empty supported
+// models with no category restriction means all models. Expired source keys
+// are skipped (Sepia rejects past expirations). Policies are applied by the UI
+// after creation via POST /keys/{id}/policy.
+function mapKeys(backup, providerMap, existingKeys) {
   const requests = []
+  const skipped = []
+  const policies = new Map()
+  const now = Date.now()
+  const existingNames = new Set((existingKeys || []).map((key) => key.name))
   for (const key of backup.api_keys || []) {
-    const models = splitModels(key.supported_models)
+    const name = String(key.name || `key-${key.id}`)
+    // Idempotent re-import: a key with the same name already exists (its token
+    // hash is unique), so skip recreation rather than failing on UNIQUE.
+    if (existingNames.has(name)) { skipped.push({ kind: 'key', name, reason: 'already exists' }); continue }
+    const expireAt = Number(key.expire_at) || 0
+    if (expireAt > 0 && expireAt * 1000 <= now) { skipped.push({ kind: 'key', name, reason: 'already expired' }); continue }
+    const supported = splitModels(key.supported_models)
+    const categories = splitModels(key.allowed_group_categories)
+    let models
+    if (supported.length) models = supported
+    else if (categories.length) { models = categoryModels(backup, categories); if (!models.length) models = ['*'] }
+    else models = ['*']
+    const policy = { ip_whitelist: [], model_quotas: {}, allowed_groups: [], excluded_providers: [], model_groups: [] }
+    const ips = splitModels(key.allowed_ips)
+    if (ips.length) policy.ip_whitelist = ips
+    if (key.per_model_quota_json) {
+      try {
+        const parsed = JSON.parse(key.per_model_quota_json)
+        if (parsed && typeof parsed === 'object') {
+          for (const model of Object.keys(parsed)) {
+            const quota = parsed[model] || {}
+            policy.model_quotas[model] = { rpm: Number(quota.rpm) || 0, tpm: Number(quota.tpm) || 0 }
+          }
+        }
+      } catch (error) { skipped.push({ kind: 'key', name, reason: 'invalid per_model_quota_json' }) }
+    }
+    // Excluded channels reference Octopus channel ids; resolve them to Sepia
+    // provider ids at execution time (providerMap holds ids then). Store the
+    // raw channel ids here so buildPlan stays name-based.
+    const excludedChannels = splitModels(key.excluded_channels).map((id) => Number(id)).filter((id) => Number.isFinite(id))
+    const hasPolicy = policy.ip_whitelist.length || Object.keys(policy.model_quotas).length || excludedChannels.length
+    if (hasPolicy) policies.set(name, { policy, excludedChannels })
     requests.push({
-      path: '/api/v1/keys', method: 'POST', kind: 'key',
+      path: '/api/v1/keys', method: 'POST', kind: 'key', name,
       body: {
-        name: String(key.name || `key-${key.id}`),
-        models: models.length ? models : ['*'],
+        name, models,
         token_limit: Number(key.max_tokens) || 0,
         max_amount_micros: Math.round((Number(key.max_cost) || 0) * 1_000_000),
         rpm: Number(key.rate_limit_rpm) || 0,
         tpm: Number(key.rate_limit_tpm) || 0,
-        expires_at: null,
+        expires_at: expireAt > 0 ? new Date(expireAt * 1000).toISOString() : null,
         secret: key.api_key ? String(key.api_key) : null,
       },
       enabled: key.enabled !== false,
     })
   }
-  return requests
+  return { requests, skipped, policies }
 }
 
-// Full plan: ordered phases. Providers must exist before routes/prices, and
-// route candidates / price provider ids are resolved against the live list.
+// Full plan: ordered phases. Providers must exist before routes/prices; the UI
+// resolves providerMap names to ids after the provider phase, then runs the
+// route/price phases with id-based requests. Key policies follow key creation.
 function buildPlan(backup, existing) {
-  const { requests: providerRequests, providerMap } = mapProviders(backup, existing.providers, existing.groups)
-  const routeRequests = mapRoutes(backup, providerMap, existing.routes)
-  const priceRequests = mapPrices(backup, providerMap)
-  const keyRequests = mapKeys(backup)
+  const providers = mapProviders(backup, existing.providers, existing.groups)
+  const keys = mapKeys(backup, providers.providerMap, existing.keys)
   return {
-    providerMap,
+    providerMap: providers.providerMap,
+    policies: keys.policies,
+    skipped: [...providers.skipped, ...keys.skipped],
     phases: [
-      { id: 'providers', requests: providerRequests },
-      { id: 'routes', requests: routeRequests },
-      { id: 'prices', requests: priceRequests },
-      { id: 'keys', requests: keyRequests },
+      { id: 'providers', requests: providers.requests },
+      { id: 'routes', requests: [], source: 'routes' },
+      { id: 'prices', requests: [], source: 'prices' },
+      { id: 'keys', requests: keys.requests },
     ],
   }
 }
-  return { slugify, uniqueSlug, protocolFor, splitModels, priceMicros, strategyFor, mapProviders, mapRoutes, resolveCandidates, mapPrices, mapKeys, buildPlan }
+
+// Build the id-based route/price phases and resolve key policies once provider
+// ids are known. excluded_providers needs real Sepia provider ids (i64).
+function resolvePhases(plan, backup, providerIds, existingRoutes) {
+  const routes = mapRoutes(backup, providerIds, existingRoutes)
+  const prices = mapPrices(backup, providerIds)
+  const policies = new Map()
+  plan.policies.forEach((entry, name) => {
+    const policy = { ...entry.policy, excluded_providers: entry.excludedChannels.map((id) => providerIds.get(id)).filter((id) => id != null) }
+    policies.set(name, policy)
+  })
+  return { routes, prices, policies }
+}
+
+  return { slugify, uniqueSlug, uniqueName, protocolFor, splitModels, priceMicros, strategyFor, regexToGlobs, mapProviders, mapRoutes, mapPrices, mapKeys, categoryModels, buildPlan, resolvePhases }
 })()
 if (typeof window !== 'undefined') window.OctopusMapping = OctopusMapping

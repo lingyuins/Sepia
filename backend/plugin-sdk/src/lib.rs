@@ -24,11 +24,26 @@ const HEAP_START: usize = 4 << 20; // 4 MiB: clear of static data + shadow stack
 static mut BUMP: usize = HEAP_START;
 
 struct BumpAlloc;
+
+// Grow linear memory so the bump heap never writes past the current size. The
+// host only guarantees room for the input it wrote; guest parsing/serialization
+// allocates far more, so every bump must ensure capacity first.
+unsafe fn ensure_capacity(end: usize) {
+    let current = core::arch::wasm32::memory_size(0) * 65536;
+    if end > current {
+        let needed = (end - current + 65535) / 65536;
+        if core::arch::wasm32::memory_grow(0, needed) == usize::MAX {
+            core::arch::wasm32::unreachable();
+        }
+    }
+}
+
 unsafe impl core::alloc::GlobalAlloc for BumpAlloc {
     unsafe fn alloc(&self, layout: core::alloc::Layout) -> *mut u8 {
         let size = (layout.size() + layout.align() - 1) & !(layout.align() - 1);
         let ptr = (BUMP + layout.align() - 1) & !(layout.align() - 1);
         BUMP = ptr + size;
+        ensure_capacity(BUMP);
         ptr as *mut u8
     }
     unsafe fn dealloc(&self, _ptr: *mut u8, _layout: core::alloc::Layout) {}
@@ -47,6 +62,7 @@ pub extern "C" fn alloc(len: i32) -> i32 {
     unsafe {
         let ptr = BUMP;
         BUMP += size;
+        ensure_capacity(BUMP);
         ptr as i32
     }
 }
