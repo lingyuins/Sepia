@@ -466,7 +466,7 @@ pub struct GenerateBody {
     batch_size: Option<i64>,
 }
 
-const GENERATE_SYSTEM: &str = "You are a routing planner for an AI gateway. You receive a catalog of provider models and a user instruction. Group models into smart routes: one route per logical model or model family, with ordered failover candidates (best provider first). Respond with ONLY a JSON object, no prose and no code fences: {\"routes\":[{\"slug\":\"lowercase-kebab-case\",\"name\":\"short display name\",\"description\":\"one sentence\",\"patterns\":[\"model-name-glob\"],\"candidates\":[{\"provider_id\":1,\"model\":\"exact model id\"}]}]}. Rules: use only provider_id/model pairs present in the catalog; never invent providers or models; patterns are model names clients may request (default to the slug); keep candidates ordered by preference; merge equivalent models from different providers into one route when the instruction asks for it.";
+const GENERATE_SYSTEM: &str = "You are a routing planner for an AI gateway. You receive a catalog of provider models and a user instruction. Group models into smart routes: one route per logical model or model family, with ordered failover candidates (best provider first). Respond with ONLY a JSON object, no prose and no code fences: {\"routes\":[{\"slug\":\"lowercase-kebab-case\",\"name\":\"Human Readable Name\",\"description\":\"one sentence\",\"patterns\":[\"model-name-glob\"],\"candidates\":[{\"provider_id\":1,\"model\":\"exact model id\"}]}]}. Rules: use only provider_id/model pairs present in the catalog; never invent providers or models; name is a human-readable display name with the model family's natural capitalization and spaces, never the hyphenated slug (slug \"qwen4-max\" gets name \"Qwen4 Max\"); patterns are model names clients may request (default to the slug); keep candidates ordered by preference; merge equivalent models from different providers into one route when the instruction asks for it.";
 
 /// One catalog entry offered to the planner.
 struct CatalogEntry {
@@ -571,6 +571,40 @@ async fn pool_chat(
     }
 }
 
+/// Readable display name for a lowercase kebab-case route slug.
+///
+/// Splits the slug on '-', joins the words with single spaces and capitalizes
+/// the first character of every word. A purely ASCII-alphabetic word is
+/// lowercased after that first character ("qwen" → "Qwen"), while a word
+/// containing digits keeps its remaining characters unchanged ("qwen4" →
+/// "Qwen4", "4o" → "4o" because its first character is a digit). The result is
+/// capped at 120 characters: "qwen4-max" → "Qwen4 Max".
+fn display_name_from_slug(slug: &str) -> String {
+    let mut name = String::new();
+    for word in slug.split('-').filter(|word| !word.is_empty()) {
+        if !name.is_empty() {
+            name.push(' ');
+        }
+        let mut chars = word.chars();
+        let Some(first) = chars.next() else {
+            continue;
+        };
+        name.push(first.to_ascii_uppercase());
+        if word.chars().all(|ch| ch.is_ascii_alphabetic()) {
+            name.push_str(&chars.as_str().to_ascii_lowercase());
+        } else {
+            name.push_str(chars.as_str());
+        }
+    }
+    name.chars().take(120).collect()
+}
+
+/// True when the planner echoed a slug back instead of naming the route.
+fn name_repeats_slug(name: &str, raw_slug: &str, slug: &str) -> bool {
+    let name = name.to_ascii_lowercase();
+    name == slug || name == raw_slug.trim().to_ascii_lowercase()
+}
+
 /// Validate planner output against the real catalog and existing routes.
 fn sanitize_proposals(
     proposals: Vec<Value>,
@@ -619,15 +653,18 @@ fn sanitize_proposals(
         if candidates.is_empty() {
             continue;
         }
-        let name = object
+        let raw_name = object
             .get("name")
             .and_then(Value::as_str)
             .map(str::trim)
-            .filter(|name| !name.is_empty())
-            .unwrap_or(&slug)
-            .chars()
-            .take(120)
-            .collect::<String>();
+            .filter(|name| !name.is_empty());
+        // Missing names and names that merely repeat the slug are replaced by
+        // a readable derivation so clients never see "qwen4-max"-style text.
+        let name = match raw_name {
+            Some(name) if !name_repeats_slug(name, raw_slug, &slug) => name.to_string(),
+            _ => display_name_from_slug(&slug),
+        };
+        let name: String = name.chars().take(120).collect();
         let description = object
             .get("description")
             .and_then(Value::as_str)

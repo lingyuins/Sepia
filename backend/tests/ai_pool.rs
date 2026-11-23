@@ -40,13 +40,25 @@ struct MockAi {
     delay_ms: u64,
     /// Models that always fail with HTTP 500.
     broken: Vec<String>,
+    /// Echo the slug-shaped slug as every other route's name and omit the
+    /// name on the rest, so tests can exercise readable-name derivation.
+    spoof_names: bool,
 }
 
 async fn ai_upstream(delay_ms: u64, broken: Vec<String>) -> (SocketAddr, Arc<Mutex<Vec<ChatHit>>>) {
+    ai_upstream_with(delay_ms, broken, false).await
+}
+
+async fn ai_upstream_with(
+    delay_ms: u64,
+    broken: Vec<String>,
+    spoof_names: bool,
+) -> (SocketAddr, Arc<Mutex<Vec<ChatHit>>>) {
     let mock = MockAi {
         hits: Arc::new(Mutex::new(Vec::new())),
         delay_ms,
         broken,
+        spoof_names,
     };
     let handler = any(
         move |State(mock): State<MockAi>, request: axum::extract::Request| async move {
@@ -89,7 +101,8 @@ async fn ai_upstream(delay_ms: u64, broken: Vec<String>) -> (SocketAddr, Arc<Mut
             let routes: Vec<Value> = content
                 .lines()
                 .filter(|line| line.starts_with("provider_id="))
-                .map(|line| {
+                .enumerate()
+                .map(|(index, line)| {
                     let mut parts = line.split_whitespace();
                     let provider_id: i64 = parts
                         .next()
@@ -109,9 +122,15 @@ async fn ai_upstream(delay_ms: u64, broken: Vec<String>) -> (SocketAddr, Arc<Mut
                         candidates
                             .push(json!({"provider_id":provider_id,"model":"not-in-catalog"}));
                     }
+                    let name = if mock.spoof_names && index % 2 == 1 {
+                        // Suffer the missing-name fallback on every second route.
+                        Value::Null
+                    } else {
+                        Value::String(model.clone())
+                    };
                     json!({
                         "slug": model,
-                        "name": model,
+                        "name": name,
                         "description": "generated",
                         "patterns": [model],
                         "candidates": candidates
@@ -500,6 +519,66 @@ async fn generation_dispatches_batches_dynamically_and_retries_failures() {
         .await
         .unwrap();
     assert_eq!(again["routes"].as_array().unwrap().len(), 5);
+}
+
+#[tokio::test]
+async fn generated_routes_replace_slug_shaped_and_missing_names() {
+    // The planner echoes the slug as the name on every other route and omits
+    // the name on the rest; sanitization must return readable display names
+    // while the client-facing slug stays lowercase kebab-case.
+    let models: Vec<String> = ["qwen4-max", "gpt-4o", "claude-sonnet-4", "llama-3"]
+        .map(str::to_string)
+        .to_vec();
+    let (address, state, _directory) = gateway(&models).await;
+    let base = format!("http://{address}");
+    let (client, cookie) = admin(&base, &state).await;
+    enable_pool(&client, &base, &cookie).await;
+    let (upstream, _hits) = ai_upstream_with(0, vec![], true).await;
+    let response = client
+        .post(format!("{base}/api/v1/ai/pool"))
+        .header("cookie", &cookie)
+        .json(&service_body(
+            &format!("http://{upstream}"),
+            "planner-names",
+            1,
+        ))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 200);
+
+    let result: Value = client
+        .post(format!("{base}/api/v1/ai/routes/generate"))
+        .header("cookie", &cookie)
+        .json(&json!({"instruction":"name the routes","batch_size":10}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(result["errors"], json!([]));
+    let mut pairs: Vec<(&str, &str)> = result["routes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|route| {
+            (
+                route["slug"].as_str().unwrap(),
+                route["name"].as_str().unwrap(),
+            )
+        })
+        .collect();
+    pairs.sort();
+    assert_eq!(
+        pairs,
+        vec![
+            ("claude-sonnet-4", "Claude Sonnet 4"),
+            ("gpt-4o", "Gpt 4o"),
+            ("llama-3", "Llama 3"),
+            ("qwen4-max", "Qwen4 Max"),
+        ]
+    );
 }
 
 #[tokio::test]
