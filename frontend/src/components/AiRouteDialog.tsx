@@ -3,7 +3,8 @@ import { Check, RefreshCw, Sparkles, X } from 'lucide-react'
 import { api, routeInput } from '../api'
 import { useWorkspace, useTranslation } from '../workspace'
 import { Field, Modal } from './UI'
-import { filterGeneratedRoutes, generatedRouteRule, type GenerateResponse } from '../ai-pool'
+import { filterGeneratedRoutes, buildFamilyHints, generatedRouteRule, type GenerateResponse } from '../ai-pool'
+import { compileNormalizeRules } from '../model-normalize'
 
 type GeneratedState = { routes: GenerateResponse['routes']; errors: string[]; batches: number; services: number }
 
@@ -25,7 +26,8 @@ export function AiRouteDialog({ open, onClose }: { open: boolean; onClose: () =>
     if (!Number.isInteger(size) || size < 1 || size > 50) { notify(t('aiGenerateBatchInvalid')); return }
     setRunning(true); setError(''); setResult(null); setSelected(new Set())
     try {
-      const response = await api<GenerateResponse>('/api/v1/ai/routes/generate', { method: 'POST', body: JSON.stringify({ instruction: instruction.trim(), batch_size: size }) })
+      const families = buildFamilyHints(providers, compileNormalizeRules({ routerPrefixes: settings.normalizePrefixes, functionalSuffixes: settings.normalizeSuffixes, explicitMappings: settings.normalizeMappings }))
+      const response = await api<GenerateResponse>('/api/v1/ai/routes/generate', { method: 'POST', body: JSON.stringify({ instruction: instruction.trim(), batch_size: size, families }) })
       setResult({ routes: response.routes, errors: response.errors, batches: response.batches, services: response.services })
       setSelected(new Set(filterGeneratedRoutes(response.routes, providers, routes.map((route) => route.slug || '')).map((route) => route.slug)))
     } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)) }

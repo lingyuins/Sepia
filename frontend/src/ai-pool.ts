@@ -1,4 +1,5 @@
 import type { RouteCandidate, RouteRule } from './workspace'
+import { normalizeModelName, type CompiledRules } from './model-normalize.ts'
 
 export type AiPoolService = {
   id: number
@@ -71,6 +72,28 @@ export function mapAiPoolService(service: ApiAiPoolService): AiPoolService {
 
 export function serviceDraftFrom(service: AiPoolService): AiPoolServiceDraft {
   return { name: service.name, providerId: service.providerId, endpoint: service.endpoint, secret: '', model: service.model, models: service.models, timeoutSeconds: String(service.timeoutSeconds), concurrency: String(service.concurrency), enabled: service.enabled }
+}
+
+export type FamilyHint = { provider_id: number; model: string; family: string }
+
+// Family hints for the AI route generator. The frontend owns the configurable
+// normalization rules, so families computed here are the single source of
+// truth; the backend falls back to metadata::base_model for unhinted entries.
+// Normalizer rules strip router prefixes, functional suffixes and dated/free
+// forms, so raw model ids are passed straight through.
+export function buildFamilyHints(
+  providers: { id: number; enabled: boolean; modelsList: string[]; keyCount?: number }[],
+  rules: CompiledRules,
+): FamilyHint[] {
+  const hints: FamilyHint[] = []
+  for (const provider of providers) {
+    if (!provider.enabled || (provider.keyCount !== undefined && provider.keyCount < 1)) continue
+    for (const model of provider.modelsList) {
+      const family = normalizeModelName(model, rules).trim().toLowerCase().slice(0, 128)
+      if (family) hints.push({ provider_id: provider.id, model, family })
+    }
+  }
+  return hints
 }
 
 export type GeneratedRoute = {

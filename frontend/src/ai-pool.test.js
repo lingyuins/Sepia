@@ -1,6 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { aiServiceInput, emptyAiServiceDraft, filterGeneratedRoutes, generatedRouteRule, mapAiPoolService, serviceDraftFrom, validateAiServiceDraft } from './ai-pool.ts'
+import { aiServiceInput, buildFamilyHints, emptyAiServiceDraft, filterGeneratedRoutes, generatedRouteRule, mapAiPoolService, serviceDraftFrom, validateAiServiceDraft } from './ai-pool.ts'
+import { compileNormalizeRules } from './model-normalize.ts'
 import { routeInput } from './api.ts'
 
 const providers = [
@@ -82,4 +83,19 @@ test('generated route rule defaults patterns to the slug', () => {
   const rule = generatedRouteRule(proposal({ patterns: [] }), 1)
   assert.deepEqual(rule.patterns, ['gpt-x'])
   assert.equal(rule.match, 'gpt-x')
+})
+
+test('family hints normalize variant ids and skip unavailable providers', () => {
+  const rules = compileNormalizeRules()
+  const hints = buildFamilyHints([
+    { id: 1, enabled: true, modelsList: ['kimi-3.1-pro', 'auto/kimi-k3.1-pro'], keyCount: 1 },
+    { id: 2, enabled: true, modelsList: ['moonshotai/kimi-k3.1-pro:free'], keyCount: 2 },
+    { id: 3, enabled: false, modelsList: ['kimi-k3.1-pro'], keyCount: 1 },
+    { id: 4, enabled: true, modelsList: ['kimi-k3.1-pro'], keyCount: 0 },
+  ], rules)
+  assert.deepEqual(hints, [
+    { provider_id: 1, model: 'kimi-3.1-pro', family: 'kimi-3.1-pro' },
+    { provider_id: 1, model: 'auto/kimi-k3.1-pro', family: 'kimi-k3.1-pro' },
+    { provider_id: 2, model: 'moonshotai/kimi-k3.1-pro:free', family: 'kimi-k3.1-pro' },
+  ])
 })

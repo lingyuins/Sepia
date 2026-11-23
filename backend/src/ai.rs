@@ -464,15 +464,38 @@ pub struct GenerateBody {
     instruction: String,
     #[serde(default)]
     batch_size: Option<i64>,
+    /// Optional (provider_id, model) → family hints supplied by the frontend,
+    /// which owns the configurable normalization rules. Hints that do not
+    /// match a real catalog entry are ignored; see [`family_key`].
+    #[serde(default)]
+    families: Vec<FamilyHint>,
 }
 
-const GENERATE_SYSTEM: &str = "You are a routing planner for an AI gateway. You receive a catalog of provider models and a user instruction. Group models into smart routes: one route per logical model or model family, with ordered failover candidates (best provider first). Respond with ONLY a JSON object, no prose and no code fences: {\"routes\":[{\"slug\":\"lowercase-kebab-case\",\"name\":\"Human Readable Name\",\"description\":\"one sentence\",\"patterns\":[\"model-name-glob\"],\"candidates\":[{\"provider_id\":1,\"model\":\"exact model id\"}]}]}. Rules: use only provider_id/model pairs present in the catalog; never invent providers or models; name is a human-readable display name with the model family's natural capitalization and spaces, never the hyphenated slug (slug \"qwen4-max\" gets name \"Qwen4 Max\"); patterns are model names clients may request (default to the slug); keep candidates ordered by preference; merge equivalent models from different providers into one route when the instruction asks for it.";
+/// One optional family hint: the frontend's normalizer already collapsed
+/// (provider_id, model) into a family key.
+#[derive(Deserialize)]
+pub struct FamilyHint {
+    provider_id: i64,
+    model: String,
+    family: String,
+}
+
+/// Trim/lowercase a family key and cap it at 128 characters; empty hints are
+/// rejected so callers fall back to the server-side derivation.
+fn family_key(value: &str) -> Option<String> {
+    let key: String = value.trim().to_lowercase().chars().take(128).collect();
+    if key.is_empty() { None } else { Some(key) }
+}
+
+const GENERATE_SYSTEM: &str = "You are a routing planner for an AI gateway. You receive a catalog of provider models and a user instruction. Group models into smart routes: one route per logical model or model family, with ordered failover candidates (best provider first). Respond with ONLY a JSON object, no prose and no code fences: {\"routes\":[{\"slug\":\"lowercase-kebab-case\",\"name\":\"Human Readable Name\",\"description\":\"one sentence\",\"patterns\":[\"model-name-glob\"],\"candidates\":[{\"provider_id\":1,\"model\":\"exact model id\"}]}]}. Rules: use only provider_id/model pairs present in the catalog; never invent providers or models; name is a human-readable display name with the model family's natural capitalization and spaces, never the hyphenated slug (slug \"qwen4-max\" gets name \"Qwen4 Max\"); patterns are model names clients may request (default to the slug); keep candidates ordered by preference; every catalog line carries a family=<key> field, and lines sharing the same family value are the SAME logical model across providers: they MUST become one route whose candidates include every provider/model pair of that family, ordered by preference.";
 
 /// One catalog entry offered to the planner.
 struct CatalogEntry {
     provider_id: i64,
     provider: String,
     model: String,
+    /// Logical model family used for batching and server-side merging.
+    family: String,
 }
 
 fn slugify(value: &str) -> String {
@@ -606,21 +629,37 @@ fn name_repeats_slug(name: &str, raw_slug: &str, slug: &str) -> bool {
 }
 
 /// Validate planner output against the real catalog and existing routes.
+///
+/// Proposals are first validated independently (candidates restricted to real
+/// enabled provider-owned pairs, slug/name/patterns sanitized), then merged by
+/// family: batches are packed so a family is never split, but the planner may
+/// still split one family across replies, and two batches may propose the same
+/// slug. Proposals sharing the family of their first validated candidate are
+/// one route: the first arrival wins the slug/name/description, candidates and
+/// patterns are unioned (first-seen order, ≤8 patterns). A proposal whose
+/// candidates span several families therefore merges under its primary family
+/// only; determinism comes from the sorted catalog packing plus arrival order.
 fn sanitize_proposals(
     proposals: Vec<Value>,
     providers: &[Provider],
+    families: &std::collections::HashMap<(i64, String), String>,
     existing_slugs: &mut std::collections::HashSet<String>,
 ) -> Vec<Value> {
-    let mut routes = Vec::new();
+    struct Validated {
+        slug: String,
+        name: String,
+        description: String,
+        patterns: Vec<String>,
+        candidates: Vec<Value>,
+        family: String,
+    }
+    let mut validated = Vec::<Validated>::new();
     for proposal in proposals {
         let Some(object) = proposal.as_object() else {
             continue;
         };
         let raw_slug = object.get("slug").and_then(Value::as_str).unwrap_or("");
         let slug = slugify(raw_slug);
-        if existing_slugs.contains(&slug) {
-            continue;
-        }
         let mut candidates = Vec::new();
         let mut seen = std::collections::HashSet::new();
         for candidate in object
@@ -650,9 +689,18 @@ fn sanitize_proposals(
                 );
             }
         }
-        if candidates.is_empty() {
+        let Some(first) = candidates.first() else {
             continue;
-        }
+        };
+        let family = families
+            .get(&(
+                first["provider_id"].as_i64().unwrap_or_default(),
+                first["model"].as_str().unwrap_or_default().to_string(),
+            ))
+            .cloned()
+            .unwrap_or_else(|| {
+                crate::metadata::base_model(first["model"].as_str().unwrap_or_default())
+            });
         let raw_name = object
             .get("name")
             .and_then(Value::as_str)
@@ -687,8 +735,52 @@ fn sanitize_proposals(
         if patterns.is_empty() {
             patterns.push(slug.clone());
         }
-        existing_slugs.insert(slug.clone());
-        routes.push(json!({"slug":slug,"name":name,"description":description,"patterns":patterns,"candidates":candidates}));
+        validated.push(Validated {
+            slug,
+            name,
+            description,
+            patterns,
+            candidates,
+            family,
+        });
+    }
+    let mut merged: Vec<Validated> = Vec::new();
+    for proposal in validated {
+        let Some(route) = merged
+            .iter_mut()
+            .find(|route| route.family == proposal.family)
+        else {
+            merged.push(proposal);
+            continue;
+        };
+        for candidate in proposal.candidates {
+            let key = (
+                candidate["provider_id"].as_i64().unwrap_or_default(),
+                candidate["model"].as_str().unwrap_or_default().to_string(),
+            );
+            let present = route.candidates.iter().any(|existing| {
+                (
+                    existing["provider_id"].as_i64().unwrap_or_default(),
+                    existing["model"].as_str().unwrap_or_default().to_string(),
+                ) == key
+            });
+            if !present {
+                route.candidates.push(candidate);
+            }
+        }
+        for pattern in proposal.patterns {
+            if route.patterns.len() < 8 && !route.patterns.contains(&pattern) {
+                route.patterns.push(pattern);
+            }
+        }
+    }
+    let mut routes = Vec::new();
+    for route in merged {
+        if existing_slugs.contains(&route.slug) {
+            continue;
+        }
+        existing_slugs.insert(route.slug.clone());
+        routes.push(json!({"slug":route.slug,"name":route.name,"description":route.description,"patterns":route.patterns,"candidates":route.candidates}));
     }
     routes
 }
@@ -734,14 +826,32 @@ pub async fn generate_routes(
         Ok(providers) => providers,
         Err(message) => return error(StatusCode::INTERNAL_SERVER_ERROR, message),
     };
+    // Frontend-supplied family hints win over the server-side derivation; both
+    // sides are restricted to real (enabled provider, owned model) pairs so a
+    // hint can never invent a family for a model that is not routable.
+    let hint_map: std::collections::HashMap<(i64, String), String> = body
+        .families
+        .iter()
+        .filter_map(|hint| {
+            let family = family_key(&hint.family)?;
+            Some(((hint.provider_id, hint.model.clone()), family))
+        })
+        .collect();
     let mut catalog: Vec<CatalogEntry> = providers
         .iter()
         .filter(|provider| provider.enabled && provider.key_count > 0)
         .flat_map(|provider| {
-            provider.models.iter().map(move |model| CatalogEntry {
+            provider.models.iter().map(|model| CatalogEntry {
                 provider_id: provider.id,
                 provider: provider.name.clone(),
                 model: model.clone(),
+                // `metadata::base_model` strips vendor/ path prefixes and
+                // dated/free suffixes, so auto/kimi-k3.1-pro and
+                // moonshotai/kimi-k3.1-pro share a family without hints.
+                family: hint_map
+                    .get(&(provider.id, model.clone()))
+                    .cloned()
+                    .unwrap_or_else(|| crate::metadata::base_model(model)),
             })
         })
         .collect();
@@ -751,19 +861,44 @@ pub async fn generate_routes(
             "no enabled provider models available to route",
         );
     }
-    // Sort by model so equivalent variants across providers land in one batch.
-    catalog.sort_by(|a, b| a.model.cmp(&b.model).then(a.provider.cmp(&b.provider)));
+    // Group by family so variants of one logical model land in one batch;
+    // within a family keep catalog order (model, then provider) stable.
+    catalog.sort_by(|a, b| {
+        a.family
+            .cmp(&b.family)
+            .then(a.model.cmp(&b.model))
+            .then(a.provider.cmp(&b.provider))
+            .then(a.provider_id.cmp(&b.provider_id))
+    });
     let batch_size = body.batch_size.unwrap_or(10).clamp(1, 50) as usize;
-    let batches: Vec<String> = catalog
-        .chunks(batch_size)
+    // Pack batches without ever splitting a family: a family that does not fit
+    // in the current batch starts a new one, and a family larger than
+    // batch_size gets an oversize batch of its own.
+    let mut batch_groups: Vec<Vec<&CatalogEntry>> = Vec::new();
+    for entry in &catalog {
+        let starts_family = batch_groups
+            .last()
+            .and_then(|group| group.first())
+            .is_none_or(|first| first.family != entry.family);
+        let full = batch_groups
+            .last()
+            .is_some_and(|group| group.len() >= batch_size);
+        if batch_groups.is_empty() || (starts_family && full) {
+            batch_groups.push(Vec::new());
+        }
+        batch_groups.last_mut().unwrap().push(entry);
+    }
+    let batch_count_hint = batch_groups.len();
+    let batches: Vec<String> = batch_groups
+        .iter()
         .enumerate()
-        .map(|(index, chunk)| {
-            let lines = chunk
+        .map(|(index, group)| {
+            let lines = group
                 .iter()
                 .map(|entry| {
                     format!(
-                        "provider_id={} provider={} model={}",
-                        entry.provider_id, entry.provider, entry.model
+                        "provider_id={} provider={} model={} family={}",
+                        entry.provider_id, entry.provider, entry.model, entry.family
                     )
                 })
                 .collect::<Vec<_>>()
@@ -772,7 +907,7 @@ pub async fn generate_routes(
                 "Instruction: {}\n\nCatalog batch {} of {}:\n{}",
                 body.instruction.trim(),
                 index + 1,
-                catalog.len().div_ceil(batch_size),
+                batch_count_hint,
                 lines
             )
         })
@@ -993,7 +1128,16 @@ pub async fn generate_routes(
     }
     drop(assignment_txs);
     while workers.join_next().await.is_some() {}
-    let routes = sanitize_proposals(proposals, &providers, &mut existing_slugs);
+    let families: std::collections::HashMap<(i64, String), String> = catalog
+        .iter()
+        .map(|entry| {
+            (
+                (entry.provider_id, entry.model.clone()),
+                entry.family.clone(),
+            )
+        })
+        .collect();
+    let routes = sanitize_proposals(proposals, &providers, &families, &mut existing_slugs);
     Json(json!({"routes":routes,"errors":errors,"batches":batch_count,"services":active.len()}))
         .into_response()
 }

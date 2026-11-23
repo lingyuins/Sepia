@@ -43,6 +43,9 @@ struct MockAi {
     /// Echo the slug-shaped slug as every other route's name and omit the
     /// name on the rest, so tests can exercise readable-name derivation.
     spoof_names: bool,
+    /// Propose the line's family= value as the slug and omit the name, so
+    /// tests can exercise server-side family merging across batches.
+    family_slugs: bool,
 }
 
 async fn ai_upstream(delay_ms: u64, broken: Vec<String>) -> (SocketAddr, Arc<Mutex<Vec<ChatHit>>>) {
@@ -54,11 +57,27 @@ async fn ai_upstream_with(
     broken: Vec<String>,
     spoof_names: bool,
 ) -> (SocketAddr, Arc<Mutex<Vec<ChatHit>>>) {
+    ai_upstream_flags(delay_ms, broken, spoof_names, false).await
+}
+
+/// Planner that proposes each line's family as the slug and omits the name, so
+/// tests exercise server-side family merging instead of the planner's grouping.
+async fn ai_upstream_family() -> (SocketAddr, Arc<Mutex<Vec<ChatHit>>>) {
+    ai_upstream_flags(0, vec![], false, true).await
+}
+
+async fn ai_upstream_flags(
+    delay_ms: u64,
+    broken: Vec<String>,
+    spoof_names: bool,
+    family_slugs: bool,
+) -> (SocketAddr, Arc<Mutex<Vec<ChatHit>>>) {
     let mock = MockAi {
         hits: Arc::new(Mutex::new(Vec::new())),
         delay_ms,
         broken,
         spoof_names,
+        family_slugs,
     };
     let handler = any(
         move |State(mock): State<MockAi>, request: axum::extract::Request| async move {
@@ -122,14 +141,24 @@ async fn ai_upstream_with(
                         candidates
                             .push(json!({"provider_id":provider_id,"model":"not-in-catalog"}));
                     }
-                    let name = if mock.spoof_names && index % 2 == 1 {
+                    let family = line
+                        .split_whitespace()
+                        .find_map(|token| token.strip_prefix("family="))
+                        .unwrap_or(&model)
+                        .to_string();
+                    let (slug, name) = if mock.family_slugs {
+                        // Every line of a family proposes the family as its
+                        // slug: the server merge, not the planner, must union
+                        // them across batches.
+                        (family, Value::Null)
+                    } else if mock.spoof_names && index % 2 == 1 {
                         // Suffer the missing-name fallback on every second route.
-                        Value::Null
+                        (model.clone(), Value::Null)
                     } else {
-                        Value::String(model.clone())
+                        (model.clone(), Value::String(model.clone()))
                     };
                     json!({
-                        "slug": model,
+                        "slug": slug,
                         "name": name,
                         "description": "generated",
                         "patterns": [model],
@@ -168,6 +197,36 @@ async fn gateway(models: &[String]) -> (SocketAddr, AppState, tempfile::TempDir)
         .await
         .unwrap();
     let _ = provider;
+    let state = AppState::for_testing(store).await;
+    let address = serve(app(state.clone())).await;
+    (address, state, directory)
+}
+
+/// Gateway with several named providers, each owning its own model list.
+async fn gateway_with(providers: &[(&str, &[&str])]) -> (SocketAddr, AppState, tempfile::TempDir) {
+    let directory = tempfile::tempdir().unwrap();
+    let store = Store::connect(&directory.path().join("ai_multi.db"))
+        .await
+        .unwrap();
+    let keys = KeyStore::testing();
+    for (name, models) in providers {
+        store
+            .create_provider(
+                NewProvider {
+                    name: (*name).into(),
+                    protocol: ProviderProtocol::OpenAI,
+                    endpoint: "http://127.0.0.1:1".into(),
+                    models: models.iter().map(|model| (*model).to_string()).collect(),
+                    plugin_id: None,
+                    mode: "single".into(),
+                },
+                "relay-key",
+                &[],
+                &keys,
+            )
+            .await
+            .unwrap();
+    }
     let state = AppState::for_testing(store).await;
     let address = serve(app(state.clone())).await;
     (address, state, directory)
@@ -729,4 +788,166 @@ async fn provider_backed_pool_service_borrows_provider_credentials() {
         .unwrap();
     assert_eq!(result["routes"].as_array().unwrap().len(), 1);
     assert!(!hits.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn family_hints_merge_variant_models_into_one_route() {
+    let (address, state, _directory) =
+        gateway_with(&[("alpha", &["kimi-3.1-pro"]), ("beta", &["kimi-k3.1-pro"])]).await;
+    let base = format!("http://{address}");
+    let (client, cookie) = admin(&base, &state).await;
+    enable_pool(&client, &base, &cookie).await;
+    let (upstream, _hits) = ai_upstream_family().await;
+    client
+        .post(format!("{base}/api/v1/ai/pool"))
+        .header("cookie", &cookie)
+        .json(&service_body(&format!("http://{upstream}"), "planner-x", 1))
+        .send()
+        .await
+        .unwrap();
+
+    // Hints map both variants onto one family; the planner emits one proposal
+    // per catalog line (same slug twice), so only the server merge can unite
+    // them. Packing keeps a family atomic, hence one oversize batch here.
+    let result: Value = client
+        .post(format!("{base}/api/v1/ai/routes/generate"))
+        .header("cookie", &cookie)
+        .json(&json!({
+            "instruction":"group",
+            "batch_size":1,
+            "families":[
+                {"provider_id":1,"model":"kimi-3.1-pro","family":"kimi-k3.1-pro"},
+                {"provider_id":2,"model":"kimi-k3.1-pro","family":"kimi-k3.1-pro"}
+            ]
+        }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(result["errors"], json!([]));
+    assert_eq!(result["batches"], 1);
+    let routes = result["routes"].as_array().unwrap();
+    assert_eq!(routes.len(), 1);
+    let route = &routes[0];
+    // Slug and name come from the first batch (lowest model id sorts first).
+    assert_eq!(route["slug"], "kimi-k3-1-pro");
+    assert_eq!(route["name"], "Kimi K3 1 Pro");
+    let candidates: Vec<(i64, &str, &str)> = route["candidates"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|candidate| {
+            (
+                candidate["provider_id"].as_i64().unwrap(),
+                candidate["provider"].as_str().unwrap(),
+                candidate["model"].as_str().unwrap(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        candidates,
+        vec![(1, "alpha", "kimi-3.1-pro"), (2, "beta", "kimi-k3.1-pro"),]
+    );
+    assert_eq!(route["patterns"], json!(["kimi-3.1-pro", "kimi-k3.1-pro"]));
+}
+
+#[tokio::test]
+async fn families_fall_back_to_base_model_without_hints() {
+    let (address, state, _directory) = gateway_with(&[
+        ("alpha", &["auto/kimi-k3.1-pro"]),
+        ("beta", &["moonshotai/kimi-k3.1-pro"]),
+    ])
+    .await;
+    let base = format!("http://{address}");
+    let (client, cookie) = admin(&base, &state).await;
+    enable_pool(&client, &base, &cookie).await;
+    let (upstream, _hits) = ai_upstream_family().await;
+    client
+        .post(format!("{base}/api/v1/ai/pool"))
+        .header("cookie", &cookie)
+        .json(&service_body(&format!("http://{upstream}"), "planner-x", 1))
+        .send()
+        .await
+        .unwrap();
+
+    // No hints: metadata::base_model strips the vendor prefixes, so both
+    // variants still share one family and merge into one route.
+    let result: Value = client
+        .post(format!("{base}/api/v1/ai/routes/generate"))
+        .header("cookie", &cookie)
+        .json(&json!({"instruction":"group","batch_size":1}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(result["batches"], 1);
+    let routes = result["routes"].as_array().unwrap();
+    assert_eq!(routes.len(), 1);
+    assert_eq!(routes[0]["slug"], "kimi-k3-1-pro");
+    let candidates: Vec<(i64, &str)> = routes[0]["candidates"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|candidate| {
+            (
+                candidate["provider_id"].as_i64().unwrap(),
+                candidate["model"].as_str().unwrap(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        candidates,
+        vec![(1, "auto/kimi-k3.1-pro"), (2, "moonshotai/kimi-k3.1-pro"),]
+    );
+}
+
+#[tokio::test]
+async fn same_slug_proposals_union_candidates() {
+    let (address, state, _directory) =
+        gateway_with(&[("alpha", &["kimi-k3.1-pro"]), ("beta", &["kimi-k3.1-pro"])]).await;
+    let base = format!("http://{address}");
+    let (client, cookie) = admin(&base, &state).await;
+    enable_pool(&client, &base, &cookie).await;
+    let (upstream, _hits) = ai_upstream(0, vec![]).await;
+    client
+        .post(format!("{base}/api/v1/ai/pool"))
+        .header("cookie", &cookie)
+        .json(&service_body(&format!("http://{upstream}"), "planner-x", 1))
+        .send()
+        .await
+        .unwrap();
+
+    // The planner proposes one route per catalog line with the same slug; the
+    // old sanitizer silently dropped the second. It must now union candidates.
+    let result: Value = client
+        .post(format!("{base}/api/v1/ai/routes/generate"))
+        .header("cookie", &cookie)
+        .json(&json!({"instruction":"group","batch_size":1}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(result["batches"], 1);
+    let routes = result["routes"].as_array().unwrap();
+    assert_eq!(routes.len(), 1);
+    assert_eq!(routes[0]["slug"], "kimi-k3-1-pro");
+    let candidates: Vec<(i64, &str)> = routes[0]["candidates"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|candidate| {
+            (
+                candidate["provider_id"].as_i64().unwrap(),
+                candidate["model"].as_str().unwrap(),
+            )
+        })
+        .collect();
+    assert_eq!(candidates, vec![(1, "kimi-k3.1-pro"), (2, "kimi-k3.1-pro")]);
+    assert_eq!(routes[0]["patterns"], json!(["kimi-k3.1-pro"]));
 }
