@@ -219,7 +219,7 @@ export function Topbar({
         >
           <MenuIcon size={20} />
         </button>
-        <nav className="breadcrumb" aria-label="Breadcrumb">
+        <nav className="breadcrumb" aria-label={t('breadcrumb')}>
           <span>{t('workspace')}</span>
           <ChevronRight size={13} aria-hidden="true" />
           <strong>{t(page.toLowerCase() as 'overview')}</strong>

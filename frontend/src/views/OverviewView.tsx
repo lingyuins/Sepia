@@ -21,13 +21,11 @@ import {
 } from '../components/UI'
 import { Dropdown } from '../components/Dropdown'
 import { RouteChain } from '../components/RouteChain'
-import { chartTimeLabel } from '../analytics'
+import { analyticsPeriodLabelKey, analyticsPeriods, chartTimeLabel, type AnalyticsPeriod } from '../analytics'
 import { latestSuccessfulRouteRequest, selectOverviewRoute } from '../route-display'
 import { RequestsTable } from './RequestsView'
 import { LazyTrafficChart } from '../components/LazyChart'
 import type { Page } from '../components/AppShell'
-
-type Period = '24 hours' | '7 days' | '30 days'
 
 export function OverviewView({
   providers,
@@ -46,7 +44,7 @@ export function OverviewView({
   const t = useTranslation()
   const locale = useLocale()
   const endpoint = gatewayUrl(settings)
-  const [period, setPeriod] = useState<Period>('30 days')
+  const [period, setPeriod] = useState<AnalyticsPeriod>('30 days')
   const [selectedRouteId, setSelectedRouteId] = useState<number>()
   const [refreshing, setRefreshing] = useState(false)
 
@@ -70,7 +68,7 @@ export function OverviewView({
     time: chartTimeLabel(point.time, period, locale),
   }))
 
-  const periodLabel = period === '24 hours' ? t('24h') : period === '7 days' ? t('7d') : t('30d')
+  const periodLabel = t(analyticsPeriodLabelKey(period))
   const enabledProviders = providers.filter((provider) => provider.enabled).length
 
   const refreshData = async () => {
@@ -156,7 +154,7 @@ export function OverviewView({
               <p>{t('trafficSubtitle')}</p>
             </div>
             <div className="segmented">
-              {(['24 hours', '7 days', '30 days'] as Period[]).map((item) => (
+              {analyticsPeriods.map((item) => (
                 <button
                   type="button"
                   className={period === item ? 'active' : ''}
@@ -166,7 +164,7 @@ export function OverviewView({
                   }}
                   key={item}
                 >
-                  {item === '24 hours' ? t('24h') : item === '7 days' ? t('7d') : t('30d')}
+                  {t(analyticsPeriodLabelKey(item))}
                 </button>
               ))}
             </div>

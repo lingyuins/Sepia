@@ -278,7 +278,7 @@ export function RequestsView({ onSelect }: { onSelect: (row: RequestRecord) => v
             options={[
               { value: 'All statuses', label: t('allStatuses') },
               { value: '200 OK', label: '200 OK' },
-              { value: 'Failed', label: 'Failed' },
+              { value: 'Failed', label: t('statusFailed') },
             ]}
             onChange={(value) => {
               setStatus(value)

@@ -666,27 +666,31 @@ export function RoutingView() {
               </div>
             </div>
 
-            {filtered.map((route) => (
-              <button
-                type="button"
-                className={`route-list-item ${selectedRoute.id === route.id ? 'selected' : ''}`}
-                key={route.id}
-                onClick={() => setSelectedId(route.id)}
-              >
-                <span className="route-list-name">
-                  {route.name || route.slug}
-                  <ChevronRight size={15} />
-                </span>
-                <code className="mono">{route.slug}</code>
-                <span className="route-list-meta tabular">
-                  <span>{t('candidatesCount', { count: routeDisplayCandidates(route).length })}</span>
-                  <span aria-hidden="true">·</span>
-                  <StatusText tone={route.active ? 'positive' : 'neutral'}>
-                    {route.active ? t('routeActive') : t('routePaused')}
-                  </StatusText>
-                </span>
-              </button>
-            ))}
+            <div className="route-list-items">
+              {filtered.map((route) => (
+                <button
+                  type="button"
+                  className={`route-list-item ${selectedRoute.id === route.id ? 'selected' : ''}`}
+                  key={route.id}
+                  onClick={() => setSelectedId(route.id)}
+                >
+                  <span className="route-list-name">
+                    {route.name || route.slug}
+                    <ChevronRight size={15} />
+                  </span>
+                  <code className="mono">{route.slug}</code>
+                  <span className="route-list-meta tabular">
+                    <span>
+                      {t('candidatesCount', { count: routeDisplayCandidates(route).length })}
+                    </span>
+                    <span aria-hidden="true">·</span>
+                    <StatusText tone={route.active ? 'positive' : 'neutral'}>
+                      {route.active ? t('routeActive') : t('routePaused')}
+                    </StatusText>
+                  </span>
+                </button>
+              ))}
+            </div>
           </section>
 
           <section

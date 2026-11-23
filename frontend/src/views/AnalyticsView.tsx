@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { ArrowDownRight, Gauge, Layers3, Route } from 'lucide-react'
 import { useWorkspace, useTranslation, useLocale } from '../workspace'
-import { chartTimeLabel, routeProviderMetrics } from '../analytics'
+import { chartTimeLabel, analyticsPeriodLabelKey, analyticsPeriodWindowMs, analyticsPeriods, rankRoutePerformance, routeProviderMetrics } from '../analytics'
 import { routeDisplayCandidates } from '../route-display'
 import { ProviderCell, SectionHeading } from '../components/UI'
 import { strategyLabelKey } from '../route-strategy'
@@ -21,14 +21,13 @@ export function AnalyticsView() {
   const locale = useLocale()
   const [period, setPeriod] = useState('30 days')
   const [metric, setMetric] = useState('Requests')
-  const periodLabel = period === '24 hours' ? t('24h') : period === '7 days' ? t('7d') : t('30d')
+  const [showAllRoutes, setShowAllRoutes] = useState(false)
+  const periodLabel = t(analyticsPeriodLabelKey(period))
+  const periodWindowMs = analyticsPeriodWindowMs(period)
 
   const periodRequests = requests.filter((request) => {
     const age = Date.now() - Date.parse(request.createdAt)
-    return (
-      Number.isFinite(age) &&
-      age <= (period === '24 hours' ? 86400000 : period === '7 days' ? 604800000 : 2592000000)
-    )
+    return Number.isFinite(age) && age <= periodWindowMs
   })
 
   const data = (analytics.series || []).map((point) => ({
@@ -123,12 +122,14 @@ export function AnalyticsView() {
   })
 
   const totalRouteRequests = routeTotals.reduce((sum, route) => sum + route.requests, 0)
-  const routeData = routeTotals
-    .map((route) => ({
+  const routePerformance = rankRoutePerformance(
+    routeTotals.map((route) => ({
       ...route,
       share: totalRouteRequests ? (route.requests / totalRouteRequests) * 100 : 0,
-    }))
-    .sort((a, b) => b.requests - a.requests)
+    })),
+  )
+  const routeData = routePerformance.ranked
+  const visibleRouteData = showAllRoutes ? routeData : routePerformance.top
 
   const modelData = Array.from(new Set(periodRequests.map((r) => r.model)))
     .slice(0, 6)
@@ -145,7 +146,7 @@ export function AnalyticsView() {
         description={t('analyticsSubtitle')}
         action={
           <div className="segmented">
-            {['24 hours', '7 days', '30 days'].map((item) => (
+            {analyticsPeriods.map((item) => (
               <button
                 type="button"
                 key={item}
@@ -157,7 +158,7 @@ export function AnalyticsView() {
                   )
                 }}
               >
-                {item === '24 hours' ? t('24h') : item === '7 days' ? t('7d') : t('30d')}
+                {t(analyticsPeriodLabelKey(item))}
               </button>
             ))}
           </div>
@@ -312,42 +313,65 @@ export function AnalyticsView() {
             <span className="chart-unit">{periodLabel}</span>
           </div>
           <div className="group-performance-layout">
-            <div
-              className="group-performance-chart"
-              style={{ height: Math.max(190, routeData.length * 52) }}
-            >
-              <LazyCategoryBars data={routeData} labelKey="chartName" labelWidth={125} />
-            </div>
-            <div className="group-performance-list tabular">
-              {routeData.map((route, index) => (
-                <div className="group-performance-row" key={route.id}>
-                  <div className="group-performance-name">
-                    <span className="group-rank">{index + 1}</span>
-                    <div>
-                      <strong>
-                        {route.name}
-                        {index === 0 && route.requests > 0 && (
-                          <em className="rank-leader"> · {t('mostUsed')}</em>
-                        )}
-                      </strong>
-                      <small>
-                        {route.candidateCount} {t('candidatesShort')} · {route.strategy}
-                      </small>
-                    </div>
-                  </div>
-                  <div className="group-performance-usage">
-                    <strong>{route.requests.toLocaleString(locale)}</strong>
-                    <small>{route.share.toFixed(1)}%</small>
-                  </div>
-                  <div className="group-performance-health">
-                    <span>
-                      {route.success} {t('successShort')}
-                    </span>
-                    <span>{route.latency ? `${route.latency} ${t('avgShort')}` : '—'}</span>
-                  </div>
+            {routeData.length ? (
+              <>
+                <div
+                  className="group-performance-chart"
+                  style={{ height: Math.max(190, routePerformance.top.length * 52) }}
+                >
+                  <LazyCategoryBars
+                    data={routePerformance.top}
+                    labelKey="chartName"
+                    labelWidth={125}
+                  />
                 </div>
-              ))}
-            </div>
+                <div className="group-performance-list tabular">
+                  {visibleRouteData.map((route, index) => (
+                    <div className="group-performance-row" key={route.id}>
+                      <div className="group-performance-name">
+                        <span className="group-rank">{index + 1}</span>
+                        <div>
+                          <strong>
+                            {route.name}
+                            {index === 0 && route.requests > 0 && (
+                              <em className="rank-leader"> · {t('mostUsed')}</em>
+                            )}
+                          </strong>
+                          <small>
+                            {route.candidateCount} {t('candidatesShort')} · {route.strategy}
+                          </small>
+                        </div>
+                      </div>
+                      <div className="group-performance-usage">
+                        <strong>{route.requests.toLocaleString(locale)}</strong>
+                        <small>{route.share.toFixed(1)}%</small>
+                      </div>
+                      <div className="group-performance-health">
+                        <span>
+                          {route.success} {t('successShort')}
+                        </span>
+                        <span>{route.latency ? `${route.latency} ${t('avgShort')}` : '—'}</span>
+                      </div>
+                    </div>
+                  ))}
+                  {routePerformance.hasMore && (
+                    <button
+                      type="button"
+                      className="button text-button route-performance-toggle"
+                      aria-expanded={showAllRoutes}
+                      onClick={() => setShowAllRoutes(!showAllRoutes)}
+                    >
+                      {showAllRoutes ? t('collapseRoutes') : t('showAllRoutes')}
+                    </button>
+                  )}
+                </div>
+              </>
+            ) : (
+              <div className="empty-state compact-empty route-performance-empty">
+                <strong>{t('noRouteTraffic')}</strong>
+                <p>{t('noRouteTrafficHint')}</p>
+              </div>
+            )}
           </div>
         </section>
       </div>

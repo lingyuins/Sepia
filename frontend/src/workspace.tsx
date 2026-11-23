@@ -154,14 +154,6 @@ export type Settings = {
   normalizeMappings: { variant: string; canonical: string }[]
   aiPoolEnabled: boolean
 }
-export const providerModels: Record<string, string[]> = {
-  OpenAI: ['gpt-4.1', 'gpt-4.1-mini', 'gpt-4o', 'o3', 'o4-mini'],
-  Anthropic: ['claude-sonnet-4', 'claude-opus-4.1', 'claude-haiku-3.5'],
-  'Google AI': ['gemini-2.5-pro', 'gemini-2.5-flash', 'gemini-2.0-flash'],
-  DeepSeek: ['deepseek-chat', 'deepseek-reasoner'],
-  'OpenAI Compatible': ['default'],
-}
-
 export const protocolTypes = ['openai', 'anthropic', 'gemini', 'openai-responses'] as const
 export type ProtocolType = typeof protocolTypes[number]
 export function protocolOf(provider: Pick<Provider, 'type'>): ProtocolType {
@@ -169,9 +161,6 @@ export function protocolOf(provider: Pick<Provider, 'type'>): ProtocolType {
   if (provider.type === 'gemini' || provider.type === 'Google AI') return 'gemini'
   if (provider.type === 'openai-responses') return 'openai-responses'
   return 'openai'
-}
-export function protocolModels(type: ProtocolType) {
-  return type === 'anthropic' ? providerModels.Anthropic : type === 'gemini' ? providerModels['Google AI'] : providerModels.OpenAI
 }
 
 const WorkspaceCtx = createContext<GatewayWorkspace | null>(null)
