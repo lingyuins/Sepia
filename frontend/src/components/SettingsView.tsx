@@ -1001,20 +1001,6 @@ export default function SettingsView() {
                 >
                   <code className="mono">{formatVersion(version)}</code>
                 </SettingRow>
-                <SettingRow
-                  title={t('projectRepository')}
-                  description={t('projectRepositoryDescription')}
-                >
-                  <a
-                    className="button text-button"
-                    href="https://github.com/lingyuins/Sepia"
-                    target="_blank"
-                    rel="noreferrer"
-                  >
-                    <Github size={15} />
-                    {t('viewOnGithub')}
-                  </a>
-                </SettingRow>
                 {updateCheck && (
                   <SettingRow
                     title={t('latestVersion')}
@@ -1026,7 +1012,15 @@ export default function SettingsView() {
                         : t('latestVersionDescription')
                     }
                   >
-                    <code className="mono">{formatVersion(updateCheck.latest_version)}</code>
+                    <a
+                      className="button text-button"
+                      href="https://github.com/lingyuins/Sepia"
+                      target="_blank"
+                      rel="noreferrer"
+                    >
+                      <Github size={15} />
+                      {t('viewOnGithub')}
+                    </a>
                   </SettingRow>
                 )}
                 {updateCheck && !updateCheck.update_available && (
