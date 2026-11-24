@@ -1301,8 +1301,11 @@ fn provider_fetch_payload(
     headers: &[(String, String)],
 ) -> Value {
     let mut rewritten = request.clone();
-    rewritten.model = model.to_string();
     crate::rewrite::apply_shared_params(&mut rewritten, rewrite);
+    // The caller already computed the effective upstream model from the
+    // original candidate model; overwrite (never re-apply) so non-idempotent
+    // model rules like `a → aa` run exactly once.
+    rewritten.model = model.to_string();
     json!({
         "provider": provider_descriptor(provider),
         "secret": secret,
@@ -1436,5 +1439,55 @@ mod tests {
         assert_eq!(payload["request"]["temperature"], 0.3);
         assert_eq!(payload["request"]["passthrough"]["logprobs"], "PUBLIC");
         assert!(payload.get("param_defaults").is_none());
+    }
+
+    #[test]
+    fn provider_fetch_payload_applies_non_idempotent_model_rule_once() {
+        let provider = crate::Provider {
+            id: 7,
+            name: "plug".into(),
+            protocol: crate::ProviderProtocol::OpenAI,
+            endpoint: "plugin://echo".into(),
+            models: vec!["a-model".into()],
+            key_count: 1,
+            group_id: String::new(),
+            enabled: true,
+            plugin_id: Some("echo".into()),
+            rewrite: Default::default(),
+        };
+        let rewrite = crate::rewrite::RewriteConfig {
+            param_replace: vec![crate::rewrite::ParamReplaceRule {
+                field: "model".into(),
+                pattern: "a".into(),
+                replacement: "aa".into(),
+            }],
+            ..Default::default()
+        };
+        let request = crate::protocol::ChatRequest {
+            model: "a-model".into(),
+            messages: vec![crate::protocol::Message::new(
+                crate::protocol::Role::User,
+                "hi",
+            )],
+            ..Default::default()
+        };
+        // The caller computes the effective model from the ORIGINAL model
+        // exactly once, mirroring server.rs / probe.rs.
+        let effective = crate::rewrite::effective_model_for("a-model", &rewrite);
+        assert_eq!(effective, "aa-model");
+        let payload = provider_fetch_payload(
+            &provider,
+            "sk-secret",
+            &request,
+            &effective,
+            crate::protocol::Protocol::OpenAI,
+            &rewrite,
+            &[],
+        );
+        assert_eq!(payload["model"], "aa-model");
+        assert_eq!(
+            payload["request"]["model"], "aa-model",
+            "non-idempotent model rule must not run twice"
+        );
     }
 }
