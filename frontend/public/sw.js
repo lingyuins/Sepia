@@ -1,9 +1,10 @@
 // Sepia console service worker.
 // Caches only the static app shell (same-origin GET assets); /api and /v1
 // always hit the gateway so live data, auth and SSE are never served stale.
-const CACHE = 'sepia-shell-v1'
-const SHELL = ['/', '/index.html', '/manifest.webmanifest', '/favicon.svg', '/icons/icon-192.png', '/icons/icon-512.png', '/icons/icon-maskable-512.png', '/icons/apple-touch-icon.png']
-
+const CACHE = 'sepia-shell-v2'
+// Replaced at build time by vite-pwa-shell.ts with the hashed entry assets.
+const PRECACHE_ASSETS = []
+const SHELL = ['/', '/index.html', '/manifest.webmanifest', '/favicon.svg', '/icons/icon-192.png', '/icons/icon-512.png', '/icons/icon-maskable-512.png', '/icons/apple-touch-icon.png', ...PRECACHE_ASSETS]
 self.addEventListener('install', (event) => {
   event.waitUntil(caches.open(CACHE).then((cache) => cache.addAll(SHELL)).then(() => self.skipWaiting()))
 })
