@@ -3,7 +3,7 @@ import test from 'node:test'
 
 import { parseKeyPolicy, parseTokenLimit } from './key-policy.ts'
 
-const defaults = { name: 'bot', customValue: '', tags: [], maxAmount: '', tokenLimit: '', rpm: '0', tpm: '0', modelQuotas: '', ipWhitelist: '', expiresAt: '', models: ['gpt-4o'], allowedGroups: [], excludedProviders: [], enabled: true }
+const defaults = { name: 'bot', customValue: '', maxAmount: '', tokenLimit: '', rpm: '0', tpm: '0', modelQuotas: '', ipWhitelist: '', expiresAt: '', models: ['gpt-4o'], allowedGroups: [], excludedProviders: [], enabled: true }
 
 test('accepts human-friendly token limits', () => {
   assert.equal(parseTokenLimit('100w'), 1000000)
@@ -16,9 +16,8 @@ test('rejects invalid token limits', () => {
   assert.throws(() => parseTokenLimit('many'), /Token/)
 })
 
-test('defaults to no tags and no per-model quotas', () => {
+test('defaults to no per-model quotas', () => {
   const policy = parseKeyPolicy(defaults)
-  assert.deepEqual(policy.tags, [])
   assert.deepEqual(policy.modelQuotas, {})
 })
 

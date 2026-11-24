@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Check, Plus, ShieldCheck, X } from 'lucide-react'
+import { Check, ChevronDown, ShieldCheck } from 'lucide-react'
 import { parseKeyPolicy, type KeyPolicy, type KeyPolicyDraft } from '../key-policy'
 import { scopedModels } from '../key-models'
 import { useTranslation, useWorkspace } from '../workspace'
@@ -15,8 +15,9 @@ export default function KeyPolicyDialog({ open, onClose, onCreate }: { open: boo
   const t = useTranslation()
   const modelOptions = scopedModels(providers, routes)
   const models = modelOptions.map((model) => model.value)
-  const [draft, setDraft] = useState<KeyPolicyDraft>(() => ({ name: '', customValue: '', tags: [], maxAmount: '', tokenLimit: '', rpm: '0', tpm: '0', modelQuotas: '', ipWhitelist: '', expiresAt: '', models, allowedGroups: [], modelGroups: [], excludedProviders: [], enabled: true }))
-  const [tagDraft, setTagDraft] = useState('')
+  const routeModels = modelOptions.filter((model) => model.route).map((model) => model.value)
+  const [draft, setDraft] = useState<KeyPolicyDraft>(() => ({ name: '', customValue: '', maxAmount: '', tokenLimit: '', rpm: '0', tpm: '0', modelQuotas: '', ipWhitelist: '', expiresAt: '', models, allowedGroups: [], modelGroups: [], excludedProviders: [], enabled: true }))
+  const [limitsOpen, setLimitsOpen] = useState(true)
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
   const update = <K extends keyof KeyPolicyDraft>(key: K, value: KeyPolicyDraft[K]) => { setDraft((current) => ({ ...current, [key]: value })); setError('') }
@@ -29,7 +30,6 @@ export default function KeyPolicyDialog({ open, onClose, onCreate }: { open: boo
     if (!draft.modelGroups.includes(group.id)) continue
     for (const member of group.members) if (!groupGranted.has(member)) groupGranted.set(member, group.name)
   }
-  const addTag = (value: string) => { const tag = value.trim(); if (tag && !draft.tags.includes(tag)) update('tags', [...draft.tags, tag]); setTagDraft('') }
   const close = () => { setError(''); onClose() }
   const submit = async (event: React.FormEvent) => {
     event.preventDefault()
@@ -38,7 +38,7 @@ export default function KeyPolicyDialog({ open, onClose, onCreate }: { open: boo
       const policy = parseKeyPolicy(draft)
       if (!policy.name) { setError(t('keyPolicyName')); return }
       setBusy(true)
-      try { await onCreate(policy); setDraft({ name: '', customValue: '', tags: [], maxAmount: '', tokenLimit: '', rpm: '0', tpm: '0', modelQuotas: '', ipWhitelist: '', expiresAt: '', models, allowedGroups: [], modelGroups: [], excludedProviders: [], enabled: true }) }
+      try { await onCreate(policy); setDraft({ name: '', customValue: '', maxAmount: '', tokenLimit: '', rpm: '0', tpm: '0', modelQuotas: '', ipWhitelist: '', expiresAt: '', models, allowedGroups: [], modelGroups: [], excludedProviders: [], enabled: true }) }
       catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)) }
       finally { setBusy(false) }
     } catch { setError(t('keyPolicyError')) }
@@ -53,24 +53,10 @@ export default function KeyPolicyDialog({ open, onClose, onCreate }: { open: boo
           <div className="key-policy-grid">
             <KeyField label={t('keyPolicyName')} value={draft.name} onChange={(value) => update('name', value)} placeholder={t('keyPolicyNamePlaceholder')} required />
           </div>
-          <fieldset className="key-policy-field key-tags-field">
-            <legend>{t('keyTags')}</legend>
-            <div className="key-tag-list">
-              {draft.tags.map((tag) => (
-                <span className="key-tag" key={tag}>
-                  {tag}
-                  <button type="button" onClick={() => update('tags', draft.tags.filter((item) => item !== tag))} aria-label={`${t('keyTags')}: ${tag}`}><X size={11} /></button>
-                </span>
-              ))}
-            </div>
-            <div className="key-tag-input">
-              <input className="field" value={tagDraft} onChange={(event) => setTagDraft(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') { event.preventDefault(); addTag(tagDraft) } }} placeholder={t('keyTagPlaceholder')} />
-              <button type="button" className="button secondary" onClick={() => addTag(tagDraft)}><Plus size={13} />{t('keyAddTag')}</button>
-            </div>
-          </fieldset>
         </section>
-        <section className="key-policy-section">
-          <h3>{t('keyLimits')}</h3>
+        <section className={`key-policy-section key-limits-section ${limitsOpen ? 'expanded' : ''}`}>
+          <h3><button type="button" className="key-section-toggle" aria-expanded={limitsOpen} onClick={() => setLimitsOpen(!limitsOpen)}><span>{t('keyLimits')}</span><ChevronDown size={15} /></button></h3>
+          {limitsOpen && <>
           <div className="key-policy-grid">
             <KeyField label={t('keyMaxAmount')} value={draft.maxAmount} onChange={(value) => update('maxAmount', value)} placeholder={t('keyAmountPlaceholder')} type="number" hint={t('keyUnlimited')} />
             <KeyField label={t('keyTokenLimit')} value={draft.tokenLimit} onChange={(value) => update('tokenLimit', value)} placeholder={t('keyTokenPlaceholder')} hint={t('keyUnlimited')} />
@@ -86,6 +72,7 @@ export default function KeyPolicyDialog({ open, onClose, onCreate }: { open: boo
             <KeyField label={t('keyExpiry')} value={draft.expiresAt} onChange={(value) => update('expiresAt', value)} type="datetime-local" />
             <button type="button" className="key-never-expiry" onClick={() => update('expiresAt', '')}><ShieldCheck size={15} />{t('keyNever')}{!draft.expiresAt && <Check size={14} />}</button>
           </div>
+          </>}
         </section>
         <section className="key-policy-section">
           <h3>{t('keyAccess')}</h3>
@@ -106,6 +93,11 @@ export default function KeyPolicyDialog({ open, onClose, onCreate }: { open: boo
           </fieldset>
           <fieldset className="key-policy-field">
             <legend>{t('routeGroups')}</legend>
+            <div className="key-selection-actions">
+              <button type="button" onClick={() => update('models', [...new Set([...draft.models, ...routeModels])])}>{t('selectAll')}</button>
+              <button type="button" onClick={() => update('models', draft.models.filter((model) => !routeModels.includes(model)))}>{t('clear')}</button>
+              <span>{routeModels.filter((model) => draft.models.includes(model) || groupGranted.has(model)).length} / {routeModels.length}</span>
+            </div>
             <div className="key-option-grid">
               {modelOptions.filter((model) => model.route).map((model) => {
                 const granted = groupGranted.get(model.value)

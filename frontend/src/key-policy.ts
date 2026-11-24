@@ -2,7 +2,6 @@ export type ModelQuota = { rpm: number; tpm: number }
 export type KeyPolicy = {
   name: string
   customValue: string
-  tags: string[]
   maxAmount: number | null
   tokenLimit: number | null
   rpm: number
