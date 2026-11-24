@@ -809,6 +809,7 @@ pub async fn relay(
                             &effective_model,
                             *protocol,
                             &rewrite,
+                            &out_headers,
                         )
                         .await
                     } else {

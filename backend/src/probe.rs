@@ -131,6 +131,7 @@ pub async fn probe_model_for(
             &effective_model,
             *protocol,
             &rewrite,
+            &crate::rewrite::header_pairs(&rewrite),
         )
         .await
         {
@@ -151,7 +152,7 @@ pub async fn probe_model_for(
                 error: Some(format!("upstream HTTP {status} ({endpoint}): {detail}")),
                 reply: None,
                 effective_model: effective_model.clone(),
-                headers: Vec::new(),
+                headers: headers.clone(),
             });
             return last.unwrap();
         }
@@ -175,7 +176,7 @@ pub async fn probe_model_for(
                     error: None,
                     reply: Some(decoded.text.chars().take(200).collect()),
                     effective_model: effective_model.clone(),
-                    headers: Vec::new(),
+                    headers: headers.clone(),
                 };
             }
             Err(message) => {

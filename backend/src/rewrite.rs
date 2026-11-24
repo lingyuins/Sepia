@@ -329,6 +329,79 @@ pub fn apply_raw_params(value: Value, config: &RewriteConfig) -> Value {
     body
 }
 
+/// Apply parameter rewriting to the shared request model itself, used for
+/// plugin-backed providers: the host cannot inject rules into a plugin's own
+/// outbound HTTP call, so it rewrites the shared request BEFORE handing it to
+/// `provider.fetch` and every plugin forwards rewritten values unchanged.
+/// Typed string fields (currently only `model`) take regex replacement;
+/// passthrough string fields likewise; defaults fill typed fields and
+/// passthrough only when absent (an explicit client value always wins).
+/// Gemini generation parameters live in typed fields here — the encoded
+/// `generationConfig` mapping does not apply to the shared model.
+pub fn apply_shared_params(request: &mut ChatRequest, config: &RewriteConfig) {
+    for rule in &config.param_replace {
+        let Ok(re) = compile(&rule.pattern) else {
+            continue;
+        };
+        let target = match rule.field.as_str() {
+            "model" => Some(&mut request.model),
+            _ => None,
+        };
+        if let Some(current) = target {
+            *current = re
+                .replace_all(current, rule.replacement.as_str())
+                .into_owned();
+        } else if let Some(Value::String(current)) = request.passthrough.get_mut(&rule.field) {
+            *current = re
+                .replace_all(current, rule.replacement.as_str())
+                .into_owned();
+        }
+    }
+    for rule in &config.param_defaults {
+        match rule.field.as_str() {
+            "model" => {
+                if request.model.is_empty()
+                    && let Some(value) = rule.value.as_str()
+                {
+                    request.model = value.to_string();
+                }
+            }
+            "max_tokens" => {
+                if request.max_tokens.is_none() {
+                    request.max_tokens = rule.value.as_u64().map(|n| n as u32);
+                }
+            }
+            "temperature" => {
+                if request.temperature.is_none() {
+                    request.temperature = rule.value.as_f64();
+                }
+            }
+            "top_p" => {
+                if request.top_p.is_none() {
+                    request.top_p = rule.value.as_f64();
+                }
+            }
+            "stop" => {
+                if request.stop.is_empty()
+                    && let Some(items) = rule.value.as_array()
+                {
+                    request.stop = items
+                        .iter()
+                        .filter_map(Value::as_str)
+                        .map(str::to_string)
+                        .collect();
+                }
+            }
+            _ => {
+                request
+                    .passthrough
+                    .entry(rule.field.clone())
+                    .or_insert_with(|| rule.value.clone());
+            }
+        }
+    }
+}
+
 /// Outbound static headers as ordered name/value pairs, skipping sensitive
 /// names as a defense-in-depth measure (validation already rejects them).
 pub fn header_pairs(config: &RewriteConfig) -> Vec<(String, String)> {
@@ -498,5 +571,51 @@ mod tests {
         };
         let json = config.to_json().unwrap();
         assert_eq!(RewriteConfig::parse(&json).unwrap(), config);
+    }
+
+    #[test]
+    fn shared_params_rewrite_typed_fields_and_passthrough() {
+        let config = RewriteConfig {
+            param_replace: vec![
+                ParamReplaceRule {
+                    field: "model".into(),
+                    pattern: "^alias-".into(),
+                    replacement: "real-".into(),
+                },
+                ParamReplaceRule {
+                    field: "user".into(),
+                    pattern: "SECRET".into(),
+                    replacement: "PUBLIC".into(),
+                },
+            ],
+            param_defaults: vec![
+                ParamDefaultRule {
+                    field: "temperature".into(),
+                    value: json!(0.3),
+                },
+                ParamDefaultRule {
+                    field: "top_p".into(),
+                    value: json!(0.9),
+                },
+                ParamDefaultRule {
+                    field: "logprobs".into(),
+                    value: json!(true),
+                },
+            ],
+            ..Default::default()
+        };
+        let mut request = ChatRequest {
+            model: "alias-model".into(),
+            top_p: Some(0.5),
+            ..Default::default()
+        };
+        request.passthrough.insert("user".into(), json!("SECRET"));
+        apply_shared_params(&mut request, &config);
+        assert_eq!(request.model, "real-model");
+        assert_eq!(request.temperature, Some(0.3));
+        // An explicit client value wins over the default.
+        assert_eq!(request.top_p, Some(0.5));
+        assert_eq!(request.passthrough["user"], json!("PUBLIC"));
+        assert_eq!(request.passthrough["logprobs"], json!(true));
     }
 }

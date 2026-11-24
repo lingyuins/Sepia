@@ -552,3 +552,145 @@ async fn gemini_upstream_url_uses_the_rewritten_model() {
         .unwrap();
     assert_eq!(record.model, "alias-model");
 }
+
+// Plugin-backed providers: the host applies built-in parameter rewriting to
+// the shared request BEFORE provider.fetch, so a plugin written before
+// rewriting existed (the echo fixture ignores rule fields entirely) still
+// forwards rewritten values. Headers reach the payload for plugins that
+// build their own HTTP request.
+#[tokio::test]
+async fn plugin_provider_fetch_receives_host_rewritten_request() {
+    let directory = tempfile::tempdir().unwrap();
+    let store = Store::connect(&directory.path().join("plugin-rw.db"))
+        .await
+        .unwrap();
+    let state = AppState::for_testing(store.clone()).await;
+    let address = serve(app(state.clone())).await;
+    let base = format!("http://{address}");
+    let (client, cookie) = admin(address, &store).await;
+    // Install the reference plugin (echo) through the real management API.
+    let manifest = json!({
+        "id": "echo", "name": "Echo", "version": "1.0.0",
+        "events": ["provider.fetch", "provider.models"],
+        "permissions": ["provider", "kv", "log"],
+        "http_origins": [], "priority": 0, "timeout_ms": 2000, "memory_mib": 16,
+        "config_schema": {"type": "object"}
+    });
+    let cursor = std::io::Cursor::new(Vec::new());
+    let mut zip = zip::ZipWriter::new(cursor);
+    let options: zip::write::FileOptions<'_, ()> =
+        zip::write::FileOptions::default().compression_method(zip::CompressionMethod::Stored);
+    zip.start_file("manifest.json", options).unwrap();
+    std::io::Write::write_all(&mut zip, manifest.to_string().as_bytes()).unwrap();
+    zip.start_file("plugin.wasm", options).unwrap();
+    std::io::Write::write_all(&mut zip, include_bytes!("fixtures/echo.wasm")).unwrap();
+    let package = zip.finish().unwrap().into_inner();
+    let form = reqwest::multipart::Form::new().part(
+        "package",
+        reqwest::multipart::Part::bytes(package).file_name("plugin.zip"),
+    );
+    let installed = client
+        .post(format!("{base}/api/v1/plugins/install"))
+        .header("cookie", &cookie)
+        .multipart(form)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        installed.status(),
+        200,
+        "{}",
+        installed.text().await.unwrap()
+    );
+    client
+        .post(format!("{base}/api/v1/plugins/echo/enabled"))
+        .header("cookie", &cookie)
+        .json(&json!({"enabled": true}))
+        .send()
+        .await
+        .unwrap();
+    let keys = KeyStore::testing();
+    let provider = store
+        .create_provider(
+            NewProvider {
+                name: "plug-rw".into(),
+                protocol: ProviderProtocol::OpenAI,
+                endpoint: "plugin://echo".into(),
+                models: vec!["plugin-chat".into()],
+                plugin_id: Some("echo".into()),
+                mode: "single".into(),
+                rewrite: RewriteConfig {
+                    headers: vec![HeaderRule {
+                        name: "X-Trace".into(),
+                        value: "plugin-trace".into(),
+                    }],
+                    param_replace: vec![ParamReplaceRule {
+                        field: "model".into(),
+                        pattern: "^plugin-".into(),
+                        replacement: "real-".into(),
+                    }],
+                    prompt_replace: vec![PromptReplaceRule {
+                        pattern: "SECRET".into(),
+                        replacement: "PUBLIC".into(),
+                    }],
+                    param_defaults: vec![ParamDefaultRule {
+                        field: "temperature".into(),
+                        value: json!(0.3),
+                    }],
+                },
+            },
+            "sk-plugin",
+            &[],
+            &keys,
+        )
+        .await
+        .unwrap();
+    let route = store
+        .create_route(NewRoute {
+            slug: "plugin-chat".into(),
+            name: "plugin-chat".into(),
+            description: String::new(),
+            patterns: vec!["plugin-chat".into()],
+            provider_id: provider.id,
+            model: "plugin-chat".into(),
+            is_default: false,
+            list_members: false,
+            candidates: vec![(provider.id, "plugin-chat".into())],
+            rewrite: Default::default(),
+        })
+        .await
+        .unwrap();
+    store.set_route_enabled(route.id, true).await.unwrap();
+    state.snapshots.refresh(&store).await.unwrap();
+    let plaintext = client_key(&store, vec!["plugin-chat".into()]).await;
+    // The echo fixture's provider.fetch echoes payload.model into the reply
+    // body and knows nothing about rewrite rules — the rewritten model must
+    // still arrive because the host rewrote the shared request itself.
+    let chat = client
+        .post(format!("{base}/v1/chat/completions"))
+        .bearer_auth(&plaintext)
+        .json(&json!({"model":"plugin-chat","messages":[{"role":"system","content":"SECRET sys"},{"role":"user","content":"hi"}]}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(chat.status(), 200, "{}", chat.text().await.unwrap());
+    let body: Value = chat.json().await.unwrap();
+    assert_eq!(body["model"], "real-chat");
+    // Logs keep the original candidate model.
+    let requests = store.requests().await.unwrap();
+    assert_eq!(requests[0].model, "plugin-chat");
+    // The route-test probe runs the same host-side rewriting and reports the
+    // effective model plus masked headers.
+    let probe = client
+        .post(format!("{base}/api/v1/routes/{}/test", route.id))
+        .header("cookie", &cookie)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(probe.status(), 200);
+    let body: Value = probe.json().await.unwrap();
+    let result = &body["candidates"][0]["result"];
+    assert_eq!(result["ok"], true);
+    assert_eq!(result["effective_model"], "real-chat");
+    assert_eq!(result["headers"][0]["name"], "X-Trace");
+}

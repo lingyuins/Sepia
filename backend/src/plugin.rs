@@ -1223,6 +1223,7 @@ pub async fn provider_models(
 /// A plugin-backed provider produces the raw upstream-protocol response through
 /// its `provider.fetch` event. The returned bytes are decoded by the normal
 /// protocol pipeline so streaming/failover/observability stay consistent.
+#[allow(clippy::too_many_arguments)] // One plugin fetch: target, credentials, request, effective model, protocol, rewrite rules, merged headers.
 pub async fn provider_fetch(
     state: &crate::server::AppState,
     provider: &crate::Provider,
@@ -1231,6 +1232,7 @@ pub async fn provider_fetch(
     model: &str,
     protocol: crate::protocol::Protocol,
     rewrite: &crate::rewrite::RewriteConfig,
+    headers: &[(String, String)],
 ) -> Result<reqwest::Response, String> {
     let plugin_id = provider
         .plugin_id
@@ -1255,7 +1257,7 @@ pub async fn provider_fetch(
             &state.http(),
             &record,
             "provider.fetch",
-            provider_fetch_payload(provider, secret, request, model, protocol, rewrite),
+            provider_fetch_payload(provider, secret, request, model, protocol, rewrite, headers),
             None,
         )
         .await
@@ -1281,10 +1283,14 @@ pub async fn provider_fetch(
         .map_err(|error| format!("plugin response: {error}"))
 }
 
-/// Payload of the `provider.fetch` hook: the request plus the built-in
-/// rewriting rules that would otherwise only reach HTTP upstreams (headers and
-/// only-if-absent parameter defaults, sensitive headers already filtered).
-/// Older plugins ignore the added fields.
+/// Payload of the `provider.fetch` hook: the shared request with built-in
+/// parameter rewriting ALREADY applied host-side (typed fields plus
+/// passthrough, only-if-absent defaults), so every plugin — including ones
+/// written before rewriting existed — forwards rewritten values without
+/// knowing the rules. `headers` carries the merged static outbound headers
+/// (plugin `before_upstream` output wins by name, sensitive headers filtered)
+/// for plugins that build their own HTTP request; older plugins ignore it.
+/// `model` is the effective upstream model.
 fn provider_fetch_payload(
     provider: &crate::Provider,
     secret: &str,
@@ -1292,19 +1298,22 @@ fn provider_fetch_payload(
     model: &str,
     protocol: crate::protocol::Protocol,
     rewrite: &crate::rewrite::RewriteConfig,
+    headers: &[(String, String)],
 ) -> Value {
+    let mut rewritten = request.clone();
+    rewritten.model = model.to_string();
+    crate::rewrite::apply_shared_params(&mut rewritten, rewrite);
     json!({
         "provider": provider_descriptor(provider),
         "secret": secret,
         "model": model,
         "protocol": protocol_label(protocol),
         "stream": request.stream,
-        "request": request_json(request),
-        "headers": crate::rewrite::header_pairs(rewrite)
-            .into_iter()
+        "request": request_json(&rewritten),
+        "headers": headers
+            .iter()
             .map(|(name, value)| json!({"name": name, "value": value}))
             .collect::<Vec<_>>(),
-        "param_defaults": rewrite.param_defaults,
     })
 }
 
@@ -1358,7 +1367,7 @@ mod tests {
         assert!(parse_package(b"not a zip").is_err());
     }
     #[test]
-    fn provider_fetch_payload_carries_builtin_rewrite_rules() {
+    fn provider_fetch_payload_applies_builtin_rewrite_host_side() {
         let provider = crate::Provider {
             id: 7,
             name: "plug".into(),
@@ -1383,13 +1392,18 @@ mod tests {
                     value: "Bearer evil".into(),
                 },
             ],
+            param_replace: vec![crate::rewrite::ParamReplaceRule {
+                field: "logprobs".into(),
+                pattern: "SECRET".into(),
+                replacement: "PUBLIC".into(),
+            }],
             param_defaults: vec![crate::rewrite::ParamDefaultRule {
                 field: "temperature".into(),
                 value: json!(0.3),
             }],
             ..Default::default()
         };
-        let request = crate::protocol::ChatRequest {
+        let mut request = crate::protocol::ChatRequest {
             model: "plugin-chat".into(),
             messages: vec![crate::protocol::Message::new(
                 crate::protocol::Role::User,
@@ -1397,6 +1411,10 @@ mod tests {
             )],
             ..Default::default()
         };
+        request
+            .passthrough
+            .insert("logprobs".into(), json!("SECRET"));
+        let headers = crate::rewrite::header_pairs(&rewrite);
         let payload = provider_fetch_payload(
             &provider,
             "sk-secret",
@@ -1404,6 +1422,7 @@ mod tests {
             "real-model",
             crate::protocol::Protocol::OpenAI,
             &rewrite,
+            &headers,
         );
         assert_eq!(payload["model"], "real-model");
         assert_eq!(payload["secret"], "sk-secret");
@@ -1411,9 +1430,11 @@ mod tests {
             payload["headers"],
             json!([{"name": "X-Trace", "value": "trace"}])
         );
-        assert_eq!(
-            payload["param_defaults"],
-            json!([{"field": "temperature", "value": 0.3}])
-        );
+        // The shared request already carries rewritten values host-side, so
+        // plugins that know nothing about rewriting forward them unchanged.
+        assert_eq!(payload["request"]["model"], "real-model");
+        assert_eq!(payload["request"]["temperature"], 0.3);
+        assert_eq!(payload["request"]["passthrough"]["logprobs"], "PUBLIC");
+        assert!(payload.get("param_defaults").is_none());
     }
 }
