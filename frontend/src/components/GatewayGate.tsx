@@ -187,7 +187,7 @@ function LoginScreen({ headingRef }: { headingRef: React.RefObject<HTMLHeadingEl
       <span className="sr-only" aria-live="polite">{busy ? t('gatewayAuthenticating') : ''}</span>
       {passkeySupported() && <button type="button" className="button secondary gateway-setup-submit" onClick={() => void signInWithPasskey()} disabled={busy || passkeyBusy}>{passkeyBusy ? <LoaderCircle className="gateway-setup-spinner" size={17} /> : <Fingerprint size={17} />}{passkeyBusy ? t('passkeyWaiting') : t('passkeySignIn')}</button>}
     </form>
-    <p className="gateway-login-note"><ShieldCheck size={15} /><span>{t('gatewaySessionSecurityHint')}</span></p>
+    <p className="gateway-login-note"><ShieldCheck size={15} /><span>{t(window.location.protocol === 'https:' ? 'gatewaySessionSecurityHint' : 'gatewaySessionSecurityHttpHint')}</span></p>
   </section>
 }
 
