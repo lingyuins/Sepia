@@ -116,6 +116,12 @@ pub fn validate(config: &RewriteConfig) -> Result<(), String> {
         if name.is_empty() {
             return Err("header name is required".into());
         }
+        if name != header.name {
+            return Err("header name must not have leading or trailing spaces".into());
+        }
+        if http::header::HeaderName::from_bytes(name.as_bytes()).is_err() {
+            return Err(format!("header '{name}' is not a valid HTTP header name"));
+        }
         if is_sensitive_header(name) {
             return Err(format!("header '{name}' is managed by the gateway"));
         }
@@ -289,6 +295,26 @@ pub fn effective_model(body: &Value, original_model: &str) -> String {
         .filter(|model| !model.is_empty())
         .unwrap_or(original_model)
         .to_string()
+}
+
+/// The effective upstream model for a protocol that carries the model in the
+/// request path (Gemini) instead of the body: apply the `model` parameter rules
+/// to the original model string. Rules that fail to compile are skipped, which
+/// mirrors `apply_params` (validation rejects them at save time anyway).
+pub fn effective_model_for(original: &str, config: &RewriteConfig) -> String {
+    let mut model = original.to_string();
+    for rule in &config.param_replace {
+        if rule.field != "model" {
+            continue;
+        }
+        let Ok(re) = compile(&rule.pattern) else {
+            continue;
+        };
+        model = re
+            .replace_all(&model, rule.replacement.as_str())
+            .into_owned();
+    }
+    model
 }
 
 /// Rewrite a verbatim (non-shared-model) JSON body, used by auxiliary

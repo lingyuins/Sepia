@@ -161,7 +161,6 @@ export function useGatewayWorkspace(): GatewayWorkspace {
     if (!liveSession) return
     const dirty = new Set<WorkspaceDomain>()
     let dirtyAll = false
-    let connected = false
     const source = new EventSource('/api/v1/events')
     const request = (domains: LiveRefreshDomains) => {
       if (document.hidden) {
@@ -174,10 +173,10 @@ export function useGatewayWorkspace(): GatewayWorkspace {
         // reconnect retries. A 401 has already moved the console to login.
       })
     }
-    source.onopen = () => {
-      if (connected) request('all')
-      connected = true
-    }
+    // Every open, including the first one, asks for one full refresh: events
+    // may have been missed before the stream connected. The coalescer merges
+    // it with the login refresh, so it costs at most one extra read.
+    source.onopen = () => request('all')
     source.onmessage = (message) => {
       const domains = parseLiveEvent(message.data)
       if (domains !== null) request(domains)

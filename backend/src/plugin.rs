@@ -1230,6 +1230,7 @@ pub async fn provider_fetch(
     request: &crate::protocol::ChatRequest,
     model: &str,
     protocol: crate::protocol::Protocol,
+    rewrite: &crate::rewrite::RewriteConfig,
 ) -> Result<reqwest::Response, String> {
     let plugin_id = provider
         .plugin_id
@@ -1254,14 +1255,7 @@ pub async fn provider_fetch(
             &state.http(),
             &record,
             "provider.fetch",
-            json!({
-                "provider": provider_descriptor(provider),
-                "secret": secret,
-                "model": model,
-                "protocol": protocol_label(protocol),
-                "stream": request.stream,
-                "request": request_json(request),
-            }),
+            provider_fetch_payload(provider, secret, request, model, protocol, rewrite),
             None,
         )
         .await
@@ -1285,6 +1279,33 @@ pub async fn provider_fetch(
         .body(body)
         .map(reqwest::Response::from)
         .map_err(|error| format!("plugin response: {error}"))
+}
+
+/// Payload of the `provider.fetch` hook: the request plus the built-in
+/// rewriting rules that would otherwise only reach HTTP upstreams (headers and
+/// only-if-absent parameter defaults, sensitive headers already filtered).
+/// Older plugins ignore the added fields.
+fn provider_fetch_payload(
+    provider: &crate::Provider,
+    secret: &str,
+    request: &crate::protocol::ChatRequest,
+    model: &str,
+    protocol: crate::protocol::Protocol,
+    rewrite: &crate::rewrite::RewriteConfig,
+) -> Value {
+    json!({
+        "provider": provider_descriptor(provider),
+        "secret": secret,
+        "model": model,
+        "protocol": protocol_label(protocol),
+        "stream": request.stream,
+        "request": request_json(request),
+        "headers": crate::rewrite::header_pairs(rewrite)
+            .into_iter()
+            .map(|(name, value)| json!({"name": name, "value": value}))
+            .collect::<Vec<_>>(),
+        "param_defaults": rewrite.param_defaults,
+    })
 }
 
 fn provider_descriptor(provider: &crate::Provider) -> Value {
@@ -1335,5 +1356,64 @@ mod tests {
     #[test]
     fn package_requires_wasm_magic_and_manifest() {
         assert!(parse_package(b"not a zip").is_err());
+    }
+    #[test]
+    fn provider_fetch_payload_carries_builtin_rewrite_rules() {
+        let provider = crate::Provider {
+            id: 7,
+            name: "plug".into(),
+            protocol: crate::ProviderProtocol::OpenAI,
+            endpoint: "plugin://echo".into(),
+            models: vec!["plugin-chat".into()],
+            key_count: 1,
+            group_id: String::new(),
+            enabled: true,
+            plugin_id: Some("echo".into()),
+            rewrite: Default::default(),
+        };
+        let rewrite = crate::rewrite::RewriteConfig {
+            headers: vec![
+                crate::rewrite::HeaderRule {
+                    name: "X-Trace".into(),
+                    value: "trace".into(),
+                },
+                // Managed headers never reach the plugin.
+                crate::rewrite::HeaderRule {
+                    name: "Authorization".into(),
+                    value: "Bearer evil".into(),
+                },
+            ],
+            param_defaults: vec![crate::rewrite::ParamDefaultRule {
+                field: "temperature".into(),
+                value: json!(0.3),
+            }],
+            ..Default::default()
+        };
+        let request = crate::protocol::ChatRequest {
+            model: "plugin-chat".into(),
+            messages: vec![crate::protocol::Message::new(
+                crate::protocol::Role::User,
+                "hi",
+            )],
+            ..Default::default()
+        };
+        let payload = provider_fetch_payload(
+            &provider,
+            "sk-secret",
+            &request,
+            "real-model",
+            crate::protocol::Protocol::OpenAI,
+            &rewrite,
+        );
+        assert_eq!(payload["model"], "real-model");
+        assert_eq!(payload["secret"], "sk-secret");
+        assert_eq!(
+            payload["headers"],
+            json!([{"name": "X-Trace", "value": "trace"}])
+        );
+        assert_eq!(
+            payload["param_defaults"],
+            json!([{"field": "temperature", "value": 0.3}])
+        );
     }
 }

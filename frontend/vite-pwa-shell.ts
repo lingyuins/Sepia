@@ -4,7 +4,10 @@ import type { Plugin } from 'vite'
 // PWA: precache the built entry assets into sw.js so a first visit can boot
 // offline after the service worker activates — without waiting for a second
 // controlled load to fill the cache. Entry chunks plus their static imports
-// (JS/CSS/fonts) are listed; lazy chunks stay cache-on-first-use.
+// (JS/CSS/fonts) are listed, and so are the chunks behind the entry's dynamic
+// imports (the analytics charts) with their own static closure: those modules
+// are needed offline too, and a failed chunk fetch would blank the charts.
+// Dynamic imports nested deeper stay cache-on-first-use.
 export function pwaShell(): Plugin {
   return {
     name: 'sepia-pwa-shell',
@@ -19,7 +22,17 @@ export function pwaShell(): Plugin {
         for (const asset of chunk.viteMetadata?.importedAssets ?? []) files.add(asset)
         for (const imported of chunk.imports) if (bundle[imported]?.type === 'chunk') visit(imported)
       }
-      for (const item of Object.values(bundle)) if (item.type === 'chunk' && item.isEntry) visit(item.fileName)
+      // A dynamic import may point at a chunk or a plain asset (CSS); the
+      // latter is cached as-is since it has no static closure of its own.
+      const visitDynamic = (fileName: string) => {
+        if (bundle[fileName]?.type === 'chunk') visit(fileName)
+        else files.add(fileName)
+      }
+      for (const item of Object.values(bundle)) {
+        if (item.type !== 'chunk' || !item.isEntry) continue
+        visit(item.fileName)
+        for (const lazy of item.dynamicImports) visitDynamic(lazy)
+      }
       const urls = [...files].map((file) => `/${file}`).sort()
       const swPath = `${options.dir ?? 'dist'}/sw.js`
       const source = readFileSync(swPath, 'utf8')

@@ -81,6 +81,9 @@ async fn echo_handler(
     if path.ends_with("/embeddings") {
         return axum::Json(json!({"object":"list","data":[{"object":"embedding","index":0,"embedding":[0.1]}],"model":value.get("model").cloned().unwrap_or(json!("")),"usage":{"prompt_tokens":1,"total_tokens":1}})).into_response();
     }
+    if path.contains("generateContent") {
+        return axum::Json(json!({"candidates":[{"content":{"role":"model","parts":[{"text":"ok"}]},"finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":4,"candidatesTokenCount":1}})).into_response();
+    }
     let model = value.get("model").and_then(Value::as_str).unwrap_or("");
     let system = value
         .get("messages")
@@ -426,4 +429,126 @@ async fn auxiliary_forwarding_applies_headers_and_raw_param_rewrite() {
     assert_eq!(hit["body"]["model"], "real-alias");
     assert_eq!(hit["body"]["encoding_format"], "float");
     assert_eq!(hit["x_trace"], "aux-trace");
+}
+
+#[tokio::test]
+async fn invalid_header_names_are_rejected_at_save() {
+    let directory = tempfile::tempdir().unwrap();
+    let store = Store::connect(&directory.path().join("names.db"))
+        .await
+        .unwrap();
+    let address = serve(app(AppState::for_testing(store.clone()).await)).await;
+    let (client, cookie) = admin(address, &store).await;
+    for (name, expected) in [
+        (" X-Spaced ", "leading or trailing spaces"),
+        ("Bad Header", "is not a valid HTTP header name"),
+    ] {
+        let response = client
+            .post(format!("http://{address}/api/v1/providers"))
+            .header("cookie", &cookie)
+            .json(&json!({
+                "name":format!("bad-{}", expected.replace(' ', "-")),
+                "protocol":"openai",
+                "endpoint":"http://127.0.0.1:9/v1",
+                "models":["m"],
+                "secret":"sk-x",
+                "headers":[{"name":name,"value":"v"}]
+            }))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), 400, "header name {name:?}");
+        let body: Value = response.json().await.unwrap();
+        let message = body["error"]["message"].as_str().unwrap();
+        assert!(message.contains(expected), "{name:?}: {message}");
+    }
+}
+
+#[tokio::test]
+async fn gemini_upstream_url_uses_the_rewritten_model() {
+    let (upstream, captured) = echo_upstream().await;
+    let directory = tempfile::tempdir().unwrap();
+    let store = Store::connect(&directory.path().join("gemini.db"))
+        .await
+        .unwrap();
+    let keys = KeyStore::testing();
+    let provider = store
+        .create_provider(
+            NewProvider {
+                name: "gem".into(),
+                protocol: ProviderProtocol::Gemini,
+                endpoint: format!("http://{upstream}/v1beta"),
+                models: vec!["alias-model".into()],
+                plugin_id: None,
+                mode: "single".into(),
+                rewrite: RewriteConfig {
+                    param_replace: vec![ParamReplaceRule {
+                        field: "model".into(),
+                        pattern: "^alias-(.+)$".into(),
+                        replacement: "real-$1".into(),
+                    }],
+                    ..Default::default()
+                },
+            },
+            "good-key",
+            &[],
+            &keys,
+        )
+        .await
+        .unwrap();
+    store
+        .create_route(NewRoute {
+            slug: "alias-model".into(),
+            name: "alias-model".into(),
+            description: String::new(),
+            patterns: vec!["alias-model".into()],
+            provider_id: provider.id,
+            model: "alias-model".into(),
+            is_default: true,
+            list_members: false,
+            candidates: vec![(provider.id, "alias-model".into())],
+            rewrite: Default::default(),
+        })
+        .await
+        .unwrap();
+    let plaintext = client_key(&store, vec!["alias-model".into()]).await;
+    let address = serve(app(AppState::for_testing(store.clone()).await)).await;
+
+    // Gemini carries the model in the URL path, never in the body, so only the
+    // path rewrite proves the rule took effect upstream.
+    let response = reqwest::Client::new()
+        .post(format!(
+            "http://{address}/v1beta/models/alias-model:generateContent"
+        ))
+        .header("x-goog-api-key", &plaintext)
+        .json(&json!({
+            "contents":[{"role":"user","parts":[{"text":"Hello"}]}],
+            "generationConfig":{"maxOutputTokens":16}
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 200);
+    let body: Value = response.json().await.unwrap();
+    assert_eq!(body["candidates"][0]["content"]["parts"][0]["text"], "ok");
+
+    {
+        let seen = captured.0.lock().unwrap();
+        let hit = seen
+            .iter()
+            .find(|hit| hit["path"].as_str().unwrap().contains("generateContent"))
+            .unwrap();
+        let path = hit["path"].as_str().unwrap();
+        assert!(
+            path.ends_with("/v1beta/models/real-model:generateContent"),
+            "rewritten Gemini path: {path}"
+        );
+    }
+    // Key scopes, logs and quotas keep the original candidate model.
+    let requests = store.requests().await.unwrap();
+    let record = requests
+        .iter()
+        .find(|record| record.protocol == "gemini")
+        .unwrap();
+    assert_eq!(record.model, "alias-model");
 }

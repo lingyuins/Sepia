@@ -111,8 +111,13 @@ export function validateRewrite(config: RewriteSource): RewriteIssue[] {
     const name = rule.name.trim()
     if (!name) {
       issues.push({ key: 'rewriteHeaderNameRequired' })
+    } else if (rule.name !== name) {
+      issues.push({ key: 'rewriteHeaderNameSpaces', values: { name: rule.name } })
     } else if (isReservedHeader(name)) {
       issues.push({ key: 'rewriteHeaderReserved', values: { name } })
+    }
+    if (rule.value.includes('\r') || rule.value.includes('\n')) {
+      issues.push({ key: 'rewriteHeaderValueLine', values: { name } })
     }
   }
   for (const rule of rules.paramReplace) {

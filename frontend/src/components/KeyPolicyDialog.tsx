@@ -42,7 +42,12 @@ export default function KeyPolicyDialog({ open, onClose, onCreate }: { open: boo
       try { await onCreate(policy); setDraft(emptyDraft()) }
       catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)) }
       finally { setBusy(false) }
-    } catch { setError(t('keyPolicyError')) }
+    } catch {
+      // Parse failures live on the limits fields; show them even when the
+      // section was collapsed so the error is not hidden.
+      setLimitsOpen(true)
+      setError(t('keyPolicyError'))
+    }
   }
   const groupLabel = (id: string, fallback: string) => id === 'official' ? t('officialChannels') : id === 'free' ? t('freeChannels') : id === 'team' ? t('teamChannels') : fallback
 

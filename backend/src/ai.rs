@@ -775,15 +775,67 @@ fn sanitize_proposals(
             }
         }
     }
+    // Stored routes keep the legacy contract: a proposal that reproduces an
+    // existing slug is dropped. Two proposals in this batch may still collide
+    // (different families, same slug), and dropping the second one would lose
+    // routable candidates, so it keeps its own route under a numeric suffix.
+    let stored: std::collections::HashSet<String> = existing_slugs.clone();
+    let mut used: std::collections::HashSet<String> = existing_slugs.clone();
     let mut routes = Vec::new();
     for route in merged {
-        if existing_slugs.contains(&route.slug) {
+        if stored.contains(&route.slug) {
             continue;
         }
-        existing_slugs.insert(route.slug.clone());
-        routes.push(json!({"slug":route.slug,"name":route.name,"description":route.description,"patterns":route.patterns,"candidates":route.candidates}));
+        let (slug, name) = if used.contains(&route.slug) {
+            disambiguate_slug(&route.slug, &route.name, &used)
+        } else {
+            (route.slug, route.name)
+        };
+        used.insert(slug.clone());
+        existing_slugs.insert(slug.clone());
+        routes.push(json!({"slug":slug,"name":name,"description":route.description,"patterns":route.patterns,"candidates":route.candidates}));
     }
     routes
+}
+
+/// Smallest numeric suffix that frees `slug` while respecting the 64-character
+/// slug contract (the base is shortened when the suffix needs the room) and the
+/// 120-character display-name cap; the name gains the same number so the two
+/// routes stay distinguishable.
+fn disambiguate_slug(
+    slug: &str,
+    name: &str,
+    used: &std::collections::HashSet<String>,
+) -> (String, String) {
+    let mut suffix = 2u32;
+    loop {
+        let suffix_text = format!("-{suffix}");
+        let slug_room = 64usize.saturating_sub(suffix_text.chars().count()).max(1);
+        let base = slug
+            .chars()
+            .take(slug_room)
+            .collect::<String>()
+            .trim_end_matches('-')
+            .to_string();
+        let base = if base.is_empty() {
+            "ai-route".to_string()
+        } else {
+            base
+        };
+        let candidate = format!("{base}{suffix_text}");
+        if !used.contains(&candidate) {
+            let name_suffix = format!(" {suffix}");
+            let name_room = 120usize.saturating_sub(name_suffix.chars().count());
+            let base_name = name
+                .chars()
+                .take(name_room)
+                .collect::<String>()
+                .trim_end()
+                .to_string();
+            return (candidate, format!("{base_name}{name_suffix}"));
+        }
+        suffix += 1;
+    }
 }
 
 pub async fn generate_routes(

@@ -1,7 +1,7 @@
 // Sepia console service worker.
 // Caches only the static app shell (same-origin GET assets); /api and /v1
 // always hit the gateway so live data, auth and SSE are never served stale.
-const CACHE = 'sepia-shell-v2'
+const CACHE = 'sepia-shell-v3'
 // Replaced at build time by vite-pwa-shell.ts with the hashed entry assets.
 const PRECACHE_ASSETS = []
 const SHELL = ['/', '/index.html', '/manifest.webmanifest', '/favicon.svg', '/icons/icon-192.png', '/icons/icon-512.png', '/icons/icon-maskable-512.png', '/icons/apple-touch-icon.png', ...PRECACHE_ASSETS]
@@ -29,9 +29,12 @@ self.addEventListener('fetch', (event) => {
     return
   }
   // Static assets are content-hashed: cache-first, fill the cache on first use.
+  // HTML responses are never cached: a missing chunk answered with the SPA
+  // index by ServeDir would otherwise be served as JavaScript on every load.
   event.respondWith(
     caches.match(request).then((cached) => cached || fetch(request).then((response) => {
-      if (response.ok && response.type === 'basic') {
+      const contentType = response.headers.get('content-type') || ''
+      if (response.ok && response.type === 'basic' && !contentType.includes('text/html')) {
         const copy = response.clone()
         caches.open(CACHE).then((cache) => cache.put(request, copy))
       }

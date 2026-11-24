@@ -89,7 +89,8 @@ export function buildFamilyHints(
   for (const provider of providers) {
     if (!provider.enabled || (provider.keyCount !== undefined && provider.keyCount < 1)) continue
     for (const model of provider.modelsList) {
-      const family = normalizeModelName(model, rules).trim().toLowerCase().slice(0, 128)
+      // Cap by Unicode code points to match the backend's chars().take(128)
+      const family = [...normalizeModelName(model, rules).trim().toLowerCase()].slice(0, 128).join('')
       if (family) hints.push({ provider_id: provider.id, model, family })
     }
   }

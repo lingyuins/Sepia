@@ -46,6 +46,10 @@ struct MockAi {
     /// Propose the line's family= value as the slug and omit the name, so
     /// tests can exercise server-side family merging across batches.
     family_slugs: bool,
+    /// Propose one shared slug for every catalog line, so unrelated families
+    /// collide on the slug and the server must disambiguate instead of
+    /// dropping the second route.
+    single_slug: bool,
 }
 
 async fn ai_upstream(delay_ms: u64, broken: Vec<String>) -> (SocketAddr, Arc<Mutex<Vec<ChatHit>>>) {
@@ -57,13 +61,19 @@ async fn ai_upstream_with(
     broken: Vec<String>,
     spoof_names: bool,
 ) -> (SocketAddr, Arc<Mutex<Vec<ChatHit>>>) {
-    ai_upstream_flags(delay_ms, broken, spoof_names, false).await
+    ai_upstream_flags(delay_ms, broken, spoof_names, false, false).await
 }
 
 /// Planner that proposes each line's family as the slug and omits the name, so
 /// tests exercise server-side family merging instead of the planner's grouping.
 async fn ai_upstream_family() -> (SocketAddr, Arc<Mutex<Vec<ChatHit>>>) {
-    ai_upstream_flags(0, vec![], false, true).await
+    ai_upstream_flags(0, vec![], false, true, false).await
+}
+
+/// Planner that proposes one shared slug ("shared") for every catalog line, so
+/// unrelated families collide and the server has to disambiguate.
+async fn ai_upstream_single_slug() -> (SocketAddr, Arc<Mutex<Vec<ChatHit>>>) {
+    ai_upstream_flags(0, vec![], false, false, true).await
 }
 
 async fn ai_upstream_flags(
@@ -71,6 +81,7 @@ async fn ai_upstream_flags(
     broken: Vec<String>,
     spoof_names: bool,
     family_slugs: bool,
+    single_slug: bool,
 ) -> (SocketAddr, Arc<Mutex<Vec<ChatHit>>>) {
     let mock = MockAi {
         hits: Arc::new(Mutex::new(Vec::new())),
@@ -78,6 +89,7 @@ async fn ai_upstream_flags(
         broken,
         spoof_names,
         family_slugs,
+        single_slug,
     };
     let handler = any(
         move |State(mock): State<MockAi>, request: axum::extract::Request| async move {
@@ -146,7 +158,11 @@ async fn ai_upstream_flags(
                         .find_map(|token| token.strip_prefix("family="))
                         .unwrap_or(&model)
                         .to_string();
-                    let (slug, name) = if mock.family_slugs {
+                    let (slug, name) = if mock.single_slug {
+                        // One slug for every line: only the server can keep
+                        // both families routable, via a numeric suffix.
+                        ("shared".to_string(), Value::Null)
+                    } else if mock.family_slugs {
                         // Every line of a family proposes the family as its
                         // slug: the server merge, not the planner, must union
                         // them across batches.
@@ -953,4 +969,71 @@ async fn same_slug_proposals_union_candidates() {
         .collect();
     assert_eq!(candidates, vec![(1, "kimi-k3.1-pro"), (2, "kimi-k3.1-pro")]);
     assert_eq!(routes[0]["patterns"], json!(["kimi-k3.1-pro"]));
+}
+
+#[tokio::test]
+async fn unrelated_families_sharing_a_slug_are_disambiguated() {
+    let (address, state, _directory) =
+        gateway_with(&[("alpha", &["m-alpha"]), ("beta", &["m-beta"])]).await;
+    let base = format!("http://{address}");
+    let (client, cookie) = admin(&base, &state).await;
+    enable_pool(&client, &base, &cookie).await;
+    let (upstream, _hits) = ai_upstream_single_slug().await;
+    client
+        .post(format!("{base}/api/v1/ai/pool"))
+        .header("cookie", &cookie)
+        .json(&service_body(&format!("http://{upstream}"), "planner-x", 1))
+        .send()
+        .await
+        .unwrap();
+
+    // Both lines are proposed as "shared" but belong to different families, so
+    // the old sanitizer dropped the second route and its candidates entirely.
+    let result: Value = client
+        .post(format!("{base}/api/v1/ai/routes/generate"))
+        .header("cookie", &cookie)
+        .json(&json!({"instruction":"group","batch_size":10}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(result["errors"], json!([]));
+    assert_eq!(result["batches"], 1);
+    let routes = result["routes"].as_array().unwrap();
+    assert_eq!(routes.len(), 2);
+    // Determinism comes from the catalog sort (family, then model): the first
+    // family keeps the proposed slug, the second gains the numeric suffix.
+    let rows: Vec<(String, String, String)> = routes
+        .iter()
+        .map(|route| {
+            (
+                route["slug"].as_str().unwrap().to_string(),
+                route["name"].as_str().unwrap().to_string(),
+                route["candidates"][0]["model"]
+                    .as_str()
+                    .unwrap()
+                    .to_string(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        rows[0],
+        (
+            String::from("shared"),
+            String::from("Shared"),
+            String::from("m-alpha")
+        )
+    );
+    assert_eq!(
+        rows[1],
+        (
+            String::from("shared-2"),
+            String::from("Shared 2"),
+            String::from("m-beta")
+        )
+    );
+    assert_eq!(routes[0]["patterns"], json!(["m-alpha"]));
+    assert_eq!(routes[1]["patterns"], json!(["m-beta"]));
 }

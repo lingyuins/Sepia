@@ -62,8 +62,8 @@ impl Store {
     }
     pub async fn analytics_for(&self, period: &str) -> Result<serde_json::Value, String> {
         // `None` means no time window at all: "all" aggregates every recorded request
-        // through the same day buckets, so the series/by_model/by_provider shapes stay
-        // identical to the windowed periods.
+        // through the same day buckets, so the series/by_model/by_provider/by_route
+        // shapes stay identical to the windowed periods.
         let (window, bucket) = match period {
             "24 hours" => (Some("-24 hours"), "%Y-%m-%dT%H:00:00Z"),
             "7 days" => (Some("-7 days"), "%Y-%m-%dT00:00:00Z"),
@@ -92,15 +92,24 @@ impl Store {
             "SELECT a.provider_id, COUNT(*) requests, COALESCE(SUM(r.status = 'success'), 0) successful, COALESCE(AVG(a.latency_ms), 0) latency_ms FROM attempts a JOIN requests r ON r.id = a.request_id WHERE a.provider_id IS NOT NULL{} GROUP BY a.provider_id",
             time_filter("r.created_at", "AND")
         );
+        // Route performance must be aggregated over the whole window instead of the
+        // newest request page, so routes whose recent traffic fell out of that page
+        // still report their real totals. Direct (unrouted) requests are excluded.
+        let by_route_sql = format!(
+            "SELECT route, COUNT(*) requests, COALESCE(SUM(status = 'success'), 0) successful, COALESCE(AVG(latency_ms), 0.0) latency_ms FROM requests WHERE route IS NOT NULL AND route != ''{} GROUP BY route ORDER BY requests DESC",
+            time_filter("created_at", "AND")
+        );
         let mut totals = sqlx::query(&totals_sql);
         let mut series = sqlx::query(&series_sql).bind(bucket);
         let mut by_model = sqlx::query(&by_model_sql);
         let mut by_provider = sqlx::query(&by_provider_sql);
+        let mut by_route = sqlx::query(&by_route_sql);
         if let Some(window) = window {
             totals = totals.bind(window);
             series = series.bind(window);
             by_model = by_model.bind(window);
             by_provider = by_provider.bind(window);
+            by_route = by_route.bind(window);
         }
         let row = totals
             .fetch_one(&self.pool)
@@ -109,8 +118,9 @@ impl Store {
         let series = series.fetch_all(&self.pool).await.map_err(|e| e.to_string())?.into_iter().map(|row| serde_json::json!({"time":row.get::<String, _>("time"),"requests":row.get::<i64, _>("requests"),"successful":row.get::<i64, _>("successful"),"cost_micros":row.get::<i64, _>("cost_micros"),"latency_ms":row.get::<f64, _>("latency_ms")})).collect::<Vec<_>>();
         let by_model = by_model.fetch_all(&self.pool).await.map_err(|e| e.to_string())?.into_iter().map(|row| serde_json::json!({"model":row.get::<String, _>("model"),"requests":row.get::<i64, _>("requests")})).collect::<Vec<_>>();
         let by_provider = by_provider.fetch_all(&self.pool).await.map_err(|e| e.to_string())?.into_iter().map(|row| serde_json::json!({"provider_id":row.get::<i64, _>("provider_id"),"requests":row.get::<i64, _>("requests"),"successful":row.get::<i64, _>("successful"),"latency_ms":row.get::<f64, _>("latency_ms")})).collect::<Vec<_>>();
+        let by_route = by_route.fetch_all(&self.pool).await.map_err(|e| e.to_string())?.into_iter().map(|row| serde_json::json!({"route":row.get::<String, _>("route"),"requests":row.get::<i64, _>("requests"),"successful":row.get::<i64, _>("successful"),"latency_ms":row.get::<f64, _>("latency_ms")})).collect::<Vec<_>>();
         Ok(
-            serde_json::json!({"requests":row.get::<i64, _>("requests"),"input_tokens":row.get::<i64, _>("input_tokens"),"output_tokens":row.get::<i64, _>("output_tokens"),"cost_micros":row.get::<i64, _>("cost_micros"),"successful":row.get::<i64, _>("successful"),"latency_ms":row.get::<f64, _>("latency_ms"),"series":series,"by_model":by_model,"by_provider":by_provider}),
+            serde_json::json!({"requests":row.get::<i64, _>("requests"),"input_tokens":row.get::<i64, _>("input_tokens"),"output_tokens":row.get::<i64, _>("output_tokens"),"cost_micros":row.get::<i64, _>("cost_micros"),"successful":row.get::<i64, _>("successful"),"latency_ms":row.get::<f64, _>("latency_ms"),"series":series,"by_model":by_model,"by_provider":by_provider,"by_route":by_route}),
         )
     }
 }

@@ -9,6 +9,7 @@ async fn provider_and_route_updates_round_trip_and_analytics_are_real() {
     let empty = store.analytics_for("30 days").await.unwrap();
     assert_eq!(empty["requests"], 0);
     assert_eq!(empty["latency_ms"], 0.0);
+    assert_eq!(empty["by_route"], serde_json::json!([]));
     let provider = store
         .create_provider(
             sepia_gateway::NewProvider {
@@ -306,4 +307,82 @@ async fn analytics_periods_cover_ninety_days_and_all_history() {
         store.analytics_for("2 days").await.unwrap_err(),
         "unsupported analytics period"
     );
+}
+
+async fn seed_routed_request(store: &Store, key_id: i64, model: &str, route: &str) -> String {
+    let request = store
+        .begin_request(key_id, sepia_gateway::ProviderProtocol::OpenAI, model)
+        .await
+        .unwrap();
+    store.set_request_route(&request, route).await.unwrap();
+    store
+        .finish_request_with_cost(&request, "success", 10, 5, 42, 25)
+        .await
+        .unwrap();
+    request
+}
+
+#[tokio::test]
+async fn analytics_by_route_aggregates_routes_outside_the_newest_request_page() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("analytics-routes.db");
+    let store = Store::connect(&path).await.unwrap();
+    let key = store
+        .create_client_key(sepia_gateway::UpsertClientKey {
+            name: "routes".into(),
+            models: vec!["*".into()],
+            token_limit: 0,
+            max_amount_micros: 0,
+            rpm: 0,
+            tpm: 0,
+            expires_at: None,
+            secret: None,
+        })
+        .await
+        .unwrap();
+    // The request list the console shows only returns the newest 200 records, so a
+    // route whose traffic is older than that page would lose its counters entirely;
+    // the server-side aggregate must keep reporting it.
+    for _ in 0..3 {
+        let request = seed_routed_request(&store, key.id, "legacy-model", "legacy-route").await;
+        backdate_request(&path, &request, "-1 days").await;
+    }
+    for _ in 0..205 {
+        seed_routed_request(&store, key.id, "busy-model", "busy-route").await;
+    }
+    // Direct requests never carry a route and must not become a `""` row.
+    let direct = store
+        .begin_request(key.id, sepia_gateway::ProviderProtocol::OpenAI, "direct")
+        .await
+        .unwrap();
+    store
+        .finish_request_with_cost(&direct, "success", 1, 1, 0, 10)
+        .await
+        .unwrap();
+
+    let analytics = store.analytics_for("30 days").await.unwrap();
+    assert_eq!(analytics["requests"], 209);
+    let routes = analytics["by_route"].as_array().unwrap();
+    assert_eq!(routes.len(), 2);
+    assert_eq!(routes[0]["route"], "busy-route");
+    assert_eq!(routes[0]["requests"], 205);
+    assert_eq!(routes[0]["successful"], 205);
+    assert_eq!(routes[0]["latency_ms"], 25.0);
+    let legacy = routes
+        .iter()
+        .find(|row| row["route"] == "legacy-route")
+        .unwrap();
+    assert_eq!(legacy["requests"], 3);
+    assert_eq!(legacy["successful"], 3);
+    assert_eq!(legacy["latency_ms"], 25.0);
+    let routed: i64 = routes
+        .iter()
+        .map(|row| row["requests"].as_i64().unwrap())
+        .sum();
+    assert_eq!(routed, 208);
+
+    // The narrow window still excludes the backdated route while keeping the rest.
+    let day = store.analytics_for("24 hours").await.unwrap();
+    assert_eq!(day["by_route"].as_array().unwrap().len(), 1);
+    assert_eq!(day["by_route"][0]["route"], "busy-route");
 }

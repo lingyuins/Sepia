@@ -99,3 +99,14 @@ test('family hints normalize variant ids and skip unavailable providers', () => 
     { provider_id: 2, model: 'moonshotai/kimi-k3.1-pro:free', family: 'kimi-k3.1-pro' },
   ])
 })
+
+test('family hint cap counts Unicode code points, matching the backend', () => {
+  const rules = compileNormalizeRules()
+  const astral = '😀'.repeat(130)
+  const hints = buildFamilyHints([
+    { id: 1, enabled: true, modelsList: [astral], keyCount: 1 },
+  ], rules)
+  assert.equal(hints.length, 1)
+  assert.equal([...hints[0].family].length, 128)
+  assert.equal(hints[0].family, '😀'.repeat(128))
+})

@@ -1,5 +1,4 @@
 import type { TranslationKey } from './i18n'
-import type { Provider } from './workspace'
 
 export const analyticsPeriods = ['24 hours', '7 days', '30 days', '90 days', 'all'] as const
 export type AnalyticsPeriod = (typeof analyticsPeriods)[number]
@@ -13,14 +12,6 @@ const periodLabelKeys: Record<AnalyticsPeriod, TranslationKey> = {
 
 export function analyticsPeriodLabelKey(period: string): TranslationKey {
   return periodLabelKeys[period as AnalyticsPeriod] ?? '30d'
-}
-
-export function analyticsPeriodWindowMs(period: string): number {
-  if (period === '24 hours') return 86_400_000
-  if (period === '7 days') return 604_800_000
-  if (period === '90 days') return 7_776_000_000
-  if (period === 'all') return Number.POSITIVE_INFINITY
-  return 2_592_000_000
 }
 
 export function formatRequestTime(value: string, locale: string) {
@@ -43,19 +34,37 @@ export function chartTimeLabel(value: string, period: string, language: string, 
   ).format(date)
 }
 
-export function routeProviderMetrics(route: Pick<Provider, 'latency' | 'success'>[]) {
-  const latencies = route.map((provider) => provider.latency).filter((latency) => latency > 0)
-  const successRates = route
-    .map((provider) => Number.parseFloat(provider.success))
-    .filter((rate) => Number.isFinite(rate))
+export type RouteAggregate = {
+  route: string
+  requests: number
+  successful: number
+  latency_ms: number
+}
+
+// Route health must come from the server-side window aggregate (analytics.by_route):
+// provider-level averages and the newest request page both undercount routes whose
+// traffic aged out of that page.
+export function routeAggregate(rows: RouteAggregate[] | undefined, slug: string) {
+  const row = rows?.find((item) => item.route === slug)
+  if (!row || row.requests <= 0) return { requests: 0, latency: 0, success: '—' }
   return {
-    latency: latencies.length
-      ? Math.round(latencies.reduce((sum, latency) => sum + latency, 0) / latencies.length)
-      : 0,
-    success: successRates.length
-      ? `${(successRates.reduce((sum, rate) => sum + rate, 0) / successRates.length).toFixed(2)}%`
-      : '—',
+    requests: row.requests,
+    latency: Math.round(row.latency_ms),
+    success: `${((row.successful / row.requests) * 100).toFixed(2)}%`,
   }
+}
+
+export function modelPerformanceRows(
+  rows: { model: string; requests: number }[] | undefined,
+  limit = 6,
+) {
+  return [...(rows ?? [])]
+    .sort((a, b) => b.requests - a.requests)
+    .slice(0, limit)
+    .map((row) => ({
+      model: row.model.replace('claude-', '').replace('gemini-', ''),
+      requests: row.requests,
+    }))
 }
 
 export function rankRoutePerformance<T extends { requests: number }>(rows: T[], limit = 5) {

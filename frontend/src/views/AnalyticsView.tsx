@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { ArrowDownRight, Gauge, Layers3, Route } from 'lucide-react'
 import { useWorkspace, useTranslation, useLocale } from '../workspace'
-import { chartTimeLabel, analyticsPeriodLabelKey, analyticsPeriodWindowMs, analyticsPeriods, rankRoutePerformance, routeProviderMetrics } from '../analytics'
+import { chartTimeLabel, analyticsPeriodLabelKey, analyticsPeriods, modelPerformanceRows, rankRoutePerformance, routeAggregate } from '../analytics'
 import { routeDisplayCandidates } from '../route-display'
 import { ProviderCell, SectionHeading } from '../components/UI'
 import { strategyLabelKey } from '../route-strategy'
@@ -15,7 +15,7 @@ const requestCount = (value: string) => {
 }
 
 export function AnalyticsView() {
-  const { providers, requests, routes, channelGroups, analytics, refresh, notify } =
+  const { providers, routes, channelGroups, analytics, refresh, notify } =
     useWorkspace()
   const t = useTranslation()
   const locale = useLocale()
@@ -23,12 +23,6 @@ export function AnalyticsView() {
   const [metric, setMetric] = useState('Requests')
   const [showAllRoutes, setShowAllRoutes] = useState(false)
   const periodLabel = t(analyticsPeriodLabelKey(period))
-  const periodWindowMs = analyticsPeriodWindowMs(period)
-
-  const periodRequests = requests.filter((request) => {
-    const age = Date.now() - Date.parse(request.createdAt)
-    return Number.isFinite(age) && age <= periodWindowMs
-  })
 
   const data = (analytics.series || []).map((point) => ({
     ...point,
@@ -103,21 +97,16 @@ export function AnalyticsView() {
   const strategyLabel = (value: string) => t(strategyLabelKey(value))
   const routeTotals = routes.map((route, index) => {
     const candidates = routeDisplayCandidates(route)
-    const candidateProviders = candidates.flatMap((candidate) => {
-      const provider = providers.find((item) => item.name === candidate.provider)
-      return provider ? [provider] : []
-    })
-    const metrics = routeProviderMetrics(candidateProviders)
+    const metrics = routeAggregate(analytics.by_route, route.slug ?? '')
     const name = route.name || route.slug || `Route ${route.id}`
     return {
       id: route.id,
       name,
       chartName: name.length > 20 ? `${name.slice(0, 18)}…` : name,
       color: colors[index % colors.length],
-      requests: periodRequests.filter((request) => request.route === route.slug).length,
+      ...metrics,
       candidateCount: candidates.length,
       strategy: strategyLabel(route.strategy),
-      ...metrics,
     }
   })
 
@@ -131,12 +120,7 @@ export function AnalyticsView() {
   const routeData = routePerformance.ranked
   const visibleRouteData = showAllRoutes ? routeData : routePerformance.top
 
-  const modelData = Array.from(new Set(periodRequests.map((r) => r.model)))
-    .slice(0, 6)
-    .map((model) => ({
-      model: model.replace('claude-', '').replace('gemini-', ''),
-      requests: periodRequests.filter((r) => r.model === model).length,
-    }))
+  const modelData = modelPerformanceRows(analytics.by_model)
 
   return (
     <>
@@ -307,7 +291,7 @@ export function AnalyticsView() {
             <div>
               <h3>{t('routePerformance')}</h3>
               <p>
-                {t('routePerformanceSubtitle')} · {t('localAnalyticsNote')}
+                {t('routePerformanceSubtitle')} · {t('aggregatedAnalyticsNote')}
               </p>
             </div>
             <span className="chart-unit">{periodLabel}</span>
@@ -381,7 +365,7 @@ export function AnalyticsView() {
           <div>
             <h3>{t('modelPerformance')}</h3>
             <p>
-              {t('modelPerformanceSubtitle')} · {t('localAnalyticsNote')}
+              {t('modelPerformanceSubtitle')} · {t('aggregatedAnalyticsNote')}
             </p>
           </div>
           <Layers3 size={17} />

@@ -168,7 +168,7 @@ Compose 将端口仅绑定到本机回环地址，并要求在 `.env` 中提供 
 
 远程或局域网部署必须使用 HTTPS 反向代理，设置 `SEPIA_TRUSTED_PROXY=true`，并在容器环境中移除 `SEPIA_HTTP_LOOPBACK_COOKIE`，使管理员 Cookie 保持 `Secure`。不要把容器的 5000 端口直接暴露到不受信网络。镜像不内置主密钥、管理员密码、初始化令牌或供应商凭据。
 
-开启 `SEPIA_TRUSTED_PROXY=true` 后，网关按 `X-Forwarded-For`（取最左侧合法地址，缺失时回退 `X-Real-IP`）识别真实客户端 IP，请求记录的 `client_ip` 与客户端密钥的 IP 白名单都按它判定；关闭时忽略这些请求头，只使用 TCP 直连地址。仅在网关前确有受信代理时开启，直接暴露端口时开启会允许客户端伪造来源 IP。Docker 自身的 `-p` 端口映射不会附加转发头，记录的仍是桥接网关地址；需要真实 IP 时请在容器前部署 nginx / Caddy 等转发 `X-Forwarded-For` 的代理。
+开启 `SEPIA_TRUSTED_PROXY=true` 后，网关按 `X-Forwarded-For`（取最左侧合法地址，缺失时回退 `X-Real-IP`）识别真实客户端 IP，请求记录的 `client_ip` 与客户端密钥的 IP 白名单都按它判定；关闭时忽略这些请求头，只使用 TCP 直连地址。仅在网关前确有受信代理时开启，直接暴露端口时开启会允许客户端伪造来源 IP。Docker 自身的 `-p` 端口映射不会附加转发头，记录的仍是桥接网关地址；需要真实 IP 时请在容器前部署 nginx / Caddy 等转发 `X-Forwarded-For` 的代理。**代理必须覆写（而非追加）转发头**：网关取最左侧地址，若代理把客户端自带的 `X-Forwarded-For` 原样保留在左侧（如 nginx 默认的 `$proxy_add_x_forwarded_for` 追加语义），客户端即可伪造来源 IP 绕过密钥 IP 白名单。nginx 应使用 `proxy_set_header X-Forwarded-For $remote_addr;`（Caddy 的 `reverse_proxy` 默认覆写，无需额外配置）。
 
 ### 环境变量
 
@@ -544,7 +544,7 @@ Compose binds the port only to the local loopback address and requires `SEPIA_MA
 
 For remote or LAN deployment, use an HTTPS reverse proxy, set `SEPIA_TRUSTED_PROXY=true`, and remove `SEPIA_HTTP_LOOPBACK_COOKIE` from the container environment so administrator cookies remain `Secure`. Do not expose port 5000 directly to untrusted networks. Images contain no master key, administrator password, bootstrap token, or provider credentials.
 
-With `SEPIA_TRUSTED_PROXY=true` the gateway resolves the real client IP from `X-Forwarded-For` (leftmost valid address, falling back to `X-Real-IP`); the recorded `client_ip` and client-key IP whitelists both use it. When disabled these headers are ignored and the TCP peer stands. Enable it only when a trusted proxy really fronts the gateway — on a directly exposed port it lets clients spoof their source address. Docker's own `-p` publishing adds no forwarding headers, so the recorded IP stays the bridge gateway address; run nginx/Caddy (or another proxy that sets `X-Forwarded-For`) in front of the container to see real addresses.
+With `SEPIA_TRUSTED_PROXY=true` the gateway resolves the real client IP from `X-Forwarded-For` (leftmost valid address, falling back to `X-Real-IP`); the recorded `client_ip` and client-key IP whitelists both use it. When disabled these headers are ignored and the TCP peer stands. Enable it only when a trusted proxy really fronts the gateway — on a directly exposed port it lets clients spoof their source address. Docker's own `-p` publishing adds no forwarding headers, so the recorded IP stays the bridge gateway address; run nginx/Caddy (or another proxy that sets `X-Forwarded-For`) in front of the container to see real addresses. **The proxy must overwrite (not append) the forwarding header**: the gateway reads the leftmost address, so a proxy that keeps a client-supplied `X-Forwarded-For` on the left (e.g. nginx's default `$proxy_add_x_forwarded_for` append semantics) lets clients spoof their source IP and bypass key IP whitelists. Use `proxy_set_header X-Forwarded-For $remote_addr;` in nginx (Caddy's `reverse_proxy` overwrites by default).
 
 ### Environment variables
 
@@ -751,7 +751,7 @@ Backend tests cover native/cross-protocol JSON and SSE, tools and multimodal con
 - Upstream keys use AES-GCM encryption. Desktop production master keys use the OS keyring (Windows Credential Manager / macOS Keychain) by default. Without a persistent keyring and without `SEPIA_MASTER_KEY` (e.g. Linux/containers), the master key is generated once and persisted to the `master-key` file in the data directory (0600 on Unix) so restarts keep working; key and data share one trust boundary and must be protected together. An explicit `SEPIA_MASTER_KEY` takes precedence and cannot be rotated. An encrypted database marker rejects a changed master key before the gateway starts listening.
 - Upstream redirects are not followed, preventing credential forwarding to another host.
 - WASM plugins run in a wasmtime sandbox: no WASI, outbound HTTP restricted to manifest-declared origins, sensitive request headers hidden and unwritable; plugin secrets are encrypted like upstream keys.
-- Deploy non-loopback instances behind a TLS-enabled trusted reverse proxy and explicitly set `SEPIA_TRUSTED_PROXY=true`. That switch trusts `X-Forwarded-For` (leftmost address) / `X-Real-IP` to restore the real client IP, and both request records and client-key IP whitelists use it; enable it only when a trusted proxy really fronts the gateway, since on a directly exposed port it allows spoofing the source address.
+- Deploy non-loopback instances behind a TLS-enabled trusted reverse proxy and explicitly set `SEPIA_TRUSTED_PROXY=true`. That switch trusts `X-Forwarded-For` (leftmost address) / `X-Real-IP` to restore the real client IP, and both request records and client-key IP whitelists use it; enable it only when a trusted proxy really fronts the gateway, since on a directly exposed port it allows spoofing the source address. The proxy must overwrite `X-Forwarded-For` with the direct peer (`proxy_set_header X-Forwarded-For $remote_addr;` in nginx), never append to a client-supplied value.
 
 ## Documentation and feedback
 

@@ -102,14 +102,27 @@ pub async fn probe_model_for(
         ..Default::default()
     };
     crate::rewrite::apply_prompt(&mut request, &rewrite.prompt_replace);
-    let mut encoded = crate::protocol::encode_request(legs[0], &request, model)
-        .unwrap_or_else(|_| serde_json::json!({}));
-    crate::rewrite::apply_params(&mut encoded, &rewrite, legs[0]);
-    let effective_model = crate::rewrite::effective_model(&encoded, model);
     let mut last: Option<ProbeOutcome> = None;
     for protocol in legs {
         let endpoint = crate::relay::endpoint_label(*protocol);
         let started = Instant::now();
+        // Gemini carries the model in the URL path, so `model` rules rewrite the
+        // string itself; every other protocol rewrites the encoded body field.
+        let gemini_model = (*protocol == Protocol::Gemini)
+            .then(|| crate::rewrite::effective_model_for(model, &rewrite));
+        let encode_model = gemini_model.as_deref().unwrap_or(model);
+        let mut encoded = match crate::protocol::encode_request(*protocol, &request, encode_model) {
+            Ok(body) => body,
+            Err(message) => {
+                last = Some(failure(started, endpoint, message));
+                continue;
+            }
+        };
+        crate::rewrite::apply_params(&mut encoded, &rewrite, *protocol);
+        let effective_model = match gemini_model {
+            Some(rewritten) => rewritten,
+            None => crate::rewrite::effective_model(&encoded, model),
+        };
         let response = match crate::plugin::provider_fetch(
             state,
             provider,
@@ -117,6 +130,7 @@ pub async fn probe_model_for(
             &request,
             &effective_model,
             *protocol,
+            &rewrite,
         )
         .await
         {
@@ -196,10 +210,23 @@ pub async fn probe_model(
     for protocol in legs {
         let endpoint = crate::relay::endpoint_label(*protocol);
         let started = Instant::now();
-        let mut encoded = crate::protocol::encode_request(*protocol, &request, model)
-            .unwrap_or_else(|_| serde_json::json!({}));
+        // Same split as inference: Gemini rewrites its URL-path model, the rest
+        // rewrite the encoded body field.
+        let gemini_model = (*protocol == Protocol::Gemini)
+            .then(|| crate::rewrite::effective_model_for(model, rewrite));
+        let encode_model = gemini_model.as_deref().unwrap_or(model);
+        let mut encoded = match crate::protocol::encode_request(*protocol, &request, encode_model) {
+            Ok(body) => body,
+            Err(message) => {
+                last = Some(failure(started, endpoint, message));
+                continue;
+            }
+        };
         crate::rewrite::apply_params(&mut encoded, rewrite, *protocol);
-        let effective_model = crate::rewrite::effective_model(&encoded, model);
+        let effective_model = match gemini_model {
+            Some(rewritten) => rewritten,
+            None => crate::rewrite::effective_model(&encoded, model),
+        };
         let overrides = crate::relay::Overrides {
             body: Some(encoded),
             headers: crate::rewrite::header_pairs(rewrite),

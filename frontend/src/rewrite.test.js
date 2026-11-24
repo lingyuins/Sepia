@@ -140,13 +140,28 @@ test('validateRewrite accepts an empty or fully valid config', () => {
 test('validateRewrite rejects reserved headers and blank names', () => {
   const issues = validateRewrite({
     headers: [
-      { name: ' Cookie ', value: 'a=1' },
+      { name: 'Cookie', value: 'a=1' },
       { name: '   ', value: 'x' },
     ],
   })
   assert.deepEqual(issues, [
     { key: 'rewriteHeaderReserved', values: { name: 'Cookie' } },
     { key: 'rewriteHeaderNameRequired' },
+  ])
+})
+
+test('validateRewrite rejects padded header names and line-broken values', () => {
+  const issues = validateRewrite({
+    headers: [
+      { name: ' X-Spaced ', value: 'ok' },
+      { name: 'X-Broken', value: 'a\r\nb' },
+      { name: 'X-Lf', value: 'a\nb' },
+    ],
+  })
+  assert.deepEqual(issues, [
+    { key: 'rewriteHeaderNameSpaces', values: { name: ' X-Spaced ' } },
+    { key: 'rewriteHeaderValueLine', values: { name: 'X-Broken' } },
+    { key: 'rewriteHeaderValueLine', values: { name: 'X-Lf' } },
   ])
 })
 

@@ -72,6 +72,16 @@ impl AppState {
         let _ = self.store.finish_request(request_id, status, 0, 0, 0).await;
         self.events.publish(crate::events::REQUESTS_CHANGED);
     }
+    /// Records an intermediate status that the same request overwrites moments
+    /// later (route selection). It stays silent because a console refresh for
+    /// a status nobody observes is pure noise; every terminal or rejecting
+    /// status still goes through `finish_request`.
+    pub async fn mark_routing(&self, request_id: &str) {
+        let _ = self
+            .store
+            .finish_request(request_id, "routing", 0, 0, 0)
+            .await;
+    }
     pub async fn for_testing(store: Store) -> Self {
         Self {
             store: store.clone(),
@@ -555,7 +565,7 @@ pub async fn relay(
         state.finish_request(&request_id, "denied").await;
         return error(StatusCode::FORBIDDEN, "model is not allowed by this key");
     }
-    state.finish_request(&request_id, "routing").await;
+    state.mark_routing(&request_id).await;
     let started = Instant::now();
     let Some(route) = route_for_model(&snapshot.routes, &request.model) else {
         state.finish_request(&request_id, "no_route").await;
@@ -749,11 +759,28 @@ pub async fn relay(
                     let rewrite = crate::rewrite::merge(&provider.rewrite, &route.rewrite);
                     let mut rewritten_request = request.clone();
                     crate::rewrite::apply_prompt(&mut rewritten_request, &rewrite.prompt_replace);
-                    let mut encoded_body =
-                        crate::protocol::encode_request(*protocol, &rewritten_request, model)
-                            .unwrap_or_else(|_| json!({}));
+                    // Gemini carries the model in the URL path, not the body, so
+                    // its `model` rules have to run on the model string itself;
+                    // every other protocol rewrites the encoded body field.
+                    let gemini_model = (*protocol == Protocol::Gemini)
+                        .then(|| crate::rewrite::effective_model_for(model, &rewrite));
+                    let encode_model = gemini_model.as_deref().unwrap_or(model);
+                    let mut encoded_body = match crate::protocol::encode_request(
+                        *protocol,
+                        &rewritten_request,
+                        encode_model,
+                    ) {
+                        Ok(body) => body,
+                        Err(message) => {
+                            let _ = guard.complete("failed", 0, 0, 0).await;
+                            return error(StatusCode::BAD_GATEWAY, message);
+                        }
+                    };
                     crate::rewrite::apply_params(&mut encoded_body, &rewrite, *protocol);
-                    let effective_model = crate::rewrite::effective_model(&encoded_body, model);
+                    let effective_model = match gemini_model {
+                        Some(rewritten) => rewritten,
+                        None => crate::rewrite::effective_model(&encoded_body, model),
+                    };
                     let (out_body, plugin_headers) = match crate::plugin::rewrite_upstream(
                         &state,
                         &target,
@@ -781,6 +808,7 @@ pub async fn relay(
                             &rewritten_request,
                             &effective_model,
                             *protocol,
+                            &rewrite,
                         )
                         .await
                     } else {
