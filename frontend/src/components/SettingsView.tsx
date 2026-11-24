@@ -996,6 +996,20 @@ export default function SettingsView() {
                 </div>
                 {!isAdmin && <p className="setting-note">{t('updateAdminOnly')}</p>}
                 <SettingRow
+                  title={t('projectRepository')}
+                  description={t('projectRepositoryDescription')}
+                >
+                  <a
+                    className="button text-button"
+                    href="https://github.com/lingyuins/Sepia"
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    <Github size={15} />
+                    {t('viewOnGithub')}
+                  </a>
+                </SettingRow>
+                <SettingRow
                   title={t('currentVersion')}
                   description={t('currentVersionDescription')}
                 >
@@ -1012,15 +1026,7 @@ export default function SettingsView() {
                         : t('latestVersionDescription')
                     }
                   >
-                    <a
-                      className="button text-button"
-                      href="https://github.com/lingyuins/Sepia"
-                      target="_blank"
-                      rel="noreferrer"
-                    >
-                      <Github size={15} />
-                      {t('viewOnGithub')}
-                    </a>
+                    <code className="mono">{formatVersion(updateCheck.latest_version)}</code>
                   </SettingRow>
                 )}
                 {updateCheck && !updateCheck.update_available && (
