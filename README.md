@@ -112,7 +112,7 @@ curl http://127.0.0.1:5000/api/v1/auth/status
 
 打开 [http://127.0.0.1:5000](http://127.0.0.1:5000)，按页面显示的初始化令牌设置至少 8 位的管理员密码并完成登录。命名卷 `sepia-data` 在容器替换后保留数据库与初始化状态。
 
-也可以直接运行镜像（版本标签示例：`ghcr.io/lingyuins/sepia:v0.1.6`、`lingyuins/sepia:0.1.6`）：
+也可以直接运行镜像（版本标签示例：`ghcr.io/lingyuins/sepia:v0.1.7`、`lingyuins/sepia:0.1.7`）：
 
 ```sh
 docker pull ghcr.io/lingyuins/sepia:latest
@@ -216,7 +216,7 @@ cargo run --release --manifest-path backend/Cargo.toml
 
 将客户端基础地址指向 Sepia，而不是上游供应商，并使用控制台创建的客户端密钥。
 
-网关发往上游的请求默认携带 `User-Agent: Sepia/<版本号>`（如 `Sepia/0.1.6`）；客户端请求未显式设置时使用该默认值。
+网关发往上游的请求默认携带 `User-Agent: Sepia/<版本号>`（如 `Sepia/0.1.7`）；客户端请求未显式设置时使用该默认值。
 
 ### OpenAI Chat Completions
 
@@ -488,7 +488,7 @@ curl http://127.0.0.1:5000/api/v1/auth/status
 
 Open [http://127.0.0.1:5000](http://127.0.0.1:5000), use the bootstrap token shown on the page to choose an administrator password of at least 8 characters, and sign in. The `sepia-data` named volume persists the database and initialization state across container replacements.
 
-You can also pull the image directly (version examples: `ghcr.io/lingyuins/sepia:v0.1.6`, `lingyuins/sepia:0.1.6`):
+You can also pull the image directly (version examples: `ghcr.io/lingyuins/sepia:v0.1.7`, `lingyuins/sepia:0.1.7`):
 
 ```sh
 docker pull ghcr.io/lingyuins/sepia:latest
@@ -592,7 +592,7 @@ The console's Settings → About tab shows the running gateway version, checks t
 
 Point clients at Sepia instead of the upstream provider and use a client key created in the console.
 
-Outbound upstream requests carry a default `User-Agent: Sepia/<version>` (e.g. `Sepia/0.1.6`), used whenever the request does not set one explicitly.
+Outbound upstream requests carry a default `User-Agent: Sepia/<version>` (e.g. `Sepia/0.1.7`), used whenever the request does not set one explicitly.
 
 ### OpenAI Chat Completions
 
