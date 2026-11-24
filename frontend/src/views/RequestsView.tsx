@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import {
   ArrowDownRight,
   Bot,
@@ -112,6 +112,15 @@ export function RequestsView({ onSelect }: { onSelect: (row: RequestRecord) => v
   const [page, setPage] = useState(1)
   const [clearOpen, setClearOpen] = useState(false)
   const pageSize = 8
+
+  // The request list is period-independent; analytics/overview period pickers
+  // may have left the shared snapshot on a narrower window. Re-read the
+  // unfiltered latest records whenever this page opens.
+  useEffect(() => {
+    refresh(undefined, ['requests']).catch((cause) =>
+      notify(cause instanceof Error ? cause.message : String(cause)),
+    )
+  }, [])
 
   const filtered = useMemo(
     () =>

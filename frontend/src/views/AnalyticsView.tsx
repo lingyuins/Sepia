@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { ArrowDownRight, Gauge, Layers3, Route } from 'lucide-react'
 import { useWorkspace, useTranslation, useLocale } from '../workspace'
 import { chartTimeLabel, analyticsPeriodLabelKey, analyticsPeriods, modelPerformanceRows, rankRoutePerformance, routeAggregate } from '../analytics'
@@ -23,6 +23,15 @@ export function AnalyticsView() {
   const [metric, setMetric] = useState('Requests')
   const [showAllRoutes, setShowAllRoutes] = useState(false)
   const periodLabel = t(analyticsPeriodLabelKey(period))
+
+  // Aggregate cards read only the analytics domain; never refetch the shared
+  // request list with a narrower period — that would silently shrink the
+  // Requests page's period-independent history.
+  useEffect(() => {
+    refresh('30 days', ['analytics']).catch((cause) =>
+      notify(cause instanceof Error ? cause.message : String(cause)),
+    )
+  }, [])
 
   const data = (analytics.series || []).map((point) => ({
     ...point,
@@ -137,7 +146,7 @@ export function AnalyticsView() {
                 className={period === item ? 'active' : ''}
                 onClick={() => {
                   setPeriod(item)
-                  refresh(item, ['requests', 'analytics']).catch((cause) =>
+                  refresh(item, ['analytics']).catch((cause) =>
                     notify(cause instanceof Error ? cause.message : String(cause)),
                   )
                 }}
