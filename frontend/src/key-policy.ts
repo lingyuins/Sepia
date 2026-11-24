@@ -15,7 +15,11 @@ export type KeyPolicy = {
   excludedProviders: string[]
   enabled: boolean
 }
-export type KeyPolicyDraft = Omit<KeyPolicy, 'maxAmount' | 'tokenLimit' | 'rpm' | 'tpm' | 'modelQuotas' | 'ipWhitelist' | 'expiresAt'> & {
+export type KeyPolicyDraft = Omit<KeyPolicy, 'models' | 'maxAmount' | 'tokenLimit' | 'rpm' | 'tpm' | 'modelQuotas' | 'ipWhitelist' | 'expiresAt'> & {
+  // Route slugs and provider models are edited as two independent selections;
+  // parseKeyPolicy merges them back into the single wire `models` list.
+  routeModels: string[]
+  providerModels: string[]
   maxAmount: string
   tokenLimit: string
   rpm: string
@@ -56,6 +60,7 @@ function validNetwork(value: string) {
 }
 
 export function parseKeyPolicy(draft: KeyPolicyDraft): KeyPolicy {
+  const { routeModels, providerModels, ...rest } = draft
   const quotas = draft.modelQuotas.trim() ? JSON.parse(draft.modelQuotas) : {}
   if (!quotas || typeof quotas !== 'object' || Array.isArray(quotas)) throw new Error('Invalid model quota JSON')
   for (const quota of Object.values(quotas) as ModelQuota[]) {
@@ -66,7 +71,8 @@ export function parseKeyPolicy(draft: KeyPolicyDraft): KeyPolicy {
   if (/\s/.test(draft.customValue.trim())) throw new Error('Invalid custom key')
   if (draft.expiresAt && !Number.isFinite(Date.parse(draft.expiresAt))) throw new Error('Invalid expiration date')
   return {
-    ...draft,
+    ...rest,
+    models: [...new Set([...routeModels, ...providerModels])],
     name: draft.name.trim(),
     customValue: draft.customValue.trim(),
     maxAmount: draft.maxAmount.trim() ? nonNegative(draft.maxAmount, 'maximum amount') : null,

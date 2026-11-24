@@ -3,7 +3,7 @@ import test from 'node:test'
 
 import { parseKeyPolicy, parseTokenLimit } from './key-policy.ts'
 
-const defaults = { name: 'bot', customValue: '', maxAmount: '', tokenLimit: '', rpm: '0', tpm: '0', modelQuotas: '', ipWhitelist: '', expiresAt: '', models: ['gpt-4o'], allowedGroups: [], excludedProviders: [], enabled: true }
+const defaults = { name: 'bot', customValue: '', maxAmount: '', tokenLimit: '', rpm: '0', tpm: '0', modelQuotas: '', ipWhitelist: '', expiresAt: '', routeModels: ['smart-route'], providerModels: ['gpt-4o'], allowedGroups: [], excludedProviders: [], enabled: true }
 
 test('accepts human-friendly token limits', () => {
   assert.equal(parseTokenLimit('100w'), 1000000)
@@ -51,4 +51,20 @@ test('normalizes custom keys and expiry dates', () => {
   assert.equal(policy.customValue, 'sk-custom-bot')
   assert.equal(policy.expiresAt, '2027-12-31T00:00')
   assert.throws(() => parseKeyPolicy({ ...defaults, customValue: 'contains spaces' }), /custom key/)
+})
+
+test('merges the two scope selections into one deduplicated wire model list', () => {
+  const policy = parseKeyPolicy({ ...defaults, routeModels: ['qwen4-max', 'smart-route'], providerModels: ['qwen4-max', 'gpt-4o'] })
+  assert.deepEqual(policy.models, ['qwen4-max', 'smart-route', 'gpt-4o'])
+  assert.equal('routeModels' in policy, false)
+  assert.equal('providerModels' in policy, false)
+})
+
+test('clearing one scope selection never removes the other', () => {
+  const routesOnly = parseKeyPolicy({ ...defaults, routeModels: ['smart-route'], providerModels: [] })
+  assert.deepEqual(routesOnly.models, ['smart-route'])
+  const providersOnly = parseKeyPolicy({ ...defaults, routeModels: [], providerModels: ['gpt-4o'] })
+  assert.deepEqual(providersOnly.models, ['gpt-4o'])
+  const bothCleared = parseKeyPolicy({ ...defaults, routeModels: [], providerModels: [] })
+  assert.deepEqual(bothCleared.models, [])
 })

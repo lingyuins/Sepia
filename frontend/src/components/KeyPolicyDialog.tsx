@@ -14,14 +14,15 @@ export default function KeyPolicyDialog({ open, onClose, onCreate }: { open: boo
   const { providers, channelGroups, routes, modelGroups } = useWorkspace()
   const t = useTranslation()
   const modelOptions = scopedModels(providers, routes)
-  const models = modelOptions.map((model) => model.value)
   const routeModels = modelOptions.filter((model) => model.route).map((model) => model.value)
-  const [draft, setDraft] = useState<KeyPolicyDraft>(() => ({ name: '', customValue: '', maxAmount: '', tokenLimit: '', rpm: '0', tpm: '0', modelQuotas: '', ipWhitelist: '', expiresAt: '', models, allowedGroups: [], modelGroups: [], excludedProviders: [], enabled: true }))
+  const providerModels = modelOptions.filter((model) => !model.route).map((model) => model.value)
+  const emptyDraft = (): KeyPolicyDraft => ({ name: '', customValue: '', maxAmount: '', tokenLimit: '', rpm: '0', tpm: '0', modelQuotas: '', ipWhitelist: '', expiresAt: '', routeModels: [...routeModels], providerModels: [...providerModels], allowedGroups: [], modelGroups: [], excludedProviders: [], enabled: true })
+  const [draft, setDraft] = useState<KeyPolicyDraft>(emptyDraft)
   const [limitsOpen, setLimitsOpen] = useState(true)
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
   const update = <K extends keyof KeyPolicyDraft>(key: K, value: KeyPolicyDraft[K]) => { setDraft((current) => ({ ...current, [key]: value })); setError('') }
-  const toggleListItem = (key: 'models' | 'allowedGroups' | 'excludedProviders', value: string) => update(key, draft[key].includes(value) ? draft[key].filter((item) => item !== value) : [...draft[key], value])
+  const toggleListItem = (key: 'routeModels' | 'providerModels' | 'allowedGroups' | 'excludedProviders', value: string) => update(key, draft[key].includes(value) ? draft[key].filter((item) => item !== value) : [...draft[key], value])
   const toggleModelGroup = (id: number) => update('modelGroups', draft.modelGroups.includes(id) ? draft.modelGroups.filter((item) => item !== id) : [...draft.modelGroups, id])
   // Members granted through a checked model group: shown checked but locked,
   // since the group (not the individual checkbox) authorizes them.
@@ -38,7 +39,7 @@ export default function KeyPolicyDialog({ open, onClose, onCreate }: { open: boo
       const policy = parseKeyPolicy(draft)
       if (!policy.name) { setError(t('keyPolicyName')); return }
       setBusy(true)
-      try { await onCreate(policy); setDraft({ name: '', customValue: '', maxAmount: '', tokenLimit: '', rpm: '0', tpm: '0', modelQuotas: '', ipWhitelist: '', expiresAt: '', models, allowedGroups: [], modelGroups: [], excludedProviders: [], enabled: true }) }
+      try { await onCreate(policy); setDraft(emptyDraft()) }
       catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)) }
       finally { setBusy(false) }
     } catch { setError(t('keyPolicyError')) }
@@ -94,17 +95,17 @@ export default function KeyPolicyDialog({ open, onClose, onCreate }: { open: boo
           <fieldset className="key-policy-field">
             <legend>{t('routeGroups')}</legend>
             <div className="key-selection-actions">
-              <button type="button" onClick={() => update('models', [...new Set([...draft.models, ...routeModels])])}>{t('selectAll')}</button>
-              <button type="button" onClick={() => update('models', draft.models.filter((model) => !routeModels.includes(model)))}>{t('clear')}</button>
-              <span>{routeModels.filter((model) => draft.models.includes(model) || groupGranted.has(model)).length} / {routeModels.length}</span>
+              <button type="button" onClick={() => update('routeModels', [...routeModels])}>{t('selectAll')}</button>
+              <button type="button" onClick={() => update('routeModels', [])}>{t('clear')}</button>
+              <span>{routeModels.filter((model) => draft.routeModels.includes(model) || groupGranted.has(model)).length} / {routeModels.length}</span>
             </div>
             <div className="key-option-grid">
               {modelOptions.filter((model) => model.route).map((model) => {
                 const granted = groupGranted.get(model.value)
-                const checked = draft.models.includes(model.value) || !!granted
+                const checked = draft.routeModels.includes(model.value) || !!granted
                 return (
                   <label className={`${checked ? 'selected' : ''} ${granted ? 'group-granted' : ''}`} key={model.value}>
-                    <input type="checkbox" checked={checked} disabled={!!granted} onChange={() => toggleListItem('models', model.value)} />
+                    <input type="checkbox" checked={checked} disabled={!!granted} onChange={() => toggleListItem('routeModels', model.value)} />
                     <span>{model.label}<small>{granted ? t('modelGroupFromGroup', { name: granted }) : model.detail}</small></span>
                     {checked && <Check size={13} />}
                   </label>
@@ -115,17 +116,17 @@ export default function KeyPolicyDialog({ open, onClose, onCreate }: { open: boo
           <fieldset className="key-policy-field">
             <legend>{t('keyModels')}</legend>
             <div className="key-selection-actions">
-              <button type="button" onClick={() => update('models', models)}>{t('selectAll')}</button>
-              <button type="button" onClick={() => update('models', [])}>{t('clear')}</button>
-              <span>{draft.models.length} / {models.length}</span>
+              <button type="button" onClick={() => update('providerModels', [...providerModels])}>{t('selectAll')}</button>
+              <button type="button" onClick={() => update('providerModels', [])}>{t('clear')}</button>
+              <span>{providerModels.filter((model) => draft.providerModels.includes(model) || groupGranted.has(model)).length} / {providerModels.length}</span>
             </div>
             <div className="key-option-grid">
               {modelOptions.filter((model) => !model.route).map((model) => {
                 const granted = groupGranted.get(model.value)
-                const checked = draft.models.includes(model.value) || !!granted
+                const checked = draft.providerModels.includes(model.value) || !!granted
                 return (
                   <label className={`${checked ? 'selected' : ''} ${granted ? 'group-granted' : ''}`} key={model.value}>
-                    <input type="checkbox" checked={checked} disabled={!!granted} onChange={() => toggleListItem('models', model.value)} />
+                    <input type="checkbox" checked={checked} disabled={!!granted} onChange={() => toggleListItem('providerModels', model.value)} />
                     <span>{model.label}{granted && <small>{t('modelGroupFromGroup', { name: granted })}</small>}</span>
                     {checked && <Check size={13} />}
                   </label>
