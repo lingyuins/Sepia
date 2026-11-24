@@ -14,6 +14,8 @@ pub struct RouteUpdate<'a> {
     /// Parallel to `candidates`; `None` keeps stored weights by candidate
     /// identity, missing entries default to weight 1.
     pub weights: Option<&'a [i64]>,
+    /// Built-in outbound request rewriting (replaces the stored config).
+    pub rewrite: &'a crate::rewrite::RewriteConfig,
 }
 pub struct ProviderUpdate<'a> {
     pub id: i64,
@@ -25,6 +27,8 @@ pub struct ProviderUpdate<'a> {
     pub enabled: bool,
     pub plugin_id: Option<&'a str>,
     pub mode: &'a str,
+    /// Built-in outbound request rewriting (replaces the stored config).
+    pub rewrite: &'a crate::rewrite::RewriteConfig,
 }
 
 impl Store {
@@ -39,10 +43,11 @@ impl Store {
             enabled,
             plugin_id,
             mode,
+            rewrite,
         } = input;
         let mut tx = self.pool.begin().await.map_err(|e| e.to_string())?;
         sqlx::query(
-            "UPDATE providers SET name = ?, protocol = ?, endpoint = ?, group_id = ?, enabled = ?, plugin_id = ?, mode = ? WHERE id = ?",
+            "UPDATE providers SET name = ?, protocol = ?, endpoint = ?, group_id = ?, enabled = ?, plugin_id = ?, mode = ?, headers = ?, param_replace = ?, prompt_replace = ?, param_defaults = ? WHERE id = ?",
         )
         .bind(name)
         .bind(protocol.as_str())
@@ -51,6 +56,10 @@ impl Store {
         .bind(enabled)
         .bind(plugin_id)
         .bind(mode)
+        .bind(serde_json::to_string(&rewrite.headers).map_err(|e| e.to_string())?)
+        .bind(serde_json::to_string(&rewrite.param_replace).map_err(|e| e.to_string())?)
+        .bind(serde_json::to_string(&rewrite.prompt_replace).map_err(|e| e.to_string())?)
+        .bind(serde_json::to_string(&rewrite.param_defaults).map_err(|e| e.to_string())?)
         .bind(id)
         .execute(&mut *tx)
         .await
@@ -74,6 +83,7 @@ impl Store {
             candidates,
             strategy,
             weights,
+            rewrite,
         } = input;
         if let Some(strategy) = strategy
             && crate::strategy::Strategy::parse(strategy).is_none()
@@ -106,7 +116,7 @@ impl Store {
                 .map(|(strategy, _)| strategy.as_str())
                 .unwrap_or("priority")
         });
-        sqlx::query("UPDATE routes SET slug = ?, name = ?, description = ?, patterns = ?, is_default = ?, list_members = ?, enabled = ?, strategy = ? WHERE id = ?").bind(slug).bind(name).bind(description).bind(serde_json::to_string(patterns).map_err(|e| e.to_string())?).bind(is_default).bind(list_members).bind(enabled).bind(strategy).bind(id).execute(&mut *tx).await.map_err(|e| e.to_string())?;
+        sqlx::query("UPDATE routes SET slug = ?, name = ?, description = ?, patterns = ?, is_default = ?, list_members = ?, enabled = ?, strategy = ?, headers = ?, param_replace = ?, prompt_replace = ?, param_defaults = ? WHERE id = ?").bind(slug).bind(name).bind(description).bind(serde_json::to_string(patterns).map_err(|e| e.to_string())?).bind(is_default).bind(list_members).bind(enabled).bind(strategy).bind(serde_json::to_string(&rewrite.headers).map_err(|e| e.to_string())?).bind(serde_json::to_string(&rewrite.param_replace).map_err(|e| e.to_string())?).bind(serde_json::to_string(&rewrite.prompt_replace).map_err(|e| e.to_string())?).bind(serde_json::to_string(&rewrite.param_defaults).map_err(|e| e.to_string())?).bind(id).execute(&mut *tx).await.map_err(|e| e.to_string())?;
         sqlx::query("DELETE FROM route_candidates WHERE route_id = ?")
             .bind(id)
             .execute(&mut *tx)

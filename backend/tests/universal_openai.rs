@@ -74,6 +74,7 @@ async fn store_with_route(
                 models: vec!["upstream-model".into()],
                 plugin_id: None,
                 mode: "single".into(),
+                rewrite: Default::default(),
             },
             "first-secret",
             &[],
@@ -92,6 +93,7 @@ async fn store_with_route(
             is_default: true,
             list_members: true,
             candidates: vec![],
+            rewrite: Default::default(),
         })
         .await
         .unwrap();
@@ -313,6 +315,7 @@ async fn authentication_failures_rotate_keys_before_switching_endpoint() {
                 models: vec!["upstream-model".into()],
                 plugin_id: None,
                 mode: "single".into(),
+                rewrite: Default::default(),
             },
             "first-secret",
             &[],
@@ -335,6 +338,7 @@ async fn authentication_failures_rotate_keys_before_switching_endpoint() {
             is_default: true,
             list_members: true,
             candidates: vec![],
+            rewrite: Default::default(),
         })
         .await
         .unwrap();
@@ -401,6 +405,7 @@ async fn failing_both_endpoints_advances_to_next_candidate() {
                 models: vec!["upstream-model".into()],
                 plugin_id: None,
                 mode: "single".into(),
+                rewrite: Default::default(),
             },
             "upstream-secret",
             &[],
@@ -418,6 +423,7 @@ async fn failing_both_endpoints_advances_to_next_candidate() {
                 models: vec!["upstream-model".into()],
                 plugin_id: None,
                 mode: "single".into(),
+                rewrite: Default::default(),
             },
             "upstream-secret",
             &[],
@@ -440,6 +446,7 @@ async fn failing_both_endpoints_advances_to_next_candidate() {
                 (first, "upstream-model".into()),
                 (second, "upstream-model".into()),
             ],
+            rewrite: Default::default(),
         })
         .await
         .unwrap();

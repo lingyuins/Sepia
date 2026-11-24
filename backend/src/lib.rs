@@ -20,6 +20,7 @@ pub mod relay;
 pub mod response_api;
 pub mod response_store;
 pub mod responses;
+pub mod rewrite;
 pub mod self_update;
 pub mod server;
 pub mod settings;

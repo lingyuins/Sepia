@@ -452,6 +452,7 @@ async fn discover_pool_models(state: &AppState, endpoint: &str, secret: &str) ->
         group_id: "official".into(),
         enabled: true,
         plugin_id: None,
+        rewrite: Default::default(),
     };
     match crate::discovery::discover_models(&state.http(), &probe, secret).await {
         Ok(models) => Json(json!({"models":models})).into_response(),

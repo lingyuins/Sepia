@@ -34,10 +34,31 @@ test('maps real backend records to existing UI shapes', () => {
 test('serializes editor data for the real management API', () => {
   const provider = mapProvider(remoteProvider)
   const route = mapRoute(remoteRoute, [provider])
-  assert.deepEqual(providerInput(provider, [{ value: 'secret', models: null }]), { name: 'Local OpenAI', protocol: 'openai', endpoint: 'http://127.0.0.1:9000/v1', models: ['local-model'], secret: 'secret', secrets: ['secret'], key_models: [], group_id: 'official', enabled: true, mode: 'single' })
-  assert.deepEqual(routeInput(route, [provider]), { slug: 'chat', name: 'Chat route', description: 'Real description', patterns: ['chat-*'], is_default: true, list_members: true, enabled: true, candidates: [[7, 'local-model']], strategy: 'priority', weights: [1] })
+  assert.deepEqual(providerInput(provider, [{ value: 'secret', models: null }]), { name: 'Local OpenAI', protocol: 'openai', endpoint: 'http://127.0.0.1:9000/v1', models: ['local-model'], secret: 'secret', secrets: ['secret'], key_models: [], group_id: 'official', enabled: true, mode: 'single', headers: [], param_replace: [], prompt_replace: [], param_defaults: [] })
+  assert.deepEqual(routeInput(route, [provider]), { slug: 'chat', name: 'Chat route', description: 'Real description', patterns: ['chat-*'], is_default: true, list_members: true, enabled: true, candidates: [[7, 'local-model']], strategy: 'priority', weights: [1], headers: [], param_replace: [], prompt_replace: [], param_defaults: [] })
   // Unspecified listing defaults to group-only so member models stay hidden.
   assert.equal(routeInput({ ...route, listMembers: undefined }, [provider]).list_members, false)
+})
+
+test('round-trips request rewrite rules through the management API shapes', () => {
+  const remote = { ...remoteProvider, headers: [{ name: 'User-Agent', value: 'agent' }], param_replace: [{ field: 'model', pattern: '^gpt', replacement: 'qwen' }], prompt_replace: [{ pattern: 'a', replacement: 'b' }], param_defaults: [{ field: 'temperature', value: 0.2 }] }
+  const provider = mapProvider(remote)
+  assert.deepEqual(provider.headers, [{ name: 'User-Agent', value: 'agent' }])
+  assert.deepEqual(provider.paramReplace, [{ field: 'model', pattern: '^gpt', replacement: 'qwen' }])
+  assert.deepEqual(provider.promptReplace, [{ pattern: 'a', replacement: 'b' }])
+  assert.deepEqual(provider.paramDefaults, [{ field: 'temperature', value: 0.2 }])
+  assert.deepEqual(providerInput(provider).headers, [{ name: 'User-Agent', value: 'agent' }])
+  assert.deepEqual(providerInput(provider).param_replace, [{ field: 'model', pattern: '^gpt', replacement: 'qwen' }])
+  assert.deepEqual(mapProvider(remoteProvider).headers, [])
+  const route = mapRoute({ ...remoteRoute, prompt_replace: [{ pattern: 'x', replacement: 'y' }] }, [provider])
+  assert.deepEqual(route.promptReplace, [{ pattern: 'x', replacement: 'y' }])
+  assert.deepEqual(routeInput(route, [provider]).prompt_replace, [{ pattern: 'x', replacement: 'y' }])
+  assert.deepEqual(routeInput(mapRoute(remoteRoute, [provider]), [provider]).param_defaults, [])
+  // The editor keeps raw JSON text beside the parsed value; only the value is sent.
+  assert.deepEqual(
+    providerInput({ ...provider, paramDefaults: [{ field: 'temperature', value: 0.2, text: '0.2' }] }).param_defaults,
+    [{ field: 'temperature', value: 0.2 }],
+  )
 })
 
 test('round-trips strategy and per-candidate weights through the route API shapes', () => {
@@ -68,7 +89,7 @@ test('routes retain every candidate without primary/fallback copies', () => {
 
 test('uses the first entered secret for discovery and retains additional keys', () => {
   const provider = mapProvider(remoteProvider)
-  assert.deepEqual(providerInput(provider, [{ value: 'first-secret', models: ['claude-a'] }, { value: 'second-secret', models: null }]), { name: 'Local OpenAI', protocol: 'openai', endpoint: 'http://127.0.0.1:9000/v1', models: ['local-model'], secret: 'first-secret', secrets: ['first-secret', 'second-secret'], key_models: [{ secret: 'first-secret', models: ['claude-a'] }], group_id: 'official', enabled: true, mode: 'single' })
+  assert.deepEqual(providerInput(provider, [{ value: 'first-secret', models: ['claude-a'] }, { value: 'second-secret', models: null }]), { name: 'Local OpenAI', protocol: 'openai', endpoint: 'http://127.0.0.1:9000/v1', models: ['local-model'], secret: 'first-secret', secrets: ['first-secret', 'second-secret'], key_models: [{ secret: 'first-secret', models: ['claude-a'] }], group_id: 'official', enabled: true, mode: 'single', headers: [], param_replace: [], prompt_replace: [], param_defaults: [] })
 })
 
 test('maps unified channel addresses and serializes per-address keys', () => {

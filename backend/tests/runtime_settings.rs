@@ -85,6 +85,7 @@ async fn store_with_two_candidates(
                         models: vec!["upstream-model".into()],
                         plugin_id: None,
                         mode: "single".into(),
+                        rewrite: Default::default(),
                     },
                     "upstream-secret",
                     &[],
@@ -109,6 +110,7 @@ async fn store_with_two_candidates(
                 (ids[0], "upstream-model".into()),
                 (ids[1], "upstream-model".into()),
             ],
+            rewrite: Default::default(),
         })
         .await
         .unwrap();

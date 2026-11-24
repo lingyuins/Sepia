@@ -17,6 +17,7 @@ async fn second_provider_key_is_used_after_authentication_failure() {
                 models: vec!["x".into()],
                 plugin_id: None,
                 mode: "single".into(),
+                rewrite: Default::default(),
             },
             "first",
             &[],

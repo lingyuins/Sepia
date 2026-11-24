@@ -51,6 +51,15 @@ fn provider_key_models(
         .map_err(|e| e.to_string())
 }
 
+/// Parse one stored rewrite column (a JSON array) into its typed rule list.
+/// An empty/blank column yields an empty list; malformed JSON is an error.
+fn parse_rewrite_column<T: serde::de::DeserializeOwned>(raw: String) -> Result<Vec<T>, String> {
+    if raw.trim().is_empty() {
+        return Ok(Vec::new());
+    }
+    serde_json::from_str(&raw).map_err(|e| format!("invalid rewrite column: {e}"))
+}
+
 #[derive(Debug, Clone)]
 pub struct NewProvider {
     pub name: String,
@@ -60,6 +69,8 @@ pub struct NewProvider {
     pub plugin_id: Option<String>,
     /// `single` (one address) or `unified` (several addresses, one model set).
     pub mode: String,
+    /// Built-in outbound request rewriting (headers/params/prompt/defaults).
+    pub rewrite: crate::rewrite::RewriteConfig,
 }
 #[derive(Debug, Clone)]
 pub struct Provider {
@@ -72,6 +83,8 @@ pub struct Provider {
     pub group_id: String,
     pub enabled: bool,
     pub plugin_id: Option<String>,
+    /// Built-in outbound request rewriting (headers/params/prompt/defaults).
+    pub rewrite: crate::rewrite::RewriteConfig,
 }
 #[derive(Debug, Clone)]
 pub struct ProviderEndpoint {
@@ -95,6 +108,8 @@ pub struct NewRoute {
     pub is_default: bool,
     pub list_members: bool,
     pub candidates: Vec<(i64, String)>,
+    /// Built-in outbound request rewriting; overrides the provider's rules.
+    pub rewrite: crate::rewrite::RewriteConfig,
 }
 #[derive(Debug, Clone)]
 pub struct Route {
@@ -111,6 +126,8 @@ pub struct Route {
     pub strategy: String,
     /// Per-candidate weights, parallel to `candidates`; default 1.
     pub weights: Vec<i64>,
+    /// Built-in outbound request rewriting; overrides the provider's rules.
+    pub rewrite: crate::rewrite::RewriteConfig,
 }
 #[derive(Debug, Clone)]
 pub struct UpsertClientKey {
@@ -729,14 +746,26 @@ impl Store {
             .await
             .map_err(|e| e.to_string())?;
         let endpoint = input.endpoint.trim_end_matches('/');
+        let headers_json =
+            serde_json::to_string(&input.rewrite.headers).map_err(|e| e.to_string())?;
+        let param_replace =
+            serde_json::to_string(&input.rewrite.param_replace).map_err(|e| e.to_string())?;
+        let prompt_replace =
+            serde_json::to_string(&input.rewrite.prompt_replace).map_err(|e| e.to_string())?;
+        let param_defaults =
+            serde_json::to_string(&input.rewrite.param_defaults).map_err(|e| e.to_string())?;
         let id = sqlx::query(
-            "INSERT INTO providers (name, protocol, endpoint, plugin_id, mode) VALUES (?, ?, ?, ?, ?)",
+            "INSERT INTO providers (name, protocol, endpoint, plugin_id, mode, headers, param_replace, prompt_replace, param_defaults) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(input.name)
         .bind(input.protocol.as_str())
         .bind(endpoint)
         .bind(input.plugin_id)
         .bind(input.mode)
+        .bind(headers_json)
+        .bind(param_replace)
+        .bind(prompt_replace)
+        .bind(param_defaults)
         .execute(&mut *transaction)
         .await
         .map_err(|e| e.to_string())?
@@ -776,7 +805,7 @@ impl Store {
             .ok_or("provider not saved".into())
     }
     pub async fn providers(&self) -> Result<Vec<Provider>, String> {
-        let rows = sqlx::query("SELECT p.id, p.name, p.protocol, p.endpoint, p.group_id, p.enabled, p.plugin_id, COUNT(k.id) key_count FROM providers p LEFT JOIN provider_keys k ON k.provider_id = p.id AND k.disabled = 0 GROUP BY p.id ORDER BY p.id").fetch_all(&self.pool).await.map_err(|e| e.to_string())?;
+        let rows = sqlx::query("SELECT p.id, p.name, p.protocol, p.endpoint, p.group_id, p.enabled, p.plugin_id, p.headers, p.param_replace, p.prompt_replace, p.param_defaults, COUNT(k.id) key_count FROM providers p LEFT JOIN provider_keys k ON k.provider_id = p.id AND k.disabled = 0 GROUP BY p.id ORDER BY p.id").fetch_all(&self.pool).await.map_err(|e| e.to_string())?;
         let mut providers = Vec::new();
         for row in rows {
             let id = row.get("id");
@@ -800,6 +829,12 @@ impl Store {
                 group_id: row.get("group_id"),
                 enabled: row.get("enabled"),
                 plugin_id: row.get("plugin_id"),
+                rewrite: crate::rewrite::RewriteConfig {
+                    headers: parse_rewrite_column(row.get::<String, _>("headers"))?,
+                    param_replace: parse_rewrite_column(row.get::<String, _>("param_replace"))?,
+                    prompt_replace: parse_rewrite_column(row.get::<String, _>("prompt_replace"))?,
+                    param_defaults: parse_rewrite_column(row.get::<String, _>("param_defaults"))?,
+                },
             });
         }
         Ok(providers)
@@ -1071,7 +1106,7 @@ impl Store {
             .map_err(|e| e.to_string())?
             .get::<i64, _>(0);
         let id = sqlx::query(
-            "INSERT INTO routes (slug, name, description, patterns, is_default, list_members, position) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO routes (slug, name, description, patterns, is_default, list_members, position, headers, param_replace, prompt_replace, param_defaults) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(input.slug)
         .bind(input.name)
@@ -1080,6 +1115,10 @@ impl Store {
         .bind(input.is_default)
         .bind(input.list_members)
         .bind(position)
+        .bind(serde_json::to_string(&input.rewrite.headers).map_err(|e| e.to_string())?)
+        .bind(serde_json::to_string(&input.rewrite.param_replace).map_err(|e| e.to_string())?)
+        .bind(serde_json::to_string(&input.rewrite.prompt_replace).map_err(|e| e.to_string())?)
+        .bind(serde_json::to_string(&input.rewrite.param_defaults).map_err(|e| e.to_string())?)
         .execute(&mut *transaction)
         .await
         .map_err(|e| e.to_string())?
@@ -1139,7 +1178,7 @@ impl Store {
     }
     pub async fn routes(&self) -> Result<Vec<Route>, String> {
         let rows = sqlx::query(
-            "SELECT id, slug, name, description, patterns, is_default, list_members, enabled, strategy FROM routes ORDER BY position",
+            "SELECT id, slug, name, description, patterns, is_default, list_members, enabled, strategy, headers, param_replace, prompt_replace, param_defaults FROM routes ORDER BY position",
         )
         .fetch_all(&self.pool)
         .await
@@ -1165,6 +1204,12 @@ impl Store {
                 candidates,
                 strategy: row.get("strategy"),
                 weights,
+                rewrite: crate::rewrite::RewriteConfig {
+                    headers: parse_rewrite_column(row.get::<String, _>("headers"))?,
+                    param_replace: parse_rewrite_column(row.get::<String, _>("param_replace"))?,
+                    prompt_replace: parse_rewrite_column(row.get::<String, _>("prompt_replace"))?,
+                    param_defaults: parse_rewrite_column(row.get::<String, _>("param_defaults"))?,
+                },
             });
         }
         Ok(routes)

@@ -22,6 +22,7 @@ async fn anthropic_model_listing_does_not_require_a_version_header() {
                 models: vec!["claude-sonnet".into()],
                 plugin_id: None,
                 mode: "single".into(),
+                rewrite: Default::default(),
             },
             "upstream-secret",
             &[],
@@ -40,6 +41,7 @@ async fn anthropic_model_listing_does_not_require_a_version_header() {
             is_default: true,
             list_members: true,
             candidates: vec![],
+            rewrite: Default::default(),
         })
         .await
         .unwrap();
@@ -110,6 +112,7 @@ async fn a_candidate_permission_exposes_its_route_slug() {
                 models: vec!["GLM-5.3-Premium".into()],
                 plugin_id: None,
                 mode: "single".into(),
+                rewrite: Default::default(),
             },
             "upstream-secret",
             &[],
@@ -128,6 +131,7 @@ async fn a_candidate_permission_exposes_its_route_slug() {
             is_default: true,
             list_members: true,
             candidates: vec![],
+            rewrite: Default::default(),
         })
         .await
         .unwrap();
@@ -233,6 +237,7 @@ async fn group_only_routes_never_list_member_models() {
                 models: vec!["m-a".into(), "m-b".into(), "m-unrouted".into()],
                 plugin_id: None,
                 mode: "single".into(),
+                rewrite: Default::default(),
             },
             "upstream-secret",
             &[],
@@ -251,6 +256,7 @@ async fn group_only_routes_never_list_member_models() {
             is_default: false,
             list_members: false,
             candidates: vec![(provider.id, "m-a".into()), (provider.id, "m-b".into())],
+            rewrite: Default::default(),
         })
         .await
         .unwrap();

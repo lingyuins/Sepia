@@ -1,10 +1,14 @@
 import type { KeyPolicy } from './key-policy'
+import type { HeaderRule, ParamDefaultRule, ParamReplaceRule, PromptReplaceRule } from './rewrite'
 import type { AttemptRecord, Plugin, Provider, RequestRecord, RouteRule } from './workspace'
 import { clampWeight, normalizeRouteStrategy } from './route-strategy.ts'
 type ProviderProtocol = 'openai' | 'anthropic' | 'gemini' | 'openai-responses'
+// Rewrite rule shapes are identical on the wire and in the UI; only the
+// container field names differ (snake_case vs camelCase).
+type WireRewrite = { headers?: HeaderRule[]; param_replace?: ParamReplaceRule[]; prompt_replace?: PromptReplaceRule[]; param_defaults?: ParamDefaultRule[] }
 
-export type ApiProvider = { id: number; name: string; protocol: ProviderProtocol; endpoint: string; models: string[]; key_count: number; enabled: boolean; group_id: string; mode?: 'single' | 'unified'; keys?: { id: number; models: string[] | null; endpoint_id?: number | null }[]; endpoints?: { id: number; endpoint: string; keys?: { id: number; models: string[] | null }[] }[] }
-export type ApiRoute = { id: number; slug: string; name: string; description: string; patterns: string[]; is_default: boolean; list_members: boolean; enabled: boolean; candidates: [number, string][]; strategy?: string; weights?: number[] }
+export type ApiProvider = { id: number; name: string; protocol: ProviderProtocol; endpoint: string; models: string[]; key_count: number; enabled: boolean; group_id: string; mode?: 'single' | 'unified'; keys?: { id: number; models: string[] | null; endpoint_id?: number | null }[]; endpoints?: { id: number; endpoint: string; keys?: { id: number; models: string[] | null }[] }[] } & WireRewrite
+export type ApiRoute = { id: number; slug: string; name: string; description: string; patterns: string[]; is_default: boolean; list_members: boolean; enabled: boolean; candidates: [number, string][]; strategy?: string; weights?: number[] } & WireRewrite
 export type ApiRequest = { id: string; protocol: string; model: string; route?: string; status: string; input_tokens: number; output_tokens: number; cost_micros: number; latency_ms: number; created_at: string; provider?: string; key?: string; client_ip?: string | null; first_byte_ms?: number | null; cached_tokens?: number; reasoning_tokens?: number; has_body?: boolean }
 export type ApiAttempt = { id: number; request_id: string; provider_id: number | null; provider_key_id: number | null; model: string; status: string; error: string | null; input_tokens: number; output_tokens: number; latency_ms: number; created_at: string }
 export type ApiClientKey = { id: number; name: string; models: string[]; token_limit: number; max_amount_micros: number; rpm: number; tpm: number; expires_at: string | null; model_groups?: number[] }
@@ -58,7 +62,7 @@ export function apiClient(fetcher: typeof fetch = fetch) {
 export const api = apiClient()
 const color = ['#dcf1d2', '#e8cdb7', '#c5d9ef', '#c8c5ee']
 export function mapProvider(provider: ApiProvider): Provider {
-  return { id: provider.id, name: provider.name, short: provider.name.charAt(0).toUpperCase(), type: provider.protocol, models: provider.models.length, latency: 0, success: '—', requests: '0', color: color[provider.id % color.length], enabled: provider.enabled, endpoint: provider.endpoint, mode: provider.mode === 'unified' ? 'unified' : 'single', endpoints: (provider.endpoints || []).map((entry) => ({ id: entry.id, endpoint: entry.endpoint, keys: (entry.keys || []).map((key) => ({ id: key.id, models: key.models, endpointId: entry.id })) })), group: provider.group_id, modelsList: provider.models, keyCount: provider.key_count, keyScopes: provider.keys?.map((key) => ({ id: key.id, models: key.models, endpointId: key.endpoint_id ?? undefined })) }
+  return { id: provider.id, name: provider.name, short: provider.name.charAt(0).toUpperCase(), type: provider.protocol, models: provider.models.length, latency: 0, success: '—', requests: '0', color: color[provider.id % color.length], enabled: provider.enabled, endpoint: provider.endpoint, mode: provider.mode === 'unified' ? 'unified' : 'single', endpoints: (provider.endpoints || []).map((entry) => ({ id: entry.id, endpoint: entry.endpoint, keys: (entry.keys || []).map((key) => ({ id: key.id, models: key.models, endpointId: entry.id })) })), group: provider.group_id, modelsList: provider.models, keyCount: provider.key_count, keyScopes: provider.keys?.map((key) => ({ id: key.id, models: key.models, endpointId: key.endpoint_id ?? undefined })), headers: provider.headers || [], paramReplace: provider.param_replace || [], promptReplace: provider.prompt_replace || [], paramDefaults: provider.param_defaults || [] }
 }
 export function mapRoute(route: ApiRoute, providers: Provider[]): RouteRule {
   const candidates = route.candidates.map(([provider, model], index) => ({
@@ -81,6 +85,10 @@ export function mapRoute(route: ApiRoute, providers: Provider[]): RouteRule {
     patterns: route.patterns,
     listMembers: route.list_members,
     isDefault: route.is_default,
+    headers: route.headers || [],
+    paramReplace: route.param_replace || [],
+    promptReplace: route.prompt_replace || [],
+    paramDefaults: route.param_defaults || [],
   }
 }
 export function mapRequest(request: ApiRequest): RequestRecord {
@@ -115,9 +123,18 @@ export function mapPlugin(plugin: ApiPlugin): Plugin {
   return { id: plugin.id, name: plugin.name, description: plugin.description, version: plugin.version, enabled: plugin.enabled, status: plugin.status, events: plugin.events, permissions: plugin.permissions, priority: plugin.priority, hasUi: plugin.has_ui, uiTitle: plugin.ui_title, configSchema: plugin.config_schema || {}, config: plugin.config || {}, sha256: plugin.sha256, installedAt: plugin.installed_at, updatedAt: plugin.updated_at }
 }
 export type ProviderKeyDraft = { value: string; models: string[] | null; endpointId?: number }
+type RewriteSource = { headers?: HeaderRule[]; paramReplace?: ParamReplaceRule[]; promptReplace?: PromptReplaceRule[]; paramDefaults?: ParamDefaultRule[] }
+function rewriteWire(source: RewriteSource): WireRewrite {
+  return {
+    headers: source.headers || [],
+    param_replace: source.paramReplace || [],
+    prompt_replace: source.promptReplace || [],
+    param_defaults: (source.paramDefaults || []).map(({ field, value }) => ({ field, value })),
+  }
+}
 export function providerInput(provider: Provider, keyDrafts: ProviderKeyDraft[] = []) {
   const entered = keyDrafts.filter((key) => key.value.trim())
-  const base = { name: provider.name, protocol: provider.type, endpoint: provider.endpoint, models: provider.modelsList, secret: entered[0]?.value.trim() || '', secrets: entered.map((key) => key.value.trim()), key_models: entered.filter((key) => key.models !== null).map((key) => ({ secret: key.value.trim(), models: key.models })), group_id: provider.group, enabled: provider.enabled, mode: provider.mode }
+  const base = { name: provider.name, protocol: provider.type, endpoint: provider.endpoint, models: provider.modelsList, secret: entered[0]?.value.trim() || '', secrets: entered.map((key) => key.value.trim()), key_models: entered.filter((key) => key.models !== null).map((key) => ({ secret: key.value.trim(), models: key.models })), group_id: provider.group, enabled: provider.enabled, mode: provider.mode, ...rewriteWire(provider) }
   if (provider.mode !== 'unified') return base
   const endpoints = provider.endpoints.map((entry) => {
     const keys = keyDrafts.filter((key) => key.endpointId === entry.id)
@@ -136,5 +153,5 @@ export function policyInput(policy: KeyPolicy, providers: Provider[]) {
 export function routeInput(route: RouteRule, providers: Provider[]) {
   const enabled = (route.candidates || []).filter((candidate) => candidate.enabled)
   const candidates = enabled.map((candidate) => { const provider = providers.find((item) => item.name === candidate.provider); if (!provider) throw new Error(`Unknown provider: ${candidate.provider}`); return [provider.id, candidate.model] as [number, string] })
-  return { slug: route.slug, name: route.name, description: route.description, patterns: route.patterns || [route.match], is_default: route.isDefault === true, list_members: route.listMembers === true, enabled: route.active, candidates, strategy: normalizeRouteStrategy(route.strategy), weights: enabled.map((candidate) => clampWeight(candidate.weight ?? 1)) }
+  return { slug: route.slug, name: route.name, description: route.description, patterns: route.patterns || [route.match], is_default: route.isDefault === true, list_members: route.listMembers === true, enabled: route.active, candidates, strategy: normalizeRouteStrategy(route.strategy), weights: enabled.map((candidate) => clampWeight(candidate.weight ?? 1)), ...rewriteWire(route) }
 }

@@ -741,9 +741,20 @@ pub async fn relay(
                     attempts_used += 1;
                     let attempt_started = Instant::now();
                     let inflight = state.routing_stats.inflight_slot(provider.id);
-                    let encoded_body = crate::protocol::encode_request(*protocol, &request, model)
-                        .unwrap_or_else(|_| json!({}));
-                    let (out_body, out_headers) = match crate::plugin::rewrite_upstream(
+                    // Built-in provider+route rewriting runs before the plugin
+                    // upstream hook: prompt rules touch only system text, param
+                    // rules rewrite the encoded body, and the effective upstream
+                    // model drives the Gemini URL path. Key scopes, logs, strategy
+                    // stats and quotas keep the original candidate model.
+                    let rewrite = crate::rewrite::merge(&provider.rewrite, &route.rewrite);
+                    let mut rewritten_request = request.clone();
+                    crate::rewrite::apply_prompt(&mut rewritten_request, &rewrite.prompt_replace);
+                    let mut encoded_body =
+                        crate::protocol::encode_request(*protocol, &rewritten_request, model)
+                            .unwrap_or_else(|_| json!({}));
+                    crate::rewrite::apply_params(&mut encoded_body, &rewrite, *protocol);
+                    let effective_model = crate::rewrite::effective_model(&encoded_body, model);
+                    let (out_body, plugin_headers) = match crate::plugin::rewrite_upstream(
                         &state,
                         &target,
                         model,
@@ -758,9 +769,18 @@ pub async fn relay(
                             return error(StatusCode::BAD_GATEWAY, message);
                         }
                     };
+                    let out_headers = crate::rewrite::merge_headers(
+                        crate::rewrite::header_pairs(&rewrite),
+                        plugin_headers,
+                    );
                     let upstream = if provider.plugin_id.is_some() {
                         crate::plugin::provider_fetch(
-                            &state, &target, &secret, &request, model, *protocol,
+                            &state,
+                            &target,
+                            &secret,
+                            &rewritten_request,
+                            &effective_model,
+                            *protocol,
                         )
                         .await
                     } else {
@@ -768,8 +788,8 @@ pub async fn relay(
                             &state.http(),
                             &target,
                             &secret,
-                            &request,
-                            model,
+                            &rewritten_request,
+                            &effective_model,
                             *protocol,
                             &crate::relay::Overrides {
                                 body: Some(out_body),

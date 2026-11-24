@@ -34,6 +34,7 @@ async fn gateway(upstream: Router) -> (SocketAddr, Store, String, tempfile::Temp
                 models: vec!["upstream-model".into()],
                 plugin_id: None,
                 mode: "single".into(),
+                rewrite: Default::default(),
             },
             "upstream-secret",
             &[],
@@ -53,6 +54,7 @@ async fn gateway(upstream: Router) -> (SocketAddr, Store, String, tempfile::Temp
             is_default: true,
             list_members: true,
             candidates: vec![],
+            rewrite: Default::default(),
         })
         .await
         .unwrap();

@@ -93,6 +93,7 @@ async fn store_with_scoped_provider(
                 models: vec!["claude-a".into(), "claude-b".into(), "gpt-a".into()],
                 plugin_id: None,
                 mode: "single".into(),
+                rewrite: Default::default(),
             },
             "claude-key",
             &[(
@@ -118,6 +119,7 @@ async fn store_with_scoped_provider(
             is_default: false,
             list_members: true,
             candidates: vec![],
+            rewrite: Default::default(),
         })
         .await
         .unwrap();
@@ -132,6 +134,7 @@ async fn store_with_scoped_provider(
             is_default: false,
             list_members: true,
             candidates: vec![],
+            rewrite: Default::default(),
         })
         .await
         .unwrap();
@@ -235,6 +238,7 @@ async fn auth_rotation_stays_within_eligible_scoped_keys() {
                 models: vec!["claude-a".into()],
                 plugin_id: None,
                 mode: "single".into(),
+                rewrite: Default::default(),
             },
             "bad-claude",
             &[("bad-claude".into(), vec!["claude-a".into()])],
@@ -267,6 +271,7 @@ async fn auth_rotation_stays_within_eligible_scoped_keys() {
             is_default: true,
             list_members: true,
             candidates: vec![],
+            rewrite: Default::default(),
         })
         .await
         .unwrap();
@@ -320,6 +325,7 @@ async fn unscoped_keys_still_serve_every_model() {
                 models: vec!["gpt-a".into()],
                 plugin_id: None,
                 mode: "single".into(),
+                rewrite: Default::default(),
             },
             "gpt-key",
             &[],
@@ -338,6 +344,7 @@ async fn unscoped_keys_still_serve_every_model() {
             is_default: true,
             list_members: true,
             candidates: vec![],
+            rewrite: Default::default(),
         })
         .await
         .unwrap();
@@ -546,6 +553,7 @@ async fn store_with_group_route(
                 models: vec!["claude-a".into(), "claude-b".into(), "gpt-a".into()],
                 plugin_id: None,
                 mode: "single".into(),
+                rewrite: Default::default(),
             },
             "claude-key",
             &[(
@@ -572,6 +580,7 @@ async fn store_with_group_route(
                 is_default: false,
                 list_members: true,
                 candidates: vec![],
+                rewrite: Default::default(),
             })
             .await
             .unwrap();

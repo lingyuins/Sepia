@@ -18,6 +18,7 @@ async fn provider_and_route_updates_round_trip_and_analytics_are_real() {
                 models: vec!["one".into()],
                 plugin_id: None,
                 mode: "single".into(),
+                rewrite: Default::default(),
             },
             "secret",
             &[],
@@ -36,6 +37,7 @@ async fn provider_and_route_updates_round_trip_and_analytics_are_real() {
             enabled: true,
             plugin_id: None,
             mode: "single",
+            rewrite: &Default::default(),
         })
         .await
         .unwrap();
@@ -65,6 +67,7 @@ async fn provider_and_route_updates_round_trip_and_analytics_are_real() {
             is_default: true,
             list_members: true,
             candidates: vec![],
+            rewrite: Default::default(),
         })
         .await
         .unwrap();
@@ -82,6 +85,7 @@ async fn provider_and_route_updates_round_trip_and_analytics_are_real() {
                 candidates: &[(provider.id, "two".into())],
                 strategy: Some("priority"),
                 weights: Some(&[]),
+                rewrite: &Default::default(),
             },
         )
         .await
@@ -213,6 +217,7 @@ async fn analytics_periods_cover_ninety_days_and_all_history() {
                 models: vec!["recent".into(), "middle".into(), "legacy".into()],
                 plugin_id: None,
                 mode: "single".into(),
+                rewrite: Default::default(),
             },
             "secret",
             &[],

@@ -1277,3 +1277,28 @@ kbd { font-family: var(--font-mono); }
   .ai-service-model-row, .ai-generate-controls { flex-direction: column; align-items: stretch; }
   .ai-service-model-row .button, .ai-generate-controls .button { justify-content: center; }
 }
+
+/* Request rewrite editor (provider + route dialogs) */
+.rewrite-section > h3 { margin: 0; font-size: 15px; font-weight: 500; }
+.rewrite-section { display: flex; flex-direction: column; gap: 10px; padding: 14px 16px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface); }
+.rewrite-count { padding: 1px 6px; border-radius: 999px; background: var(--accent-soft); color: var(--accent); font-size: 11px; }
+.rewrite-body { display: flex; flex-direction: column; gap: 14px; }
+.rewrite-hint, small.rewrite-hint { margin: 0; color: var(--text-muted); font-size: 13px; line-height: 1.45; }
+.rewrite-warning { margin: 0; color: var(--warning); font-size: 13px; line-height: 1.45; }
+.rewrite-block { display: flex; flex-direction: column; gap: 8px; padding-top: 12px; border-top: 1px solid var(--border); }
+.rewrite-block-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.rewrite-block-head strong { font-size: 14px; font-weight: 500; }
+.rewrite-rows { display: flex; flex-direction: column; gap: 8px; }
+.rewrite-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto; align-items: center; gap: 8px; }
+.rewrite-row-3 { grid-template-columns: minmax(0, 0.8fr) minmax(0, 1fr) minmax(0, 1fr) auto; }
+.rewrite-rule { display: flex; flex-direction: column; gap: 6px; }
+.rewrite-preview-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 8px; }
+.rewrite-preview { min-width: 90px; max-width: 40ch; overflow: hidden; padding: 6px 8px; border-radius: 8px; background: var(--surface-recessed); color: var(--text-secondary); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.rewrite-preview:empty { display: none; }
+.rewrite-issues { display: flex; flex-direction: column; gap: 4px; margin: 0; padding: 10px 12px 10px 28px; border-radius: 10px; background: var(--surface-recessed); color: var(--danger); font-size: 13px; }
+.rewrite-section .field { min-width: 0; }
+.rewrite-section .icon-button { width: 40px; height: 40px; }
+@media (max-width: 640px) {
+  .rewrite-row, .rewrite-row-3 { grid-template-columns: minmax(0, 1fr); }
+  .rewrite-preview-row { grid-template-columns: minmax(0, 1fr); }
+}

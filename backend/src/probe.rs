@@ -13,6 +13,11 @@ pub struct ProbeOutcome {
     pub endpoint: &'static str,
     pub error: Option<String>,
     pub reply: Option<String>,
+    /// Effective upstream model after built-in parameter rewriting (the model
+    /// actually sent to the upstream, which may differ from the candidate).
+    pub effective_model: String,
+    /// Static rewrite headers applied to this probe, masked for display.
+    pub headers: Vec<(String, String)>,
 }
 
 fn failure(started: Instant, endpoint: &'static str, error: String) -> ProbeOutcome {
@@ -22,7 +27,25 @@ fn failure(started: Instant, endpoint: &'static str, error: String) -> ProbeOutc
         endpoint,
         error: Some(error),
         reply: None,
+        effective_model: String::new(),
+        headers: Vec::new(),
     }
+}
+
+/// Mask a header value for probe display: keep a short prefix, redact the rest.
+fn mask_header_value(value: &str) -> String {
+    if value.chars().count() <= 4 {
+        return "••••".into();
+    }
+    let prefix: String = value.chars().take(4).collect();
+    format!("{prefix}…")
+}
+
+fn masked_headers(config: &crate::rewrite::RewriteConfig) -> Vec<(String, String)> {
+    crate::rewrite::header_pairs(config)
+        .into_iter()
+        .map(|(name, value)| (name, mask_header_value(&value)))
+        .collect()
 }
 
 fn upstream_detail(body: &str) -> String {
@@ -50,10 +73,13 @@ pub async fn probe_model_for(
     secret: &str,
     model: &str,
     legs: &[Protocol],
+    route_rewrite: &crate::rewrite::RewriteConfig,
 ) -> ProbeOutcome {
+    let rewrite = crate::rewrite::merge(&provider.rewrite, route_rewrite);
+    let headers = masked_headers(&rewrite);
     if provider.plugin_id.is_none() {
         let snapshot = state.snapshots.get();
-        return probe_model(
+        let mut outcome = probe_model(
             &state.http(),
             provider,
             secret,
@@ -63,21 +89,34 @@ pub async fn probe_model_for(
                 first_byte_seconds: snapshot.first_byte_timeout_seconds,
                 stream_idle_seconds: snapshot.stream_idle_timeout_seconds,
             },
+            &rewrite,
         )
         .await;
+        outcome.headers = headers;
+        return outcome;
     }
-    let request = ChatRequest {
+    let mut request = ChatRequest {
         model: model.to_string(),
         messages: vec![Message::new(Role::User, "ping")],
         max_tokens: Some(512),
         ..Default::default()
     };
+    crate::rewrite::apply_prompt(&mut request, &rewrite.prompt_replace);
+    let mut encoded = crate::protocol::encode_request(legs[0], &request, model)
+        .unwrap_or_else(|_| serde_json::json!({}));
+    crate::rewrite::apply_params(&mut encoded, &rewrite, legs[0]);
+    let effective_model = crate::rewrite::effective_model(&encoded, model);
     let mut last: Option<ProbeOutcome> = None;
     for protocol in legs {
         let endpoint = crate::relay::endpoint_label(*protocol);
         let started = Instant::now();
         let response = match crate::plugin::provider_fetch(
-            state, provider, secret, &request, model, *protocol,
+            state,
+            provider,
+            secret,
+            &request,
+            &effective_model,
+            *protocol,
         )
         .await
         {
@@ -97,6 +136,8 @@ pub async fn probe_model_for(
                 endpoint,
                 error: Some(format!("upstream HTTP {status} ({endpoint}): {detail}")),
                 reply: None,
+                effective_model: effective_model.clone(),
+                headers: Vec::new(),
             });
             return last.unwrap();
         }
@@ -119,6 +160,8 @@ pub async fn probe_model_for(
                     endpoint,
                     error: None,
                     reply: Some(decoded.text.chars().take(200).collect()),
+                    effective_model: effective_model.clone(),
+                    headers: Vec::new(),
                 };
             }
             Err(message) => {
@@ -136,29 +179,39 @@ pub async fn probe_model(
     model: &str,
     legs: &[Protocol],
     timeouts: crate::relay::Timeouts,
+    rewrite: &crate::rewrite::RewriteConfig,
 ) -> ProbeOutcome {
     // Reasoning models spend output tokens on hidden reasoning before any
     // visible content; a tiny budget makes them answer with empty content,
     // which strict upstream gateways reject as a failed channel. Give the
     // probe enough room to finish reasoning and emit a short reply.
-    let request = ChatRequest {
+    let mut request = ChatRequest {
         model: model.to_string(),
         messages: vec![Message::new(Role::User, "ping")],
         max_tokens: Some(512),
         ..Default::default()
     };
+    crate::rewrite::apply_prompt(&mut request, &rewrite.prompt_replace);
     let mut last: Option<ProbeOutcome> = None;
     for protocol in legs {
         let endpoint = crate::relay::endpoint_label(*protocol);
         let started = Instant::now();
+        let mut encoded = crate::protocol::encode_request(*protocol, &request, model)
+            .unwrap_or_else(|_| serde_json::json!({}));
+        crate::rewrite::apply_params(&mut encoded, rewrite, *protocol);
+        let effective_model = crate::rewrite::effective_model(&encoded, model);
+        let overrides = crate::relay::Overrides {
+            body: Some(encoded),
+            headers: crate::rewrite::header_pairs(rewrite),
+        };
         let response = match crate::relay::call_with_overrides(
             client,
             provider,
             secret,
             &request,
-            model,
+            &effective_model,
             *protocol,
-            &crate::relay::Overrides::default(),
+            &overrides,
             timeouts,
         )
         .await
@@ -185,6 +238,8 @@ pub async fn probe_model(
                 endpoint,
                 error: Some(message),
                 reply: None,
+                effective_model: effective_model.clone(),
+                headers: Vec::new(),
             });
             // A missing endpoint may exist on the other leg of a universal
             // OpenAI provider; anything else is a real answer about this key.
@@ -212,6 +267,8 @@ pub async fn probe_model(
                     endpoint,
                     error: None,
                     reply: Some(decoded.text.chars().take(200).collect()),
+                    effective_model,
+                    headers: Vec::new(),
                 };
             }
             Err(message) => {
@@ -241,6 +298,8 @@ impl ProbeOutcome {
             "endpoint": self.endpoint,
             "error": self.error,
             "reply": self.reply,
+            "effective_model": self.effective_model,
+            "headers": self.headers.iter().map(|(name, value)| serde_json::json!({"name":name,"value":value})).collect::<Vec<_>>(),
         })
     }
 }

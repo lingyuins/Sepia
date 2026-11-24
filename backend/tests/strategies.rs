@@ -49,6 +49,7 @@ async fn provider(store: &Store, name: &str, address: SocketAddr) -> i64 {
                 models: vec!["upstream-model".into()],
                 plugin_id: None,
                 mode: "single".into(),
+                rewrite: Default::default(),
             },
             "upstream-secret",
             &[],
@@ -96,6 +97,7 @@ async fn round_robin_cycles_candidates_in_order() {
             is_default: true,
             list_members: true,
             candidates: vec![(a, "upstream-model".into()), (b, "upstream-model".into())],
+            rewrite: Default::default(),
         })
         .await
         .unwrap();
@@ -157,6 +159,7 @@ async fn cost_optimized_prefers_cheapest_priced_candidate() {
             is_default: true,
             list_members: true,
             candidates: vec![(a, "upstream-model".into()), (b, "upstream-model".into())],
+            rewrite: Default::default(),
         })
         .await
         .unwrap();
@@ -205,6 +208,7 @@ async fn priority_keeps_saved_candidate_order() {
             is_default: true,
             list_members: true,
             candidates: vec![(a, "upstream-model".into()), (b, "upstream-model".into())],
+            rewrite: Default::default(),
         })
         .await
         .unwrap();

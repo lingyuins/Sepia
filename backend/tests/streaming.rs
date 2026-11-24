@@ -39,6 +39,7 @@ async fn provider(
                 models: vec!["upstream-model".into()],
                 plugin_id: None,
                 mode: "single".into(),
+                rewrite: Default::default(),
             },
             "upstream-secret",
             &[],
@@ -75,6 +76,7 @@ async fn failed_first_candidate_fails_over_and_records_attempts() {
                 (first, "upstream-model".into()),
                 (second, "upstream-model".into()),
             ],
+            rewrite: Default::default(),
         })
         .await
         .unwrap();
@@ -157,6 +159,7 @@ async fn assert_anthropic_stream_is_converted_to_openai_sse(line_ending: &str) {
             is_default: true,
             list_members: true,
             candidates: vec![],
+            rewrite: Default::default(),
         })
         .await
         .unwrap();
@@ -231,6 +234,7 @@ async fn responses_stream_is_converted_to_openai_sse() {
             is_default: true,
             list_members: true,
             candidates: vec![],
+            rewrite: Default::default(),
         })
         .await
         .unwrap();
@@ -313,6 +317,7 @@ async fn failing_chat_candidate_fails_over_to_responses_only_upstream() {
                 (first, "upstream-model".into()),
                 (second, "upstream-model".into()),
             ],
+            rewrite: Default::default(),
         })
         .await
         .unwrap();
@@ -388,6 +393,7 @@ async fn truncated_stream_is_failed_not_sticky_success() {
             is_default: true,
             list_members: true,
             candidates: vec![(provider_id, "upstream-model".into())],
+            rewrite: Default::default(),
         })
         .await
         .unwrap();

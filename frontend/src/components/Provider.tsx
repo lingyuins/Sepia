@@ -5,6 +5,8 @@ import { Dropdown } from './Dropdown'
 import { api, type ProviderKeyDraft } from '../api'
 import { protocolOf, useTranslation, useWorkspace, type ChannelGroup, type ProtocolType, type Provider, type ProviderEndpoint } from '../workspace'
 import { addSelectedModels, filterModels, mergeDetectedModels } from '../fetch-models'
+import { RewriteEditor } from './RewriteEditor'
+import { rewriteOf, validateRewrite, type RewriteConfig } from '../rewrite'
 export type { Provider } from '../workspace'
 export type { ProviderKeyDraft } from '../api'
 
@@ -58,6 +60,7 @@ export function ProviderDialog({ open, onClose, onSave, onDelete, onTest, provid
   const [fetching, setFetching] = useState(false)
   const [fetchResults, setFetchResults] = useState<{ keyId: number; models: string[] | null; error: string | null }[]>([])
   const [selectedModels, setSelectedModels] = useState<string[]>([])
+  const [rewrite, setRewrite] = useState<RewriteConfig>(() => rewriteOf(provider))
   useEffect(() => {
     if (!open) return
     const nextType = provider ? protocolOf(provider) : 'openai'
@@ -75,6 +78,7 @@ export function ProviderDialog({ open, onClose, onSave, onDelete, onTest, provid
     setFetchOpen(false)
     setGroupOpen(false)
     setTesting(false)
+    setRewrite(rewriteOf(provider))
   }, [open, provider])
   const firstEndpoint = endpointDrafts[0]
   const endpoint = firstEndpoint?.endpoint || ''
@@ -189,10 +193,12 @@ export function ProviderDialog({ open, onClose, onSave, onDelete, onTest, provid
     if (!provider && !keyDrafts.some((key) => key.value.trim())) { notify(t('apiKeyRequired')); return }
     if (mode === 'unified' && endpointDrafts.some((entry) => !entry.endpoint.trim())) { notify(t('endpointRequired')); return }
     if (!models.length) { notify(t('modelsRequired')); return }
+    const rewriteIssues = validateRewrite(rewrite)
+    if (rewriteIssues.length) { notify(t(rewriteIssues[0].key, rewriteIssues[0].values)); return }
     try {
       const keyCount = keyDrafts.filter((key) => key.configured || key.value.trim()).length
       const endpoints: ProviderEndpoint[] = endpointDrafts.map((entry) => ({ id: entry.storedId ?? entry.id, endpoint: entry.endpoint.trim(), keys: keyDrafts.filter((key) => key.endpointId === entry.id).map((key) => ({ id: key.storedId ?? 0, models: key.models, endpointId: entry.storedId ?? entry.id })) }))
-      const saved: Provider = { id: provider?.id || Date.now(), name: name.trim(), short: name.trim().charAt(0).toUpperCase(), type, group, models: models.length, latency: provider?.latency || 0, success: provider?.success || '—', requests: provider?.requests || '0', color: provider?.color || '#c4f4aa', enabled, endpoint: endpoint.trim(), mode, endpoints, modelsList: models, keyCount, keyScopes: provider?.keyScopes }
+      const saved: Provider = { id: provider?.id || Date.now(), name: name.trim(), short: name.trim().charAt(0).toUpperCase(), type, group, models: models.length, latency: provider?.latency || 0, success: provider?.success || '—', requests: provider?.requests || '0', color: provider?.color || '#c4f4aa', enabled, endpoint: endpoint.trim(), mode, endpoints, modelsList: models, keyCount, keyScopes: provider?.keyScopes, ...rewrite }
       await onSave(saved, keyDrafts.filter((key) => key.configured || key.value.trim()).map((key) => ({ value: key.value.trim(), models: key.models, endpointId: endpointDrafts.find((entry) => entry.id === key.endpointId)?.storedId ?? endpointDrafts.find((entry) => entry.id === key.endpointId)?.id })))
     } catch (cause) { notify(cause instanceof Error ? cause.message : String(cause)) }
   }
@@ -301,6 +307,7 @@ export function ProviderDialog({ open, onClose, onSave, onDelete, onTest, provid
           {!models.length && <span>{t('noModelsConfigured')}</span>}
         </div>
       </section>
+      <RewriteEditor value={rewrite} onChange={setRewrite} />
       <div className="switch-row"><span>{t('enableProvider')}</span><Toggle label={t('enableProvider')} checked={enabled} onChange={() => setEnabled(!enabled)} /></div>
       <DialogActions onClose={onClose} label={provider ? t('saveProvider') : t('connectProvider')} disabled={busy} />
       {provider && onDelete && <button type="button" className="dialog-danger-link" onClick={onDelete}>{t('disconnectProvider')}</button>}

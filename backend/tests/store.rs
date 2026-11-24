@@ -36,6 +36,7 @@ async fn bootstrap_authenticates_sessions_and_persists_configuration() {
         models: vec!["example-1".into()],
         plugin_id: None,
         mode: "single".into(),
+        rewrite: Default::default(),
     };
     let provider = store
         .create_provider(provider, "sk-upstream-secret", &[], &key_store)
@@ -59,6 +60,7 @@ async fn bootstrap_authenticates_sessions_and_persists_configuration() {
             is_default: true,
             list_members: true,
             candidates: vec![],
+            rewrite: Default::default(),
         })
         .await
         .unwrap();

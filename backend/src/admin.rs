@@ -70,6 +70,15 @@ pub struct ProviderInput {
     /// Ignored when `mode` is `single`.
     #[serde(default)]
     endpoints: Vec<ProviderEndpointInput>,
+    /// Built-in outbound request rewriting (headers/params/prompt/defaults).
+    #[serde(default)]
+    headers: Vec<crate::rewrite::HeaderRule>,
+    #[serde(default)]
+    param_replace: Vec<crate::rewrite::ParamReplaceRule>,
+    #[serde(default)]
+    prompt_replace: Vec<crate::rewrite::PromptReplaceRule>,
+    #[serde(default)]
+    param_defaults: Vec<crate::rewrite::ParamDefaultRule>,
 }
 #[derive(Deserialize)]
 pub struct ProviderPreviewInput {
@@ -131,6 +140,15 @@ pub struct RouteInput {
     /// Per-candidate weights parallel to `candidates`; omitted defaults to 1.
     #[serde(default)]
     weights: Option<Vec<i64>>,
+    /// Built-in outbound request rewriting; overrides the provider's rules.
+    #[serde(default)]
+    headers: Vec<crate::rewrite::HeaderRule>,
+    #[serde(default)]
+    param_replace: Vec<crate::rewrite::ParamReplaceRule>,
+    #[serde(default)]
+    prompt_replace: Vec<crate::rewrite::PromptReplaceRule>,
+    #[serde(default)]
+    param_defaults: Vec<crate::rewrite::ParamDefaultRule>,
 }
 #[derive(Deserialize)]
 pub struct PriceInput {
@@ -372,7 +390,7 @@ async fn providers(State(state): State<AppState>) -> Response {
             Ok(endpoints) => endpoints,
             Err(message) => return error(StatusCode::INTERNAL_SERVER_ERROR, message),
         };
-        output.push(json!({"id":provider.id,"name":provider.name,"protocol":provider.protocol,"endpoint":provider.endpoint,"models":provider.models,"key_count":provider.key_count,"group_id":provider.group_id,"enabled":provider.enabled,"plugin_id":provider.plugin_id,"mode":mode,"keys":keys.iter().map(|key| json!({"id":key.id,"models":key.models,"endpoint_id":key.endpoint_id})).collect::<Vec<_>>(),"endpoints":endpoints.iter().map(|endpoint| json!({"id":endpoint.id,"endpoint":endpoint.endpoint,"keys":keys.iter().filter(|key| key.endpoint_id == Some(endpoint.id)).map(|key| json!({"id":key.id,"models":key.models})).collect::<Vec<_>>()})).collect::<Vec<_>>()}));
+        output.push(json!({"id":provider.id,"name":provider.name,"protocol":provider.protocol,"endpoint":provider.endpoint,"models":provider.models,"key_count":provider.key_count,"group_id":provider.group_id,"enabled":provider.enabled,"plugin_id":provider.plugin_id,"mode":mode,"headers":provider.rewrite.headers,"param_replace":provider.rewrite.param_replace,"prompt_replace":provider.rewrite.prompt_replace,"param_defaults":provider.rewrite.param_defaults,"keys":keys.iter().map(|key| json!({"id":key.id,"models":key.models,"endpoint_id":key.endpoint_id})).collect::<Vec<_>>(),"endpoints":endpoints.iter().map(|endpoint| json!({"id":endpoint.id,"endpoint":endpoint.endpoint,"keys":keys.iter().filter(|key| key.endpoint_id == Some(endpoint.id)).map(|key| json!({"id":key.id,"models":key.models})).collect::<Vec<_>>()})).collect::<Vec<_>>()}));
     }
     Json(output).into_response()
 }
@@ -509,6 +527,7 @@ async fn preview_provider_models(
         group_id: String::new(),
         enabled: false,
         plugin_id: input.plugin_id.clone(),
+        rewrite: Default::default(),
     };
     let result = if provider.plugin_id.is_some() {
         crate::plugin::provider_models(&state, &provider, secret).await
@@ -537,7 +556,20 @@ async fn create_provider(
         plugin_id,
         mode,
         endpoints,
+        headers,
+        param_replace,
+        prompt_replace,
+        param_defaults,
     } = input;
+    let rewrite = crate::rewrite::RewriteConfig {
+        headers,
+        param_replace,
+        prompt_replace,
+        param_defaults,
+    };
+    if let Err(message) = crate::rewrite::validate(&rewrite) {
+        return error(StatusCode::BAD_REQUEST, message);
+    }
     if mode != "single" && mode != "unified" {
         return error(StatusCode::BAD_REQUEST, "mode must be single or unified");
     }
@@ -593,6 +625,7 @@ async fn create_provider(
             group_id: group_id.clone(),
             enabled,
             plugin_id: plugin_id.clone(),
+            rewrite: rewrite.clone(),
         };
         let mut discovered = Vec::new();
         let mut first_error = None;
@@ -641,6 +674,7 @@ async fn create_provider(
                 models,
                 plugin_id: plugin_id.clone(),
                 mode: mode.clone(),
+                rewrite: rewrite.clone(),
             },
             &secret,
             &key_scopes,
@@ -661,6 +695,7 @@ async fn create_provider(
                     enabled,
                     plugin_id: plugin_id.as_deref(),
                     mode: &mode,
+                    rewrite: &rewrite,
                 })
                 .await
             {
@@ -720,9 +755,18 @@ async fn create_provider(
     }
 }
 async fn routes(State(state): State<AppState>) -> Response {
-    match state.store.routes().await { Ok(routes) => Json(json!(routes.into_iter().map(|route| json!({"id":route.id,"slug":route.slug,"name":route.name,"description":route.description,"patterns":route.patterns,"is_default":route.is_default,"list_members":route.list_members,"enabled":route.enabled,"candidates":route.candidates,"strategy":route.strategy,"weights":route.weights})).collect::<Vec<_>>())).into_response(), Err(message) => error(StatusCode::INTERNAL_SERVER_ERROR, message) }
+    match state.store.routes().await { Ok(routes) => Json(json!(routes.into_iter().map(|route| json!({"id":route.id,"slug":route.slug,"name":route.name,"description":route.description,"patterns":route.patterns,"is_default":route.is_default,"list_members":route.list_members,"enabled":route.enabled,"candidates":route.candidates,"strategy":route.strategy,"weights":route.weights,"headers":route.rewrite.headers,"param_replace":route.rewrite.param_replace,"prompt_replace":route.rewrite.prompt_replace,"param_defaults":route.rewrite.param_defaults})).collect::<Vec<_>>())).into_response(), Err(message) => error(StatusCode::INTERNAL_SERVER_ERROR, message) }
 }
 async fn create_route(State(state): State<AppState>, Json(input): Json<RouteInput>) -> Response {
+    let rewrite = crate::rewrite::RewriteConfig {
+        headers: input.headers,
+        param_replace: input.param_replace,
+        prompt_replace: input.prompt_replace,
+        param_defaults: input.param_defaults,
+    };
+    if let Err(message) = crate::rewrite::validate(&rewrite) {
+        return error(StatusCode::BAD_REQUEST, message);
+    }
     let Some((provider_id, model)) = input.candidates.first().cloned() else {
         return error(StatusCode::BAD_REQUEST, "at least one candidate required");
     };
@@ -749,6 +793,7 @@ async fn create_route(State(state): State<AppState>, Json(input): Json<RouteInpu
             is_default: input.is_default,
             list_members: input.list_members,
             candidates: input.candidates,
+            rewrite,
         })
         .await
     {
@@ -776,6 +821,15 @@ async fn update_provider(
     Path(id): Path<i64>,
     Json(input): Json<ProviderInput>,
 ) -> Response {
+    let rewrite = crate::rewrite::RewriteConfig {
+        headers: input.headers,
+        param_replace: input.param_replace,
+        prompt_replace: input.prompt_replace,
+        param_defaults: input.param_defaults,
+    };
+    if let Err(message) = crate::rewrite::validate(&rewrite) {
+        return error(StatusCode::BAD_REQUEST, message);
+    }
     if input.mode != "single" && input.mode != "unified" {
         return error(StatusCode::BAD_REQUEST, "mode must be single or unified");
     }
@@ -829,6 +883,7 @@ async fn update_provider(
             enabled: input.enabled,
             plugin_id: input.plugin_id.as_deref(),
             mode: &input.mode,
+            rewrite: &rewrite,
         })
         .await
     {
@@ -871,6 +926,15 @@ async fn update_route(
     Path(id): Path<i64>,
     Json(input): Json<RouteInput>,
 ) -> Response {
+    let rewrite = crate::rewrite::RewriteConfig {
+        headers: input.headers,
+        param_replace: input.param_replace,
+        prompt_replace: input.prompt_replace,
+        param_defaults: input.param_defaults,
+    };
+    if let Err(message) = crate::rewrite::validate(&rewrite) {
+        return error(StatusCode::BAD_REQUEST, message);
+    }
     match state
         .store
         .update_route(
@@ -886,6 +950,7 @@ async fn update_route(
                 candidates: &input.candidates,
                 strategy: input.strategy.as_deref(),
                 weights: input.weights.as_deref(),
+                rewrite: &rewrite,
             },
         )
         .await
@@ -1104,7 +1169,9 @@ async fn test_route(State(state): State<AppState>, Path(id): Path<i64>) -> Respo
             provider,
             &crate::server::InboundProtocol::Provider(crate::protocol::Protocol::OpenAI),
         );
-        let outcome = crate::probe::probe_model_for(&state, provider, &secret, model, &legs).await;
+        let outcome =
+            crate::probe::probe_model_for(&state, provider, &secret, model, &legs, &route.rewrite)
+                .await;
         results.push(json!({"provider_id":provider.id,"provider":provider.name,"model":model,"enabled":true,"result":outcome.to_json()}));
     }
     Json(json!({"route":route.slug,"candidates":results})).into_response()

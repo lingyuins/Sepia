@@ -551,10 +551,11 @@ fn build_request(
     provider: &crate::Provider,
     secret: &str,
     prepared: &Prepared,
+    rewrite: &crate::rewrite::RewriteConfig,
 ) -> reqwest::RequestBuilder {
     let url = upstream_url(provider, prepared);
     let http = state.http();
-    let builder = if prepared.get {
+    let mut builder = if prepared.get {
         http.get(url)
     } else {
         let builder = http.post(url);
@@ -563,9 +564,33 @@ fn build_request(
             Payload::Raw {
                 bytes,
                 content_type,
-            } => builder
-                .header(reqwest::header::CONTENT_TYPE, content_type)
-                .body(bytes.clone()),
+            } => {
+                let builder = builder.header(reqwest::header::CONTENT_TYPE, content_type);
+                // Built-in parameter rewriting applies to verbatim JSON bodies
+                // only; non-JSON payloads pass through untouched.
+                let is_json = content_type
+                    .split(';')
+                    .next()
+                    .unwrap_or("")
+                    .trim()
+                    .eq_ignore_ascii_case("application/json");
+                if is_json
+                    && (!rewrite.param_replace.is_empty() || !rewrite.param_defaults.is_empty())
+                {
+                    if let Ok(value) = serde_json::from_slice::<Value>(bytes) {
+                        let rewritten = crate::rewrite::apply_raw_params(value, rewrite);
+                        if let Ok(serialized) = serde_json::to_vec(&rewritten) {
+                            builder.body(serialized)
+                        } else {
+                            builder.body(bytes.clone())
+                        }
+                    } else {
+                        builder.body(bytes.clone())
+                    }
+                } else {
+                    builder.body(bytes.clone())
+                }
+            }
             Payload::Parts(parts) => {
                 let mut form = reqwest::multipart::Form::new();
                 for part in parts {
@@ -588,6 +613,11 @@ fn build_request(
             }
         }
     };
+    // Configured static headers apply to auxiliary forwarding too; auth is
+    // added last so credential headers always win.
+    for (name, value) in crate::rewrite::header_pairs(rewrite) {
+        builder = builder.header(name.as_str(), value.as_str());
+    }
     crate::relay::authorize(builder, crate::protocol::Protocol::OpenAI, secret)
         // Auxiliary tasks (image/video generation) legitimately run far longer
         // than inference first-byte budgets; keep their own total budget.
@@ -748,6 +778,13 @@ async fn forward(
         else {
             continue;
         };
+        // Built-in rewrite: provider rules under the matched route's rules.
+        // Pinned async polls keep the provider rules (the submitting route may
+        // no longer match); the model rewrite only changes the outbound body.
+        let rewrite = match route {
+            Some(route) => crate::rewrite::merge(&provider.rewrite, &route.rewrite),
+            None => provider.rewrite.clone(),
+        };
         if !matches!(
             provider.protocol,
             ProviderProtocol::OpenAI | ProviderProtocol::OpenAIResponses
@@ -850,7 +887,7 @@ async fn forward(
                 attempts_used += 1;
                 let attempt_started = Instant::now();
                 let _inflight = state.routing_stats.inflight_slot(provider.id);
-                let upstream = build_request(&state, &target, &secret, &prepared)
+                let upstream = build_request(&state, &target, &secret, &prepared, &rewrite)
                     .send()
                     .await;
                 let response = match upstream {

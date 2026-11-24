@@ -128,6 +128,7 @@ async fn route_test_probes_every_candidate_with_real_upstream_calls() {
                 models: vec!["gpt-a".into()],
                 plugin_id: None,
                 mode: "single".into(),
+                rewrite: Default::default(),
             },
             "gpt-key",
             &[],
@@ -144,6 +145,7 @@ async fn route_test_probes_every_candidate_with_real_upstream_calls() {
                 models: vec!["gpt-a".into()],
                 plugin_id: None,
                 mode: "single".into(),
+                rewrite: Default::default(),
             },
             "revoked-key",
             &[],
@@ -162,6 +164,7 @@ async fn route_test_probes_every_candidate_with_real_upstream_calls() {
             is_default: false,
             list_members: true,
             candidates: vec![(good.id, "gpt-a".into()), (bad.id, "gpt-a".into())],
+            rewrite: Default::default(),
         })
         .await
         .unwrap();
@@ -257,6 +260,7 @@ async fn route_test_reports_missing_key_scope_and_universal_fallback() {
                 models: vec!["gpt-a".into(), "other".into()],
                 plugin_id: None,
                 mode: "single".into(),
+                rewrite: Default::default(),
             },
             "gpt-key",
             &[("gpt-key".into(), vec!["gpt-a".into()])],
@@ -273,6 +277,7 @@ async fn route_test_reports_missing_key_scope_and_universal_fallback() {
                 models: vec!["gpt-a".into()],
                 plugin_id: None,
                 mode: "single".into(),
+                rewrite: Default::default(),
             },
             "gpt-key",
             &[],
@@ -291,6 +296,7 @@ async fn route_test_reports_missing_key_scope_and_universal_fallback() {
             is_default: false,
             list_members: true,
             candidates: vec![(scoped.id, "other".into()), (universal.id, "gpt-a".into())],
+            rewrite: Default::default(),
         })
         .await
         .unwrap();
@@ -331,6 +337,7 @@ async fn provider_test_detects_catalog_with_saved_key_index_or_entered_secret() 
                 models: vec!["gpt-a".into()],
                 plugin_id: None,
                 mode: "single".into(),
+                rewrite: Default::default(),
             },
             "revoked-key",
             &[],
@@ -446,6 +453,7 @@ async fn probe_budget_lets_reasoning_models_emit_visible_content() {
                 models: vec!["qwen-max".into()],
                 plugin_id: None,
                 mode: "single".into(),
+                rewrite: Default::default(),
             },
             "gpt-key",
             &[],
@@ -464,6 +472,7 @@ async fn probe_budget_lets_reasoning_models_emit_visible_content() {
             is_default: false,
             list_members: true,
             candidates: vec![(provider.id, "qwen-max".into())],
+            rewrite: Default::default(),
         })
         .await
         .unwrap();

@@ -18,6 +18,7 @@ async fn large_catalog_is_compressed_without_changing_records() {
                 models,
                 plugin_id: None,
                 mode: "single".into(),
+                rewrite: Default::default(),
             },
             "provider-key",
             &[],
@@ -116,6 +117,7 @@ async fn catalog_aggregates_channels_prices_scopes_and_routes() {
                 models: vec!["gpt-x".into(), "embed-x".into()],
                 plugin_id: None,
                 mode: "single".into(),
+                rewrite: Default::default(),
             },
             "alpha-key",
             &[],
@@ -132,6 +134,7 @@ async fn catalog_aggregates_channels_prices_scopes_and_routes() {
                 models: vec!["gpt-x".into()],
                 plugin_id: None,
                 mode: "single".into(),
+                rewrite: Default::default(),
             },
             "beta-key-1",
             &[("beta-key-1".into(), vec!["gpt-x".into()])],
@@ -158,6 +161,7 @@ async fn catalog_aggregates_channels_prices_scopes_and_routes() {
             is_default: false,
             list_members: true,
             candidates: vec![(alpha.id, "gpt-x".into()), (beta.id, "gpt-x".into())],
+            rewrite: Default::default(),
         })
         .await
         .unwrap();
@@ -293,6 +297,7 @@ async fn metadata_sync_fetches_source_and_matches_variants() {
                 models: vec!["gpt-x-2024-08-06".into(), "gpt-x".into(), "kimi-k3".into()],
                 plugin_id: None,
                 mode: "single".into(),
+                rewrite: Default::default(),
             },
             "alpha-key",
             &[],

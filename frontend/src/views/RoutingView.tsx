@@ -32,6 +32,8 @@ import { RouteChain } from '../components/RouteChain'
 import { latestSuccessfulRouteRequest, routeDisplayCandidates } from '../route-display'
 import { AiRouteDialog } from '../components/AiRouteDialog'
 import ModelGroupsDialog from '../components/ModelGroupsDialog'
+import { RewriteEditor } from '../components/RewriteEditor'
+import { rewriteOf, validateRewrite, type RewriteConfig } from '../rewrite'
 import {
   ROUTE_STRATEGY_IDS,
   normalizeRouteStrategy,
@@ -110,6 +112,7 @@ function RouteForm({ route, onClose }: { route: RouteRule | null; onClose: () =>
   const [strategy, setStrategy] = useState<RouteStrategyId>(normalizeRouteStrategy(route?.strategy))
   const [active, setActive] = useState(route?.active ?? true)
   const [modelGroupsOpen, setModelGroupsOpen] = useState(false)
+  const [rewrite, setRewrite] = useState<RewriteConfig>(() => rewriteOf(route))
 
   const updateCandidate = (id: string, patch: Partial<RouteCandidate>) =>
     setCandidates((current) =>
@@ -177,6 +180,11 @@ function RouteForm({ route, onClose }: { route: RouteRule | null; onClose: () =>
       return
     }
     const finalPatterns = patterns.length ? patterns : ['*']
+    const rewriteIssues = validateRewrite(rewrite)
+    if (rewriteIssues.length) {
+      notify(t(rewriteIssues[0].key, rewriteIssues[0].values))
+      return
+    }
     const saved: RouteRule = {
       id: route?.id || Date.now(),
       name: name.trim(),
@@ -193,6 +201,7 @@ function RouteForm({ route, onClose }: { route: RouteRule | null; onClose: () =>
       patterns: finalPatterns,
       listMembers: modelListing === 'members',
       isDefault: route?.isDefault || false,
+      ...rewrite,
     }
     try {
       await run(() =>
@@ -537,6 +546,9 @@ function RouteForm({ route, onClose }: { route: RouteRule | null; onClose: () =>
         </div>
       </section>
 
+      <section className="route-editor-section route-rewrite-section">
+        <RewriteEditor value={rewrite} onChange={setRewrite} />
+      </section>
       <div className="switch-row">
         <span>{t('enableRoute')}</span>
         <Toggle checked={active} onChange={() => setActive(!active)} label={t('enableRoute')} />

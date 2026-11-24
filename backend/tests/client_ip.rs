@@ -52,6 +52,7 @@ async fn seeded(db: &str, address: SocketAddr) -> (Store, i64, String, tempfile:
                 models: vec!["gpt-test".into()],
                 plugin_id: None,
                 mode: "single".into(),
+                rewrite: Default::default(),
             },
             "upstream-secret",
             &[],
@@ -70,6 +71,7 @@ async fn seeded(db: &str, address: SocketAddr) -> (Store, i64, String, tempfile:
             is_default: false,
             list_members: true,
             candidates: vec![],
+            rewrite: Default::default(),
         })
         .await
         .unwrap();

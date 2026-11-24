@@ -138,6 +138,7 @@ async fn all_native_protocols_relay_to_all_provider_protocols() {
                     models: vec!["example".into()],
                     plugin_id: None,
                     mode: "single".into(),
+                    rewrite: Default::default(),
                 },
                 "upstream-secret",
                 &[],
@@ -159,6 +160,7 @@ async fn all_native_protocols_relay_to_all_provider_protocols() {
                 is_default: false,
                 list_members: true,
                 candidates: vec![],
+                rewrite: Default::default(),
             })
             .await
             .unwrap();

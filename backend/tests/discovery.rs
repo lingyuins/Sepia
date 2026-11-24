@@ -26,6 +26,7 @@ async fn discovery_uses_protocol_credentials_and_returns_ids() {
         group_id: "official".into(),
         enabled: true,
         plugin_id: None,
+        rewrite: Default::default(),
     };
     assert_eq!(
         discover_models(&reqwest::Client::new(), &provider, "secret")

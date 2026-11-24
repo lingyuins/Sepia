@@ -139,6 +139,7 @@ async fn unified_store(
                 models: vec!["upstream-model".into()],
                 plugin_id: None,
                 mode: "unified".into(),
+                rewrite: Default::default(),
             },
             "first-secret",
             &[],
@@ -171,6 +172,7 @@ async fn unified_store(
             is_default: true,
             list_members: true,
             candidates: vec![],
+            rewrite: Default::default(),
         })
         .await
         .unwrap();
@@ -310,6 +312,7 @@ async fn sync_provider_endpoints_preserves_keys_and_cascades_removed_addresses()
                 models: vec!["m".into()],
                 plugin_id: None,
                 mode: "unified".into(),
+                rewrite: Default::default(),
             },
             "a-secret",
             &[],

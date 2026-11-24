@@ -199,6 +199,7 @@ async fn plugin_install_enable_hooks_and_lifecycle() {
                 models: vec!["gpt-a".into()],
                 plugin_id: None,
                 mode: "single".into(),
+                rewrite: Default::default(),
             },
             "gpt-key",
             &[],
@@ -217,6 +218,7 @@ async fn plugin_install_enable_hooks_and_lifecycle() {
             is_default: true,
             list_members: true,
             candidates: vec![(provider.id, "gpt-a".into())],
+            rewrite: Default::default(),
         })
         .await
         .unwrap();
@@ -425,6 +427,7 @@ async fn route_filter_excludes_candidates() {
                 models: vec!["gpt-a".into()],
                 plugin_id: None,
                 mode: "single".into(),
+                rewrite: Default::default(),
             },
             "gpt-key",
             &[],
@@ -441,6 +444,7 @@ async fn route_filter_excludes_candidates() {
                 models: vec!["gpt-a".into()],
                 plugin_id: None,
                 mode: "single".into(),
+                rewrite: Default::default(),
             },
             "gpt-key",
             &[],
@@ -459,6 +463,7 @@ async fn route_filter_excludes_candidates() {
             is_default: true,
             list_members: true,
             candidates: vec![(excluded.id, "gpt-a".into()), (good.id, "gpt-a".into())],
+            rewrite: Default::default(),
         })
         .await
         .unwrap();
@@ -589,6 +594,7 @@ async fn plugin_backed_provider_discovers_and_serves() {
             is_default: true,
             list_members: true,
             candidates: vec![(provider_id, "plugin-chat".into())],
+            rewrite: Default::default(),
         })
         .await
         .unwrap();
@@ -656,6 +662,7 @@ async fn enabled_plugin_without_config_is_transparent() {
                 models: vec!["gpt-a".into()],
                 plugin_id: None,
                 mode: "single".into(),
+                rewrite: Default::default(),
             },
             "gpt-key",
             &[],
@@ -674,6 +681,7 @@ async fn enabled_plugin_without_config_is_transparent() {
             is_default: true,
             list_members: true,
             candidates: vec![(provider.id, "gpt-a".into())],
+            rewrite: Default::default(),
         })
         .await
         .unwrap();

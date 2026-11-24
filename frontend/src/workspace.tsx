@@ -2,6 +2,7 @@ import { createContext, useContext } from 'react'
 import { useGatewayWorkspace, type GatewayWorkspace } from './gateway-workspace'
 
 import { translations, type TranslationKey } from './i18n'
+import type { HeaderRule, ParamDefaultRule, ParamReplaceRule, PromptReplaceRule } from './rewrite'
 import { localeOf, translate } from './translation'
 import { useWorkspaceToast } from './components/WorkspaceToast'
 
@@ -39,6 +40,10 @@ export type Provider = {
   modelsFetchedAt?: string
   keyCount?: number
   keyScopes?: ProviderKeyScope[]
+  headers?: HeaderRule[]
+  paramReplace?: ParamReplaceRule[]
+  promptReplace?: PromptReplaceRule[]
+  paramDefaults?: ParamDefaultRule[]
 }
 export type ChannelGroup = { id: string; name: string; description: string }
 export type RouteCandidate = {
@@ -67,6 +72,10 @@ export type RouteRule = {
   contextTokens?: number
   session?: string
   isDefault?: boolean
+  headers?: HeaderRule[]
+  paramReplace?: ParamReplaceRule[]
+  promptReplace?: PromptReplaceRule[]
+  paramDefaults?: ParamDefaultRule[]
 }
 export type Plugin = {
   id: string

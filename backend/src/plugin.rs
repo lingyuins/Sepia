@@ -1010,25 +1010,16 @@ pub async fn rewrite_upstream(
     Ok((current_body, current_headers))
 }
 fn is_sensitive_header(name: &str) -> bool {
-    const SENSITIVE: &[&str] = &[
-        "authorization",
-        "proxy-authorization",
-        "cookie",
-        "set-cookie",
-        "host",
-        "x-api-key",
-        "x-goog-api-key",
-        "anthropic-version",
-        "content-length",
-        "transfer-encoding",
-        "connection",
-        "keep-alive",
-    ];
-    SENSITIVE.iter().any(|item| item.eq_ignore_ascii_case(name))
+    crate::rewrite::is_sensitive_header(name)
 }
 fn writable_header(name: &str) -> bool {
     let lower = name.to_ascii_lowercase();
-    lower.starts_with("x-") || lower == "content-type" || lower == "accept"
+    lower.starts_with("x-")
+        || lower == "content-type"
+        || lower == "accept"
+        || lower == "user-agent"
+        || lower == "origin"
+        || lower == "referer"
 }
 
 /// Non-streaming response rewrite. The first plugin returning `{"response":

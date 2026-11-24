@@ -44,6 +44,7 @@ async fn amount_budget_reserves_and_charges_actual_model_usage() {
                 models: vec!["priced-model".into()],
                 plugin_id: None,
                 mode: "single".into(),
+                rewrite: Default::default(),
             },
             "secret",
             &[],

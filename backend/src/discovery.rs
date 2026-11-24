@@ -16,7 +16,12 @@ pub async fn discover_models(
             Protocol::Gemini => "models",
         }
     );
-    let request = client.get(url);
+    let mut request = client.get(url);
+    // Configured static headers (e.g. User-Agent/Origin/Referer) apply to
+    // catalog discovery too; auth headers are added last and win.
+    for (name, value) in crate::rewrite::header_pairs(&provider.rewrite) {
+        request = request.header(name.as_str(), value.as_str());
+    }
     let request = match protocol {
         Protocol::OpenAI | Protocol::OpenAIResponses => request.bearer_auth(secret),
         Protocol::Anthropic => request
