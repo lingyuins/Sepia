@@ -198,6 +198,8 @@ cargo run --release --manifest-path backend/Cargo.toml
 
 网关直接托管 `frontend/dist/`，控制台与管理 API、推理 API 保持同源。生产环境不要设置调试密钥文件开关。
 
+控制台支持 PWA：通过 HTTPS（或 localhost）访问时，可在浏览器菜单中「安装 Sepia」作为独立窗口应用。Service Worker 只缓存静态界面外壳供离线打开；`/api` 与推理接口始终直连网关，数据与登录状态不会被缓存。离线时界面可打开，但网关功能需要网关在线。
+
 ### 应用内更新
 
 控制台「设置 → 关于」显示网关当前版本，可检查 GitHub Release 中的最新版本并一键更新：网关下载当前平台的 `.tar.gz` 发布包，校验随包发布的 `.sha256`，将新版二进制与前端暂存到数据目录（`<数据目录>/updates/<版本>/`），随后自动重启进入新版本，页面在网关恢复后自动刷新。
@@ -571,6 +573,8 @@ cargo run --release --manifest-path backend/Cargo.toml
 ```
 
 The gateway serves `frontend/dist/`, keeping the console, management API, and inference API same-origin. Never enable the debug file keystore in production.
+
+The console is a PWA: when served over HTTPS (or localhost), browsers offer "Install Sepia" as a standalone app window. The service worker caches only the static app shell for offline launch; `/api` and inference endpoints always reach the gateway directly, so data and sessions are never cached. Offline, the UI opens but gateway features require the gateway to be reachable.
 
 ### In-app updates
 

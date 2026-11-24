@@ -30,4 +30,6 @@ export function applyTheme(root: HTMLElement, settings: { theme: string; accent:
   root.classList.toggle('reduce-motion', settings.reducedMotion)
   root.classList.toggle('compact-tables', settings.compact)
   root.lang = settings.language === '简体中文' ? 'zh-CN' : settings.language === '日本語' ? 'ja' : 'en'
+  // Keep the PWA/browser chrome in step with the console surface color.
+  root.ownerDocument.querySelector('meta[name="theme-color"]')?.setAttribute('content', mode === 'light' ? '#f5f7f6' : '#0c1113')
 }

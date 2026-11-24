@@ -12,6 +12,14 @@ import './styles.css'
 
 clearLegacyOnboarding()
 
+// PWA: register the shell service worker in production builds only, so the
+// Vite dev server never serves cached assets.
+if (import.meta.env.PROD && 'serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('/sw.js').catch(() => undefined)
+  })
+}
+
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
     <WorkspaceToastProvider>
