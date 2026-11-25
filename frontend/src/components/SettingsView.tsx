@@ -2,7 +2,6 @@ import { useEffect, useState } from 'react'
 import {
   Bot,
   Check,
-  ChevronRight,
   Cloud,
   Copy,
   Download,
@@ -465,7 +464,6 @@ export default function SettingsView() {
             >
               <Icon size={16} />
               <span>{t(key)}</span>
-              <ChevronRight size={13} />
             </button>
           ))}
           <div className="settings-local-note">

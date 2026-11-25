@@ -514,7 +514,6 @@ kbd { font-family: var(--font-mono); }
 .settings-nav > button:hover { background: var(--hover); color: var(--text); }
 .settings-nav > button.active { background: var(--accent-soft); color: var(--accent); }
 .settings-nav > button > span { flex: 1; }
-.settings-nav > button > svg:last-child { opacity: .5; }
 .settings-local-note { margin: 18px 5px 4px; padding: 16px 10px 8px; border-top: 1px solid var(--border); color: var(--accent); }
 .settings-local-note strong { display: block; margin-top: 9px; color: var(--text-secondary); font-size: 12px; font-weight: 500; }
 .settings-local-note p { margin-top: 6px; color: var(--text-muted); font-size: 12px; line-height: 1.7; }
