@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { ArrowDownRight, Gauge, Layers3, Route } from 'lucide-react'
+import { ArrowDownRight, Coins, Gauge, Layers3, Route } from 'lucide-react'
 import { useWorkspace, useTranslation, useLocale } from '../workspace'
 import { chartTimeLabel, analyticsPeriodLabelKey, analyticsPeriods, modelPerformanceRows, rankRoutePerformance, routeAggregate } from '../analytics'
 import { routeDisplayCandidates } from '../route-display'
@@ -180,6 +180,7 @@ export function AnalyticsView() {
           [
             ['Requests', Route],
             ['Cost', ArrowDownRight],
+            ['Tokens', Coins],
             ['Latency', Gauge],
           ] as [string, typeof Route][]
         ).map(([label, Icon]) => (
@@ -190,7 +191,7 @@ export function AnalyticsView() {
             onClick={() => setMetric(label)}
           >
             <Icon size={15} />
-            {label === 'Requests' ? t('requests') : label === 'Cost' ? t('cost') : t('latency')}
+            {label === 'Requests' ? t('requests') : label === 'Cost' ? t('cost') : label === 'Tokens' ? t('tokens') : t('latency')}
           </button>
         ))}
       </div>
@@ -204,20 +205,22 @@ export function AnalyticsView() {
                   ? t('usageOverTime')
                   : metric === 'Cost'
                     ? t('lessSpend')
-                    : t('fastGuesswork')}
+                    : metric === 'Tokens'
+                      ? t('tokenVolume')
+                      : t('fastGuesswork')}
               </h3>
               <p>
                 {periodLabel} {t('acrossProviders')}
               </p>
             </div>
             <span className="chart-unit">
-              {metric === 'Cost' ? 'USD' : metric === 'Latency' ? t('milliseconds') : t('requests')}
+              {metric === 'Cost' ? 'USD' : metric === 'Latency' ? t('milliseconds') : metric === 'Tokens' ? t('tokens') : t('requests')}
             </span>
           </div>
           <div className="traffic-chart tall">
             <LazyTrafficChart
               data={data}
-              metric={metric === 'Requests' ? 'requests' : metric === 'Cost' ? 'cost' : 'latency'}
+              metric={metric === 'Requests' ? 'requests' : metric === 'Cost' ? 'cost' : metric === 'Tokens' ? 'tokens' : 'latency'}
               gradientId="analyticsGradient"
               margin={{ top: 20, right: 10, left: -20 }}
             />
@@ -344,6 +347,9 @@ export function AnalyticsView() {
                           {route.success} {t('successShort')}
                         </span>
                         <span>{route.latency ? `${route.latency} ${t('avgShort')}` : '—'}</span>
+                        <span>
+                          {route.tokens.toLocaleString(locale)} {t('tokensShort')}
+                        </span>
                       </div>
                     </div>
                   ))}

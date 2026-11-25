@@ -13,6 +13,7 @@ export type TrafficPoint = {
   requests?: number
   successful?: number
   cost?: number
+  tokens?: number
   latency?: number
 }
 
@@ -25,7 +26,7 @@ export default function TrafficChart({
   margin,
 }: {
   data: TrafficPoint[]
-  metric?: 'requests' | 'cost' | 'latency'
+  metric?: 'requests' | 'cost' | 'tokens' | 'latency'
   showSuccessful?: boolean
   gradientId: string
   interval?: number
@@ -53,8 +54,8 @@ export default function TrafficChart({
           axisLine={false}
           tickLine={false}
           tick={{ fill: 'var(--chart-text)', fontSize: 11 }}
-          allowDecimals={metric === 'requests' ? false : undefined}
-          width={44}
+          allowDecimals={metric === 'requests' || metric === 'tokens' ? false : undefined}
+          width={metric === 'tokens' ? 60 : 44}
         />
         <Tooltip
           contentStyle={{

@@ -17,18 +17,19 @@ test('keeps an invalid timestamp readable instead of throwing', () => {
 
 test('route health comes from the server-side window aggregate', () => {
   const rows = [
-    { route: 'busy', requests: 12, successful: 9, latency_ms: 120.4 },
-    { route: 'steady', requests: 3, successful: 3, latency_ms: 24.6 },
+    { route: 'busy', requests: 12, successful: 9, tokens: 480, latency_ms: 120.4 },
+    { route: 'steady', requests: 3, successful: 3, tokens: 45, latency_ms: 24.6 },
   ]
-  assert.deepEqual(routeAggregate(rows, 'steady'), { requests: 3, latency: 25, success: '100.00%' })
-  assert.deepEqual(routeAggregate(rows, 'busy'), { requests: 12, latency: 120, success: '75.00%' })
+  assert.deepEqual(routeAggregate(rows, 'steady'), { requests: 3, latency: 25, tokens: 45, success: '100.00%' })
+  assert.deepEqual(routeAggregate(rows, 'busy'), { requests: 12, latency: 120, tokens: 480, success: '75.00%' })
 })
 
 test('route health is empty when the aggregate has no row for the route', () => {
-  assert.deepEqual(routeAggregate(undefined, 'steady'), { requests: 0, latency: 0, success: '—' })
-  assert.deepEqual(routeAggregate([{ route: 'empty', requests: 0, successful: 0, latency_ms: 0 }], 'empty'), {
+  assert.deepEqual(routeAggregate(undefined, 'steady'), { requests: 0, latency: 0, tokens: 0, success: '—' })
+  assert.deepEqual(routeAggregate([{ route: 'empty', requests: 0, successful: 0, tokens: 0, latency_ms: 0 }], 'empty'), {
     requests: 0,
     latency: 0,
+    tokens: 0,
     success: '—',
   })
 })

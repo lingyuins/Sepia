@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import {
+  AlertCircle,
   ArrowDownRight,
   Bot,
   ChevronLeft,
@@ -228,12 +229,16 @@ export function RequestsView({ onSelect }: { onSelect: (row: RequestRecord) => v
       />
 
       <div className="request-summary tabular">
-        <span>{t('localHistory')}</span>
+        <span>
+          {t('localHistory')}
+          <span className="request-window-info" title={t('requestWindowNote')}>
+            <AlertCircle size={13} aria-label={t('requestWindowNote')} />
+          </span>
+        </span>
         <span>
           {requests.length.toLocaleString(locale)} {t('records')} · {t('metadataShort')}
         </span>
       </div>
-      <p className="request-window-note">{t('requestWindowNote')}</p>
 
       <section className="requests-full glass-panel">
         <div className="request-filters">

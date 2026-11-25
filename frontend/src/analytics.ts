@@ -38,6 +38,7 @@ export type RouteAggregate = {
   route: string
   requests: number
   successful: number
+  tokens: number
   latency_ms: number
 }
 
@@ -46,10 +47,11 @@ export type RouteAggregate = {
 // traffic aged out of that page.
 export function routeAggregate(rows: RouteAggregate[] | undefined, slug: string) {
   const row = rows?.find((item) => item.route === slug)
-  if (!row || row.requests <= 0) return { requests: 0, latency: 0, success: '—' }
+  if (!row || row.requests <= 0) return { requests: 0, latency: 0, tokens: 0, success: '—' }
   return {
     requests: row.requests,
     latency: Math.round(row.latency_ms),
+    tokens: row.tokens,
     success: `${((row.successful / row.requests) * 100).toFixed(2)}%`,
   }
 }

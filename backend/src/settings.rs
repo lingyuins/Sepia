@@ -81,12 +81,16 @@ impl Store {
             time_filter("created_at", "WHERE")
         );
         let series_sql = format!(
-            "SELECT strftime(?, created_at) time, COUNT(*) requests, COALESCE(SUM(status = 'success'), 0) successful, COALESCE(SUM(cost_micros), 0) cost_micros, COALESCE(AVG(latency_ms), 0.0) latency_ms FROM requests{} GROUP BY time ORDER BY time",
+            "SELECT strftime(?, created_at) time, COUNT(*) requests, COALESCE(SUM(status = 'success'), 0) successful, COALESCE(SUM(cost_micros), 0) cost_micros, COALESCE(SUM(input_tokens + output_tokens), 0) tokens, COALESCE(AVG(latency_ms), 0.0) latency_ms FROM requests{} GROUP BY time ORDER BY time",
             time_filter("created_at", "WHERE")
         );
+        // Non-Gemini inbound requests store an empty `requests.model`; resolve it to
+        // the final successful attempt's upstream model (falling back to the last
+        // attempted model for fully failed requests), so the model chart never
+        // renders unnamed bars.
         let by_model_sql = format!(
-            "SELECT model, COUNT(*) requests FROM requests{} GROUP BY model ORDER BY requests DESC",
-            time_filter("created_at", "WHERE")
+            "SELECT COALESCE(NULLIF(r.model, ''), (SELECT a.model FROM attempts a WHERE a.request_id = r.id AND a.status IN ('success', 'streaming') ORDER BY a.id DESC LIMIT 1), (SELECT a.model FROM attempts a WHERE a.request_id = r.id ORDER BY a.id DESC LIMIT 1), r.model) model, COUNT(*) requests FROM requests r{} GROUP BY 1 ORDER BY requests DESC",
+            time_filter("r.created_at", "WHERE")
         );
         let by_provider_sql = format!(
             "SELECT a.provider_id, COUNT(*) requests, COALESCE(SUM(r.status = 'success'), 0) successful, COALESCE(AVG(a.latency_ms), 0) latency_ms FROM attempts a JOIN requests r ON r.id = a.request_id WHERE a.provider_id IS NOT NULL{} GROUP BY a.provider_id",
@@ -96,7 +100,7 @@ impl Store {
         // newest request page, so routes whose recent traffic fell out of that page
         // still report their real totals. Direct (unrouted) requests are excluded.
         let by_route_sql = format!(
-            "SELECT route, COUNT(*) requests, COALESCE(SUM(status = 'success'), 0) successful, COALESCE(AVG(latency_ms), 0.0) latency_ms FROM requests WHERE route IS NOT NULL AND route != ''{} GROUP BY route ORDER BY requests DESC",
+            "SELECT route, COUNT(*) requests, COALESCE(SUM(status = 'success'), 0) successful, COALESCE(SUM(input_tokens + output_tokens), 0) tokens, COALESCE(AVG(latency_ms), 0.0) latency_ms FROM requests WHERE route IS NOT NULL AND route != ''{} GROUP BY route ORDER BY requests DESC",
             time_filter("created_at", "AND")
         );
         let mut totals = sqlx::query(&totals_sql);
@@ -115,10 +119,10 @@ impl Store {
             .fetch_one(&self.pool)
             .await
             .map_err(|e| e.to_string())?;
-        let series = series.fetch_all(&self.pool).await.map_err(|e| e.to_string())?.into_iter().map(|row| serde_json::json!({"time":row.get::<String, _>("time"),"requests":row.get::<i64, _>("requests"),"successful":row.get::<i64, _>("successful"),"cost_micros":row.get::<i64, _>("cost_micros"),"latency_ms":row.get::<f64, _>("latency_ms")})).collect::<Vec<_>>();
+        let series = series.fetch_all(&self.pool).await.map_err(|e| e.to_string())?.into_iter().map(|row| serde_json::json!({"time":row.get::<String, _>("time"),"requests":row.get::<i64, _>("requests"),"successful":row.get::<i64, _>("successful"),"cost_micros":row.get::<i64, _>("cost_micros"),"tokens":row.get::<i64, _>("tokens"),"latency_ms":row.get::<f64, _>("latency_ms")})).collect::<Vec<_>>();
         let by_model = by_model.fetch_all(&self.pool).await.map_err(|e| e.to_string())?.into_iter().map(|row| serde_json::json!({"model":row.get::<String, _>("model"),"requests":row.get::<i64, _>("requests")})).collect::<Vec<_>>();
         let by_provider = by_provider.fetch_all(&self.pool).await.map_err(|e| e.to_string())?.into_iter().map(|row| serde_json::json!({"provider_id":row.get::<i64, _>("provider_id"),"requests":row.get::<i64, _>("requests"),"successful":row.get::<i64, _>("successful"),"latency_ms":row.get::<f64, _>("latency_ms")})).collect::<Vec<_>>();
-        let by_route = by_route.fetch_all(&self.pool).await.map_err(|e| e.to_string())?.into_iter().map(|row| serde_json::json!({"route":row.get::<String, _>("route"),"requests":row.get::<i64, _>("requests"),"successful":row.get::<i64, _>("successful"),"latency_ms":row.get::<f64, _>("latency_ms")})).collect::<Vec<_>>();
+        let by_route = by_route.fetch_all(&self.pool).await.map_err(|e| e.to_string())?.into_iter().map(|row| serde_json::json!({"route":row.get::<String, _>("route"),"requests":row.get::<i64, _>("requests"),"successful":row.get::<i64, _>("successful"),"tokens":row.get::<i64, _>("tokens"),"latency_ms":row.get::<f64, _>("latency_ms")})).collect::<Vec<_>>();
         Ok(
             serde_json::json!({"requests":row.get::<i64, _>("requests"),"input_tokens":row.get::<i64, _>("input_tokens"),"output_tokens":row.get::<i64, _>("output_tokens"),"cost_micros":row.get::<i64, _>("cost_micros"),"successful":row.get::<i64, _>("successful"),"latency_ms":row.get::<f64, _>("latency_ms"),"series":series,"by_model":by_model,"by_provider":by_provider,"by_route":by_route}),
         )
