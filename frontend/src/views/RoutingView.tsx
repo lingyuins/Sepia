@@ -29,7 +29,7 @@ import { api, routeInput } from '../api'
 import { DialogActions, Field, Modal, Toggle, SectionHeading, StatusText } from '../components/UI'
 import { Dropdown } from '../components/Dropdown'
 import { RouteChain } from '../components/RouteChain'
-import { duplicateRouteIdentity, latestSuccessfulRouteRequest, routeDisplayCandidates } from '../route-display'
+import { latestSuccessfulRouteRequest, routeDisplayCandidates } from '../route-display'
 import { AiRouteDialog } from '../components/AiRouteDialog'
 import ModelGroupsDialog from '../components/ModelGroupsDialog'
 import { RewriteEditor } from '../components/RewriteEditor'
@@ -561,7 +561,7 @@ function RouteForm({ route, onClose }: { route: RouteRule | null; onClose: () =>
 }
 
 export function RoutingView() {
-  const { routes, run, notify, providers, requests } = useWorkspace()
+  const { routes, run, notify, requests } = useWorkspace()
   const { t, strategyName } = useRouteMeta()
   const [editing, setEditing] = useState<RouteRule | null>(null)
   const [open, setOpen] = useState(false)
@@ -759,27 +759,12 @@ export function RoutingView() {
                   type="button"
                   className="icon-button"
                   onClick={() => {
-                    const identity = duplicateRouteIdentity(selectedRoute, routes.map((route) => route.slug || ''), t('copySuffix'))
-                    const copy = {
-                      ...selectedRoute,
-                      id: Date.now(),
-                      name: identity.name,
-                      slug: identity.slug,
-                      requests: '0',
-                      isDefault: false,
-                    }
-                    run(() =>
-                      api('/api/v1/routes', {
-                        method: 'POST',
-                        body: JSON.stringify(routeInput(copy, providers)),
-                      }), ['routes'],
-                    )
-                      .then(() => notify(t('routeDuplicated')))
-                      .catch((cause) =>
-                        notify(cause instanceof Error ? cause.message : String(cause)),
-                      )
+                    void navigator.clipboard
+                      .writeText(selectedRoute.name || selectedRoute.slug || '')
+                      .then(() => notify(t('routeNameCopied')))
+                      .catch(() => notify(t('clipboardUnavailable')))
                   }}
-                  aria-label={t('duplicateNamed', { name: selectedRoute.name })}
+                  aria-label={t('copyRouteName')}
                 >
                   <Copy size={15} />
                 </button>
