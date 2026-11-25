@@ -69,21 +69,36 @@ impl Store {
         }
         sqlx::query("DELETE FROM provider_models WHERE provider_id = ? AND model NOT IN (SELECT value FROM json_each(?))").bind(id).bind(serde_json::to_string(models).map_err(|e| e.to_string())?).execute(&mut *tx).await.map_err(|e| e.to_string())?;
         // Models removed from the catalog can no longer be served: drop their
-        // route candidates, then remove routes left without any candidate.
+        // route candidates, then remove only the affected routes left without
+        // any candidate. Pre-existing empty routes (update_route accepts an
+        // empty candidate list) are unrelated to this save and stay untouched.
+        let models_json = serde_json::to_string(models).map_err(|e| e.to_string())?;
+        let affected: Vec<i64> = sqlx::query_scalar(
+            "SELECT DISTINCT route_id FROM route_candidates WHERE provider_id = ? AND model NOT IN (SELECT value FROM json_each(?))",
+        )
+        .bind(id)
+        .bind(&models_json)
+        .fetch_all(&mut *tx)
+        .await
+        .map_err(|e| e.to_string())?;
         sqlx::query(
             "DELETE FROM route_candidates WHERE provider_id = ? AND model NOT IN (SELECT value FROM json_each(?))",
         )
         .bind(id)
-        .bind(serde_json::to_string(models).map_err(|e| e.to_string())?)
+        .bind(&models_json)
         .execute(&mut *tx)
         .await
         .map_err(|e| e.to_string())?;
-        sqlx::query(
-            "DELETE FROM routes WHERE NOT EXISTS (SELECT 1 FROM route_candidates WHERE route_id = routes.id)",
-        )
-        .execute(&mut *tx)
-        .await
-        .map_err(|e| e.to_string())?;
+        for route_id in affected {
+            sqlx::query(
+                "DELETE FROM routes WHERE id = ? AND NOT EXISTS (SELECT 1 FROM route_candidates WHERE route_id = ?)",
+            )
+            .bind(route_id)
+            .bind(route_id)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| e.to_string())?;
+        }
         tx.commit().await.map_err(|e| e.to_string())?;
         Ok(())
     }

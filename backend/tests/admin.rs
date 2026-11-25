@@ -757,6 +757,7 @@ async fn provider_model_removal_prunes_route_candidates_and_empty_routes() {
     for (slug, candidates) in [
         ("mixed", json!([[first_id, "m-b"], [second_id, "m-a"]])),
         ("doomed", json!([[first_id, "m-b"]])),
+        ("untouched-empty", json!([[second_id, "m-a"]])),
     ] {
         let created = client
             .post(url("/api/v1/routes"))
@@ -767,6 +768,33 @@ async fn provider_model_removal_prunes_route_candidates_and_empty_routes() {
             .unwrap();
         assert_eq!(created.status(), 200);
     }
+    // A pre-existing empty route (update_route accepts an empty candidate
+    // list) must survive an unrelated provider's model-list save.
+    let routes: Value = client
+        .get(url("/api/v1/routes"))
+        .header("cookie", &cookie)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let empty_id = routes
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|route| route["slug"] == "untouched-empty")
+        .unwrap()["id"]
+        .as_i64()
+        .unwrap();
+    let emptied = client
+        .put(url(&format!("/api/v1/routes/{empty_id}")))
+        .header("cookie", &cookie)
+        .json(&json!({"slug":"untouched-empty","name":"untouched-empty","description":"","patterns":["untouched-empty"],"candidates":[]}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(emptied.status(), 200);
     let updated = client
         .put(url(&format!("/api/v1/providers/{first_id}")))
         .header("cookie", &cookie)
@@ -787,13 +815,21 @@ async fn provider_model_removal_prunes_route_candidates_and_empty_routes() {
     let routes = routes.as_array().unwrap();
     assert_eq!(
         routes.len(),
-        1,
-        "route with only removed models must be deleted"
+        2,
+        "route with only removed models must be deleted; the unrelated empty route must survive"
     );
-    assert_eq!(routes[0]["slug"], "mixed");
+    let mixed = routes
+        .iter()
+        .find(|route| route["slug"] == "mixed")
+        .unwrap();
     assert_eq!(
-        routes[0]["candidates"],
+        mixed["candidates"],
         json!([[second_id, "m-a"]]),
         "only the pruned provider's candidate is removed"
     );
+    let empty = routes
+        .iter()
+        .find(|route| route["slug"] == "untouched-empty")
+        .unwrap();
+    assert_eq!(empty["candidates"], json!([]));
 }
