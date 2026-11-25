@@ -354,7 +354,7 @@ async fn analytics_by_route_aggregates_routes_outside_the_newest_request_page() 
     // the server-side aggregate must keep reporting it.
     for _ in 0..3 {
         let request = seed_routed_request(&store, key.id, "legacy-model", "legacy-route").await;
-        backdate_request(&path, &request, "-1 days").await;
+        backdate_request(&path, &request, "-2 days").await;
     }
     for _ in 0..205 {
         seed_routed_request(&store, key.id, "busy-model", "busy-route").await;
