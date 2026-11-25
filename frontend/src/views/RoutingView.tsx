@@ -29,7 +29,7 @@ import { api, routeInput } from '../api'
 import { DialogActions, Field, Modal, Toggle, SectionHeading, StatusText } from '../components/UI'
 import { Dropdown } from '../components/Dropdown'
 import { RouteChain } from '../components/RouteChain'
-import { latestSuccessfulRouteRequest, routeDisplayCandidates } from '../route-display'
+import { duplicateRouteIdentity, latestSuccessfulRouteRequest, routeDisplayCandidates } from '../route-display'
 import { AiRouteDialog } from '../components/AiRouteDialog'
 import ModelGroupsDialog from '../components/ModelGroupsDialog'
 import { RewriteEditor } from '../components/RewriteEditor'
@@ -759,11 +759,12 @@ export function RoutingView() {
                   type="button"
                   className="icon-button"
                   onClick={() => {
+                    const identity = duplicateRouteIdentity(selectedRoute, routes.map((route) => route.slug || ''), t('copySuffix'))
                     const copy = {
                       ...selectedRoute,
                       id: Date.now(),
-                      name: `${selectedRoute.name} ${t('copySuffix')}`,
-                      slug: `${selectedRoute.slug || slugify(selectedRoute.name)}-copy`,
+                      name: identity.name,
+                      slug: identity.slug,
                       requests: '0',
                       isDefault: false,
                     }
