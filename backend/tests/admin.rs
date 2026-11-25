@@ -577,3 +577,223 @@ async fn workspace_and_gateway_address_settings_round_trip() {
         assert_eq!(&loaded[key], value, "setting {key} did not round-trip");
     }
 }
+
+#[tokio::test]
+async fn delete_all_routes_is_admin_only_and_clears_candidates() {
+    let directory = tempfile::tempdir().unwrap();
+    let store = Store::connect(&directory.path().join("bulk-routes.db"))
+        .await
+        .unwrap();
+    let state = AppState::for_testing(store.clone()).await;
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    tokio::spawn(
+        axum::serve(
+            listener,
+            app(state).into_make_service_with_connect_info::<std::net::SocketAddr>(),
+        )
+        .into_future(),
+    );
+    let client = reqwest::Client::new();
+    let url = |path: &str| format!("http://{address}{path}");
+    client
+        .post(url("/api/v1/auth/bootstrap"))
+        .json(&json!({"username":"admin","password":"correct horse","token":"test"}))
+        .send()
+        .await
+        .unwrap();
+    let login = client
+        .post(url("/api/v1/auth/login"))
+        .json(&json!({"username":"admin","password":"correct horse"}))
+        .send()
+        .await
+        .unwrap();
+    let cookie = login
+        .headers()
+        .get("set-cookie")
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .split(';')
+        .next()
+        .unwrap()
+        .to_string();
+    let provider: Value = client
+        .post(url("/api/v1/providers"))
+        .header("cookie", &cookie)
+        .json(&json!({"name":"Bulk","protocol":"openai","endpoint":"http://127.0.0.1:9/v1","models":["m"],"secret":"upstream-secret","group_id":"official","enabled":true}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let provider_id = provider["id"].as_i64().unwrap();
+    for slug in ["bulk-a", "bulk-b"] {
+        let created = client
+            .post(url("/api/v1/routes"))
+            .header("cookie", &cookie)
+            .json(&json!({"slug":slug,"name":slug,"description":"","patterns":[slug],"candidates":[[provider_id,"m"]]}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(created.status(), 200);
+    }
+    client
+        .post(url("/api/v1/users"))
+        .header("cookie", &cookie)
+        .json(&json!({"username":"editor","password":"password123","role":"editor"}))
+        .send()
+        .await
+        .unwrap();
+    let editor_login = client
+        .post(url("/api/v1/auth/login"))
+        .json(&json!({"username":"editor","password":"password123"}))
+        .send()
+        .await
+        .unwrap();
+    let editor_cookie = editor_login
+        .headers()
+        .get("set-cookie")
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .split(';')
+        .next()
+        .unwrap()
+        .to_string();
+    let denied = client
+        .delete(url("/api/v1/routes"))
+        .header("cookie", &editor_cookie)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(denied.status(), 403);
+    let deleted = client
+        .delete(url("/api/v1/routes"))
+        .header("cookie", &cookie)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(deleted.status(), 200);
+    let body: Value = deleted.json().await.unwrap();
+    assert_eq!(body["deleted"], 2);
+    let routes: Value = client
+        .get(url("/api/v1/routes"))
+        .header("cookie", &cookie)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(routes.as_array().unwrap().len(), 0);
+    assert!(store.routes().await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn provider_model_removal_prunes_route_candidates_and_empty_routes() {
+    let directory = tempfile::tempdir().unwrap();
+    let store = Store::connect(&directory.path().join("prune-routes.db"))
+        .await
+        .unwrap();
+    let state = AppState::for_testing(store.clone()).await;
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    tokio::spawn(
+        axum::serve(
+            listener,
+            app(state).into_make_service_with_connect_info::<std::net::SocketAddr>(),
+        )
+        .into_future(),
+    );
+    let client = reqwest::Client::new();
+    let url = |path: &str| format!("http://{address}{path}");
+    client
+        .post(url("/api/v1/auth/bootstrap"))
+        .json(&json!({"username":"admin","password":"correct horse","token":"test"}))
+        .send()
+        .await
+        .unwrap();
+    let login = client
+        .post(url("/api/v1/auth/login"))
+        .json(&json!({"username":"admin","password":"correct horse"}))
+        .send()
+        .await
+        .unwrap();
+    let cookie = login
+        .headers()
+        .get("set-cookie")
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .split(';')
+        .next()
+        .unwrap()
+        .to_string();
+    let provider = |name: &str, models: Value| json!({"name":name,"protocol":"openai","endpoint":"http://127.0.0.1:9/v1","models":models,"secret":"upstream-secret","group_id":"official","enabled":true});
+    let first: Value = client
+        .post(url("/api/v1/providers"))
+        .header("cookie", &cookie)
+        .json(&provider("Prune A", json!(["m-a", "m-b"])))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let second: Value = client
+        .post(url("/api/v1/providers"))
+        .header("cookie", &cookie)
+        .json(&provider("Prune B", json!(["m-a"])))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let first_id = first["id"].as_i64().unwrap();
+    let second_id = second["id"].as_i64().unwrap();
+    for (slug, candidates) in [
+        ("mixed", json!([[first_id, "m-b"], [second_id, "m-a"]])),
+        ("doomed", json!([[first_id, "m-b"]])),
+    ] {
+        let created = client
+            .post(url("/api/v1/routes"))
+            .header("cookie", &cookie)
+            .json(&json!({"slug":slug,"name":slug,"description":"","patterns":[slug],"candidates":candidates}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(created.status(), 200);
+    }
+    let updated = client
+        .put(url(&format!("/api/v1/providers/{first_id}")))
+        .header("cookie", &cookie)
+        .json(&provider("Prune A", json!(["m-a"])))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(updated.status(), 200);
+    let routes: Value = client
+        .get(url("/api/v1/routes"))
+        .header("cookie", &cookie)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let routes = routes.as_array().unwrap();
+    assert_eq!(
+        routes.len(),
+        1,
+        "route with only removed models must be deleted"
+    );
+    assert_eq!(routes[0]["slug"], "mixed");
+    assert_eq!(
+        routes[0]["candidates"],
+        json!([[second_id, "m-a"]]),
+        "only the pruned provider's candidate is removed"
+    );
+}

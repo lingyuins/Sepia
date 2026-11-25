@@ -34,7 +34,7 @@ import {
   waitForRestart,
   type UpdateCheckResult,
 } from '../self-update'
-import { Toggle, SectionHeading } from '../components/UI'
+import { DialogActions, Modal, Toggle, SectionHeading } from '../components/UI'
 import { Dropdown } from './Dropdown'
 import KeyPolicyDialog, { type PreviewKey } from './KeyPolicyDialog'
 import ModelNormalizeEditor from './ModelNormalizeEditor'
@@ -191,6 +191,7 @@ export default function SettingsView() {
   )
   const [updateError, setUpdateError] = useState('')
   const [aiPoolBusy, setAiPoolBusy] = useState(false)
+  const [deleteAllRoutesOpen, setDeleteAllRoutesOpen] = useState(false)
 
   const dirty = JSON.stringify(draft) !== JSON.stringify(settings)
   const update = <K extends keyof Settings>(key: K, value: Settings[K]) =>
@@ -963,6 +964,29 @@ export default function SettingsView() {
                   </span>
                 </SettingRow>
               </section>
+
+              {isAdmin && (
+                <section className="settings-card glass-panel">
+                  <div className="settings-card-title">
+                    <div>
+                      <h3>{t('removeAllRoutes')}</h3>
+                      <p>{t('removeAllRoutesCardDescription')}</p>
+                    </div>
+                    <button
+                      type="button"
+                      className="button danger-solid"
+                      disabled={routes.length === 0}
+                      onClick={() => setDeleteAllRoutesOpen(true)}
+                    >
+                      <Trash2 size={14} />
+                      {t('removeAllRoutes')}
+                    </button>
+                  </div>
+                  {routes.length === 0 && (
+                    <div className="empty-state">{t('noRoutesToDelete')}</div>
+                  )}
+                </section>
+              )}
             </>
           )}
 
@@ -1089,6 +1113,29 @@ export default function SettingsView() {
         onClose={() => setNewKeyOpen(false)}
         onCreate={createKey}
       />
+
+      <Modal
+        open={deleteAllRoutesOpen}
+        onClose={() => setDeleteAllRoutesOpen(false)}
+        title={t('removeAllRoutesTitle')}
+        description={t('removeAllRoutesDescription', { count: routes.length })}
+      >
+        <form
+          onSubmit={(event) => {
+            event.preventDefault()
+            setDeleteAllRoutesOpen(false)
+            run(() => api('/api/v1/routes', { method: 'DELETE' }), ['routes'])
+              .then(() => notify(t('allRoutesRemoved')))
+              .catch((cause) => notify(cause instanceof Error ? cause.message : String(cause)))
+          }}
+        >
+          <DialogActions
+            onClose={() => setDeleteAllRoutesOpen(false)}
+            label={t('removeAllRoutesConfirm', { count: routes.length })}
+            danger
+          />
+        </form>
+      </Modal>
     </div>
   )
 }

@@ -301,7 +301,8 @@ async fn auth(
                     || path.starts_with("/keys/")
                     || path.starts_with("/plugins/")
                     || (path.starts_with("/requests")
-                        && request.method() == axum::http::Method::DELETE);
+                        && request.method() == axum::http::Method::DELETE)
+                    || (path == "/routes" && request.method() == axum::http::Method::DELETE);
                 if admin_only && session.role != UserRole::Admin {
                     return error(StatusCode::FORBIDDEN, "administrator role required");
                 }
@@ -1422,6 +1423,15 @@ async fn delete_route(State(state): State<AppState>, Path(id): Path<i64>) -> Res
         Err(message) => error(StatusCode::BAD_REQUEST, message),
     }
 }
+async fn delete_all_routes(State(state): State<AppState>) -> Response {
+    match state.store.delete_all_routes().await {
+        Ok(deleted) => {
+            let _ = state.snapshots.refresh(&state.store).await;
+            Json(json!({ "deleted": deleted })).into_response()
+        }
+        Err(message) => error(StatusCode::BAD_REQUEST, message),
+    }
+}
 async fn client_key_enabled(
     State(state): State<AppState>,
     Path(id): Path<i64>,
@@ -1839,7 +1849,10 @@ pub fn router(state: AppState) -> Router<AppState> {
         .route("/models/pricing", post(set_price))
         .route("/models/catalog", get(model_catalog))
         .route("/models/metadata/sync", post(sync_model_metadata))
-        .route("/routes", get(routes).post(create_route))
+        .route(
+            "/routes",
+            get(routes).post(create_route).delete(delete_all_routes),
+        )
         .route("/keys", get(keys).post(create_key))
         .route("/keys/{id}/revoke", post(revoke_key))
         .route("/keys/{id}/policy", post(set_policy))

@@ -68,6 +68,22 @@ impl Store {
             sqlx::query("INSERT INTO provider_models (provider_id, model) VALUES (?, ?) ON CONFLICT(provider_id, model) DO NOTHING").bind(id).bind(model).execute(&mut *tx).await.map_err(|e| e.to_string())?;
         }
         sqlx::query("DELETE FROM provider_models WHERE provider_id = ? AND model NOT IN (SELECT value FROM json_each(?))").bind(id).bind(serde_json::to_string(models).map_err(|e| e.to_string())?).execute(&mut *tx).await.map_err(|e| e.to_string())?;
+        // Models removed from the catalog can no longer be served: drop their
+        // route candidates, then remove routes left without any candidate.
+        sqlx::query(
+            "DELETE FROM route_candidates WHERE provider_id = ? AND model NOT IN (SELECT value FROM json_each(?))",
+        )
+        .bind(id)
+        .bind(serde_json::to_string(models).map_err(|e| e.to_string())?)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| e.to_string())?;
+        sqlx::query(
+            "DELETE FROM routes WHERE NOT EXISTS (SELECT 1 FROM route_candidates WHERE route_id = routes.id)",
+        )
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| e.to_string())?;
         tx.commit().await.map_err(|e| e.to_string())?;
         Ok(())
     }
