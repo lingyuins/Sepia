@@ -291,7 +291,7 @@ export const translations = {
   requestsByProvider: ['Requests by provider', '供应商请求分布', 'プロバイダー別リクエスト'],
   trafficGoes: ['Where your traffic goes.', '了解流量去向。', 'トラフィックの内訳。'],
   modelPerformance: ['Model performance', '模型性能', 'モデルパフォーマンス'],
-  modelPerformanceSubtitle: ['See which models are doing the heavy lifting.', '看看哪些模型承担了主要工作。', '主要な処理を担うモデルを確認。'],
+  modelPerformanceSubtitle: ['See which models are doing the heavy lifting. Successful requests only; failed or cancelled ones are not counted.', '看看哪些模型承担了主要工作。仅统计成功请求，失败或取消的不计入。', '主要な処理を担うモデルを確認。成功したリクエストのみ集計し、失敗・キャンセルは含めません。'],
   providerComparison: ['A closer look at your providers', '供应商表现一览', 'プロバイダーの詳細'],
   providerComparisonSubtitle: ['Live health, from one thoughtful dashboard.', '在同一面板掌握实时健康状态。', 'ひとつのダッシュボードで稼働状況を確認。'],
   groupPerformance: ['Group performance', '分组性能', 'グループパフォーマンス'],

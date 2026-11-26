@@ -85,15 +85,17 @@ impl Store {
             time_filter("created_at", "WHERE")
         );
         // Non-Gemini inbound requests store an empty `requests.model`; resolve it to
-        // the final successful attempt's upstream model (falling back to the last
-        // attempted model for fully failed requests), so the model chart never
-        // renders unnamed bars.
+        // the final successful attempt's upstream model. Only successful requests are
+        // counted: cancelled/failed records (often with no upstream attempt at all)
+        // used to collapse into one large unnamed bar in the model chart.
         let by_model_sql = format!(
-            "SELECT COALESCE(NULLIF(r.model, ''), (SELECT a.model FROM attempts a WHERE a.request_id = r.id AND a.status IN ('success', 'streaming') ORDER BY a.id DESC LIMIT 1), (SELECT a.model FROM attempts a WHERE a.request_id = r.id ORDER BY a.id DESC LIMIT 1), r.model) model, COUNT(*) requests FROM requests r{} GROUP BY 1 ORDER BY requests DESC",
-            time_filter("r.created_at", "WHERE")
+            "SELECT COALESCE(NULLIF(r.model, ''), (SELECT a.model FROM attempts a WHERE a.request_id = r.id AND a.status IN ('success', 'streaming') ORDER BY a.id DESC LIMIT 1), r.model) AS resolved_model, COUNT(*) requests FROM requests r WHERE r.status = 'success'{} GROUP BY resolved_model HAVING resolved_model != '' ORDER BY requests DESC",
+            time_filter("r.created_at", "AND")
         );
+        // Provider health keeps failed attempts (they are the failure signal behind
+        // the success-rate column) but skips cancelled requests entirely.
         let by_provider_sql = format!(
-            "SELECT a.provider_id, COUNT(*) requests, COALESCE(SUM(r.status = 'success'), 0) successful, COALESCE(AVG(a.latency_ms), 0) latency_ms FROM attempts a JOIN requests r ON r.id = a.request_id WHERE a.provider_id IS NOT NULL{} GROUP BY a.provider_id",
+            "SELECT a.provider_id, COUNT(*) requests, COALESCE(SUM(r.status = 'success'), 0) successful, COALESCE(AVG(a.latency_ms), 0) latency_ms FROM attempts a JOIN requests r ON r.id = a.request_id WHERE a.provider_id IS NOT NULL AND r.status != 'cancelled'{} GROUP BY a.provider_id",
             time_filter("r.created_at", "AND")
         );
         // Route performance must be aggregated over the whole window instead of the
@@ -120,7 +122,7 @@ impl Store {
             .await
             .map_err(|e| e.to_string())?;
         let series = series.fetch_all(&self.pool).await.map_err(|e| e.to_string())?.into_iter().map(|row| serde_json::json!({"time":row.get::<String, _>("time"),"requests":row.get::<i64, _>("requests"),"successful":row.get::<i64, _>("successful"),"cost_micros":row.get::<i64, _>("cost_micros"),"tokens":row.get::<i64, _>("tokens"),"latency_ms":row.get::<f64, _>("latency_ms")})).collect::<Vec<_>>();
-        let by_model = by_model.fetch_all(&self.pool).await.map_err(|e| e.to_string())?.into_iter().map(|row| serde_json::json!({"model":row.get::<String, _>("model"),"requests":row.get::<i64, _>("requests")})).collect::<Vec<_>>();
+        let by_model = by_model.fetch_all(&self.pool).await.map_err(|e| e.to_string())?.into_iter().map(|row| serde_json::json!({"model":row.get::<String, _>("resolved_model"),"requests":row.get::<i64, _>("requests")})).collect::<Vec<_>>();
         let by_provider = by_provider.fetch_all(&self.pool).await.map_err(|e| e.to_string())?.into_iter().map(|row| serde_json::json!({"provider_id":row.get::<i64, _>("provider_id"),"requests":row.get::<i64, _>("requests"),"successful":row.get::<i64, _>("successful"),"latency_ms":row.get::<f64, _>("latency_ms")})).collect::<Vec<_>>();
         let by_route = by_route.fetch_all(&self.pool).await.map_err(|e| e.to_string())?.into_iter().map(|row| serde_json::json!({"route":row.get::<String, _>("route"),"requests":row.get::<i64, _>("requests"),"successful":row.get::<i64, _>("successful"),"tokens":row.get::<i64, _>("tokens"),"latency_ms":row.get::<f64, _>("latency_ms")})).collect::<Vec<_>>();
         Ok(
