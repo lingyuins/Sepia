@@ -463,3 +463,111 @@ async fn analytics_by_model_resolves_empty_stored_models_to_the_successful_attem
     assert_eq!(models[1]["model"], "other-model");
     assert_eq!(models[1]["requests"], 1);
 }
+
+#[tokio::test]
+async fn analytics_exclude_cancelled_and_failed_requests_from_the_model_chart() {
+    let directory = tempfile::tempdir().unwrap();
+    let store = Store::connect(&directory.path().join("analytics-cancelled.db"))
+        .await
+        .unwrap();
+    let provider = store
+        .create_provider(
+            sepia_gateway::NewProvider {
+                name: "Health".into(),
+                protocol: sepia_gateway::ProviderProtocol::OpenAI,
+                endpoint: "http://localhost/v1".into(),
+                models: vec!["healthy-model".into()],
+                plugin_id: None,
+                mode: "single".into(),
+                rewrite: Default::default(),
+            },
+            "secret",
+            &[],
+            &sepia_gateway::KeyStore::testing(),
+        )
+        .await
+        .unwrap();
+    let key = store
+        .create_client_key(sepia_gateway::UpsertClientKey {
+            name: "health".into(),
+            models: vec!["*".into()],
+            token_limit: 0,
+            max_amount_micros: 0,
+            rpm: 0,
+            tpm: 0,
+            expires_at: None,
+            secret: None,
+        })
+        .await
+        .unwrap();
+    seed_recorded_request(&store, key.id, provider.id, "healthy-model").await;
+    // Cancelled before any upstream attempt: no stored model, no attempt rows.
+    // This is the shape that used to collapse into one large unnamed chart bar.
+    let orphan = store
+        .begin_request(key.id, sepia_gateway::ProviderProtocol::OpenAI, "")
+        .await
+        .unwrap();
+    store
+        .finish_request(&orphan, "cancelled", 0, 0, 5)
+        .await
+        .unwrap();
+    // Failed after a real upstream attempt: stays out of the model chart, but the
+    // provider keeps the failure so its success rate stays a real health signal.
+    let failed = store
+        .begin_request(key.id, sepia_gateway::ProviderProtocol::OpenAI, "")
+        .await
+        .unwrap();
+    store
+        .record_attempt(sepia_gateway::observability::NewAttempt {
+            request_id: &failed,
+            provider_id: Some(provider.id),
+            provider_key_id: Some(1),
+            model: "healthy-model",
+            status: "failed",
+            error: Some("upstream HTTP 500 (chat)"),
+            input_tokens: 0,
+            output_tokens: 0,
+            latency_ms: 30,
+        })
+        .await
+        .unwrap();
+    store
+        .finish_request(&failed, "failed", 0, 0, 30)
+        .await
+        .unwrap();
+    // Cancelled after an attempt: excluded from provider stats entirely.
+    let cancelled = store
+        .begin_request(key.id, sepia_gateway::ProviderProtocol::OpenAI, "")
+        .await
+        .unwrap();
+    store
+        .record_attempt(sepia_gateway::observability::NewAttempt {
+            request_id: &cancelled,
+            provider_id: Some(provider.id),
+            provider_key_id: Some(1),
+            model: "healthy-model",
+            status: "retry",
+            error: Some("client disconnected"),
+            input_tokens: 0,
+            output_tokens: 0,
+            latency_ms: 40,
+        })
+        .await
+        .unwrap();
+    store
+        .finish_request(&cancelled, "cancelled", 0, 0, 40)
+        .await
+        .unwrap();
+
+    let analytics = store.analytics_for("all").await.unwrap();
+    assert_eq!(analytics["requests"], 4);
+    assert_eq!(analytics["successful"], 1);
+    let models = analytics["by_model"].as_array().unwrap();
+    assert_eq!(models.len(), 1);
+    assert_eq!(models[0]["model"], "healthy-model");
+    assert_eq!(models[0]["requests"], 1);
+    let providers = analytics["by_provider"].as_array().unwrap();
+    assert_eq!(providers.len(), 1);
+    assert_eq!(providers[0]["requests"], 2);
+    assert_eq!(providers[0]["successful"], 1);
+}
