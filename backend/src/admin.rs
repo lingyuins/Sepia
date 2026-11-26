@@ -812,6 +812,15 @@ async fn create_route(State(state): State<AppState>, Json(input): Json<RouteInpu
             if let Err(message) = state.snapshots.refresh(&state.store).await {
                 return error(StatusCode::INTERNAL_SERVER_ERROR, message);
             }
+            match state
+                .store
+                .auto_grant_route_slug(route.id, &route.slug)
+                .await
+            {
+                Ok(updated) if updated > 0 => state.events.publish(&["keys"]),
+                Ok(_) => {}
+                Err(message) => return error(StatusCode::INTERNAL_SERVER_ERROR, message),
+            }
             Json(json!({"id":route.id})).into_response()
         }
         Err(message) => error(StatusCode::BAD_REQUEST, message),
@@ -970,11 +979,11 @@ async fn keys(State(state): State<AppState>) -> Response {
     };
     let mut records = Vec::new();
     for key in keys {
-        let model_groups = match state.store.client_policy(key.id).await {
-            Ok(policy) => policy.model_groups,
+        let policy = match state.store.client_policy(key.id).await {
+            Ok(policy) => policy,
             Err(message) => return error(StatusCode::INTERNAL_SERVER_ERROR, message),
         };
-        records.push(json!({"id":key.id,"name":key.name,"models":key.models,"token_limit":key.token_limit,"max_amount_micros":key.max_amount_micros,"rpm":key.rpm,"tpm":key.tpm,"expires_at":key.expires_at,"model_groups":model_groups}));
+        records.push(json!({"id":key.id,"name":key.name,"models":key.models,"token_limit":key.token_limit,"max_amount_micros":key.max_amount_micros,"rpm":key.rpm,"tpm":key.tpm,"expires_at":key.expires_at,"enabled":key.enabled,"model_groups":policy.model_groups,"ip_whitelist":policy.ip_whitelist,"model_quotas":policy.model_quotas,"allowed_groups":policy.allowed_groups,"excluded_providers":policy.excluded_providers}));
     }
     Json(records).into_response()
 }
@@ -994,6 +1003,32 @@ async fn create_key(State(state): State<AppState>, Json(input): Json<KeyInput>) 
         .await
     {
         Ok(key) => Json(json!({"id":key.id,"plaintext":key.plaintext})).into_response(),
+        Err(message) => error(StatusCode::BAD_REQUEST, message),
+    }
+}
+async fn update_key(
+    State(state): State<AppState>,
+    Path(id): Path<i64>,
+    Json(input): Json<KeyInput>,
+) -> Response {
+    match state
+        .store
+        .update_client_key(
+            id,
+            UpsertClientKey {
+                name: input.name,
+                models: input.models,
+                token_limit: input.token_limit,
+                max_amount_micros: input.max_amount_micros,
+                rpm: input.rpm,
+                tpm: input.tpm,
+                expires_at: input.expires_at,
+                secret: None,
+            },
+        )
+        .await
+    {
+        Ok(()) => StatusCode::OK.into_response(),
         Err(message) => error(StatusCode::BAD_REQUEST, message),
     }
 }
@@ -1854,6 +1889,7 @@ pub fn router(state: AppState) -> Router<AppState> {
             get(routes).post(create_route).delete(delete_all_routes),
         )
         .route("/keys", get(keys).post(create_key))
+        .route("/keys/{id}", axum::routing::put(update_key))
         .route("/keys/{id}/revoke", post(revoke_key))
         .route("/keys/{id}/policy", post(set_policy))
         .route("/keys/{id}/enabled", post(client_key_enabled))

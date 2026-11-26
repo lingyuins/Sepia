@@ -14,6 +14,7 @@ import {
   Monitor,
   Moon,
   Network,
+  Pencil,
   Plus,
   RotateCcw,
   Save,
@@ -24,8 +25,8 @@ import {
   Trash2,
 } from 'lucide-react'
 import { downloadFile, useWorkspace, useTranslation, useLocale, type Settings } from '../workspace'
-import { api, keyInput, policyInput } from '../api'
-import type { KeyPolicy } from '../key-policy'
+import { api, keyInput, keyEditDraft, policyInput } from '../api'
+import type { KeyPolicy, KeyPolicyDraft } from '../key-policy'
 import { gatewayUrl } from '../gateway'
 import {
   formatVersion,
@@ -184,6 +185,7 @@ export default function SettingsView() {
   const [copied, setCopied] = useState<number | null>(null)
   const [createdKey, setCreatedKey] = useState<PreviewKey | null>(null)
   const [newKeyOpen, setNewKeyOpen] = useState(false)
+  const [editingKeyId, setEditingKeyId] = useState<number | null>(null)
   const [endpointCopied, setEndpointCopied] = useState(false)
   const [updateCheck, setUpdateCheck] = useState<UpdateCheckResult | null>(null)
   const [updatePhase, setUpdatePhase] = useState<'idle' | 'checking' | 'applying' | 'restarting'>(
@@ -386,6 +388,34 @@ export default function SettingsView() {
     setNewKeyOpen(false)
     notify(t('keyGenerated'))
   }
+
+  const updateKey = async (id: number, policy: KeyPolicy) => {
+    await run(() =>
+      api(`/api/v1/keys/${id}`, {
+        method: 'PUT',
+        body: JSON.stringify(keyInput(policy)),
+      }), ['keys'],
+    )
+    await run(() =>
+      api(`/api/v1/keys/${id}/policy`, {
+        method: 'POST',
+        body: JSON.stringify(policyInput(policy, providers)),
+      }), ['keys'],
+    )
+    await run(() =>
+      api(`/api/v1/keys/${id}/enabled`, {
+        method: 'POST',
+        body: JSON.stringify({ enabled: policy.enabled }),
+      }), ['keys'],
+    )
+    setEditingKeyId(null)
+    notify(t('keyUpdated'))
+  }
+
+  const editingKey = editingKeyId === null ? null : clientKeys.find((key) => key.id === editingKeyId) ?? null
+  const editingDraft: KeyPolicyDraft | undefined = editingKey
+    ? keyEditDraft(editingKey, routes.filter((route) => route.active).map((route) => route.slug || String(route.id)), new Map(providers.map((provider) => [provider.id, provider.name])))
+    : undefined
 
   const revokeKey = async (id: number) => {
     try {
@@ -925,6 +955,16 @@ export default function SettingsView() {
                       {isAdmin && (
                         <button
                           type="button"
+                          className="icon-button"
+                          onClick={() => setEditingKeyId(key.id)}
+                          aria-label={t('editNamed', { name: key.name })}
+                        >
+                          <Pencil size={15} />
+                        </button>
+                      )}
+                      {isAdmin && (
+                        <button
+                          type="button"
                           className="icon-button danger-icon"
                           onClick={() => revokeKey(key.id)}
                           aria-label={t('deleteNamed', { name: key.name })}
@@ -1112,6 +1152,14 @@ export default function SettingsView() {
         open={newKeyOpen}
         onClose={() => setNewKeyOpen(false)}
         onCreate={createKey}
+      />
+
+      <KeyPolicyDialog
+        key={editingKeyId ?? 'edit'}
+        open={editingKey !== null}
+        onClose={() => setEditingKeyId(null)}
+        onCreate={(policy) => updateKey(editingKeyId!, policy)}
+        initial={editingDraft}
       />
 
       <Modal

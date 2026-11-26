@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Check, ChevronDown, ShieldCheck } from 'lucide-react'
 import { parseKeyPolicy, type KeyPolicy, type KeyPolicyDraft } from '../key-policy'
 import { scopedModels } from '../key-models'
@@ -10,7 +10,7 @@ function KeyField({ label, value, onChange, placeholder = '', type = 'text', hin
   return <label className="key-policy-field"><span>{label}</span><input className="field" type={type} value={value} placeholder={placeholder} onChange={(event) => onChange(event.target.value)} required={required} min={type === 'number' ? '0' : undefined} step={type === 'number' ? 'any' : undefined} />{hint && <small>{hint}</small>}</label>
 }
 
-export default function KeyPolicyDialog({ open, onClose, onCreate }: { open: boolean; onClose: () => void; onCreate: (policy: KeyPolicy) => Promise<void> }) {
+export default function KeyPolicyDialog({ open, onClose, onCreate, initial }: { open: boolean; onClose: () => void; onCreate: (policy: KeyPolicy) => Promise<void>; initial?: KeyPolicyDraft }) {
   const { providers, channelGroups, routes, modelGroups } = useWorkspace()
   const t = useTranslation()
   const modelOptions = scopedModels(providers, routes)
@@ -21,6 +21,12 @@ export default function KeyPolicyDialog({ open, onClose, onCreate }: { open: boo
   const [limitsOpen, setLimitsOpen] = useState(true)
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
+  // Editing opens with the stored values; creating always starts from the
+  // default all-selected draft. Re-seed on every open so a cancelled edit
+  // never leaks into the next dialog.
+  useEffect(() => {
+    if (open) { setDraft(initial ? { ...initial } : emptyDraft()); setError('') }
+  }, [open])
   const update = <K extends keyof KeyPolicyDraft>(key: K, value: KeyPolicyDraft[K]) => { setDraft((current) => ({ ...current, [key]: value })); setError('') }
   const toggleListItem = (key: 'routeModels' | 'providerModels' | 'allowedGroups' | 'excludedProviders', value: string) => update(key, draft[key].includes(value) ? draft[key].filter((item) => item !== value) : [...draft[key], value])
   const toggleModelGroup = (id: number) => update('modelGroups', draft.modelGroups.includes(id) ? draft.modelGroups.filter((item) => item !== id) : [...draft.modelGroups, id])
@@ -51,7 +57,7 @@ export default function KeyPolicyDialog({ open, onClose, onCreate }: { open: boo
   }
   const groupLabel = (id: string, fallback: string) => id === 'official' ? t('officialChannels') : id === 'free' ? t('freeChannels') : id === 'team' ? t('teamChannels') : fallback
 
-  return <Modal open={open} onClose={close} title={t('newKeyTitle')} description={t('newKeyDescription')} size="key-policy-dialog">
+  return <Modal open={open} onClose={close} title={initial ? t('editKeyTitle') : t('newKeyTitle')} description={initial ? t('editKeyDescription') : t('newKeyDescription')} size="key-policy-dialog">
     <form className="key-policy-form" onSubmit={submit}>
       <div className="key-policy-scroll">
         <section className="key-policy-section">
@@ -169,7 +175,7 @@ export default function KeyPolicyDialog({ open, onClose, onCreate }: { open: boo
         <div className="key-enabled-row"><span>{t('keyEnabled')}</span><Toggle label={t('keyEnabled')} checked={draft.enabled} onChange={() => update('enabled', !draft.enabled)} /></div>
         {error && <p className="key-policy-error" role="alert">{error}</p>}
       </div>
-      <DialogActions onClose={close} label={t('generateKey')} />
+      <DialogActions onClose={close} label={initial ? t('saveChanges') : t('generateKey')} disabled={busy} />
     </form>
   </Modal>
 }

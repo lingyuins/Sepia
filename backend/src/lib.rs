@@ -48,4 +48,5 @@ pub struct ClientKey {
     pub rpm: i64,
     pub tpm: i64,
     pub expires_at: Option<String>,
+    pub enabled: bool,
 }

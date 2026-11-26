@@ -833,3 +833,364 @@ async fn provider_model_removal_prunes_route_candidates_and_empty_routes() {
         .unwrap();
     assert_eq!(empty["candidates"], json!([]));
 }
+
+#[tokio::test]
+async fn client_key_update_edits_metadata_and_preserves_secret() {
+    let directory = tempfile::tempdir().unwrap();
+    let store = Store::connect(&directory.path().join("key-edit.db"))
+        .await
+        .unwrap();
+    let state = AppState::for_testing(store.clone()).await;
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    tokio::spawn(
+        axum::serve(
+            listener,
+            app(state).into_make_service_with_connect_info::<std::net::SocketAddr>(),
+        )
+        .into_future(),
+    );
+    let client = reqwest::Client::new();
+    let url = |path: &str| format!("http://{address}{path}");
+    client
+        .post(url("/api/v1/auth/bootstrap"))
+        .json(&json!({"username":"admin","password":"correct horse","token":"test"}))
+        .send()
+        .await
+        .unwrap();
+    let login = client
+        .post(url("/api/v1/auth/login"))
+        .json(&json!({"username":"admin","password":"correct horse"}))
+        .send()
+        .await
+        .unwrap();
+    let cookie = login
+        .headers()
+        .get("set-cookie")
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .split(';')
+        .next()
+        .unwrap()
+        .to_string();
+    let created: Value = client
+        .post(url("/api/v1/keys"))
+        .header("cookie", &cookie)
+        .json(&json!({"name":"before","models":["m"],"token_limit":0,"max_amount_micros":0,"rpm":10,"tpm":0}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let id = created["id"].as_i64().unwrap();
+    let plaintext = created["plaintext"].as_str().unwrap().to_string();
+    let policy = client
+        .post(url(&format!("/api/v1/keys/{id}/policy")))
+        .header("cookie", &cookie)
+        .json(&json!({"ip_whitelist":["10.0.0.1"],"model_quotas":{"m":{"rpm":2,"tpm":50}},"allowed_groups":["official"],"excluded_providers":[]}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(policy.status(), 200);
+    client
+        .post(url("/api/v1/users"))
+        .header("cookie", &cookie)
+        .json(&json!({"username":"editor","password":"password123","role":"editor"}))
+        .send()
+        .await
+        .unwrap();
+    let editor_login = client
+        .post(url("/api/v1/auth/login"))
+        .json(&json!({"username":"editor","password":"password123"}))
+        .send()
+        .await
+        .unwrap();
+    let editor_cookie = editor_login
+        .headers()
+        .get("set-cookie")
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .split(';')
+        .next()
+        .unwrap()
+        .to_string();
+    let denied = client
+        .put(url(&format!("/api/v1/keys/{id}")))
+        .header("cookie", &editor_cookie)
+        .json(&json!({"name":"hijacked","models":["*"],"token_limit":0,"max_amount_micros":0,"rpm":0,"tpm":0}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(denied.status(), 403);
+    let expired = client
+        .put(url(&format!("/api/v1/keys/{id}")))
+        .header("cookie", &cookie)
+        .json(&json!({"name":"after","models":["m"],"token_limit":0,"max_amount_micros":0,"rpm":0,"tpm":0,"expires_at":"2020-01-01T00:00"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(expired.status(), 400);
+    let updated = client
+        .put(url(&format!("/api/v1/keys/{id}")))
+        .header("cookie", &cookie)
+        .json(&json!({"name":"after","models":["m","extra"],"token_limit":5000,"max_amount_micros":1500000,"rpm":60,"tpm":1000,"secret":"{{SECRET_363i2053}}"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(updated.status(), 200);
+    let keys: Value = client
+        .get(url("/api/v1/keys"))
+        .header("cookie", &cookie)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let record = keys
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|key| key["id"] == id)
+        .unwrap();
+    assert_eq!(record["name"], "after");
+    assert_eq!(record["models"], json!(["m", "extra"]));
+    assert_eq!(record["token_limit"], 5000);
+    assert_eq!(record["max_amount_micros"], 1500000);
+    assert_eq!(record["rpm"], 60);
+    assert_eq!(record["tpm"], 1000);
+    assert_eq!(record["ip_whitelist"], json!(["10.0.0.1"]));
+    assert_eq!(record["model_quotas"], json!({"m":{"rpm":2,"tpm":50}}));
+    assert_eq!(record["allowed_groups"], json!(["official"]));
+    assert_eq!(record["excluded_providers"], json!([]));
+    assert_eq!(record["model_groups"], json!([]));
+    assert!(record.get("plaintext").is_none());
+    assert!(record.get("token_hash").is_none());
+    let authenticated = store.authenticate_client(&plaintext).await.unwrap();
+    assert_eq!(
+        authenticated.unwrap().id,
+        id,
+        "original plaintext stays valid"
+    );
+    // Round-trip: setting a future expiry then editing again with the same
+    // echoed value succeeds (a stored expiry is not re-validated).
+    let expiring = client
+        .put(url(&format!("/api/v1/keys/{id}")))
+        .header("cookie", &cookie)
+        .json(&json!({"name":"after","models":["m","extra"],"token_limit":5000,"max_amount_micros":1500000,"rpm":60,"tpm":1000,"expires_at":"2099-01-01T00:00"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(expiring.status(), 200);
+    let keys: Value = client
+        .get(url("/api/v1/keys"))
+        .header("cookie", &cookie)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let stored_expiry = keys
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|key| key["id"] == id)
+        .unwrap()["expires_at"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let echoed = client
+        .put(url(&format!("/api/v1/keys/{id}")))
+        .header("cookie", &cookie)
+        .json(&json!({"name":"renamed-again","models":["m","extra"],"token_limit":5000,"max_amount_micros":1500000,"rpm":60,"tpm":1000,"expires_at":stored_expiry}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        echoed.status(),
+        200,
+        "unchanged expiry round-trips through edit"
+    );
+    let missing = client
+        .put(url("/api/v1/keys/999999"))
+        .header("cookie", &cookie)
+        .json(&json!({"name":"ghost","models":[],"token_limit":0,"max_amount_micros":0,"rpm":0,"tpm":0}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(missing.status(), 400);
+}
+
+#[tokio::test]
+async fn new_route_auto_grants_keys_that_selected_all_routes() {
+    let directory = tempfile::tempdir().unwrap();
+    let store = Store::connect(&directory.path().join("auto-grant.db"))
+        .await
+        .unwrap();
+    let state = AppState::for_testing(store.clone()).await;
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    tokio::spawn(
+        axum::serve(
+            listener,
+            app(state).into_make_service_with_connect_info::<std::net::SocketAddr>(),
+        )
+        .into_future(),
+    );
+    let client = reqwest::Client::new();
+    let url = |path: &str| format!("http://{address}{path}");
+    client
+        .post(url("/api/v1/auth/bootstrap"))
+        .json(&json!({"username":"admin","password":"correct horse","token":"test"}))
+        .send()
+        .await
+        .unwrap();
+    let login = client
+        .post(url("/api/v1/auth/login"))
+        .json(&json!({"username":"admin","password":"correct horse"}))
+        .send()
+        .await
+        .unwrap();
+    let cookie = login
+        .headers()
+        .get("set-cookie")
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .split(';')
+        .next()
+        .unwrap()
+        .to_string();
+    let provider: Value = client
+        .post(url("/api/v1/providers"))
+        .header("cookie", &cookie)
+        .json(&json!({"name":"Grant","protocol":"openai","endpoint":"http://127.0.0.1:9/v1","models":["m"],"secret":"upstream-secret","group_id":"official","enabled":true}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let provider_id = provider["id"].as_i64().unwrap();
+    let create_route = |slug: &'static str, enabled: bool| {
+        let client = client.clone();
+        let cookie = cookie.clone();
+        async move {
+            let response = client
+                .post(url("/api/v1/routes"))
+                .header("cookie", &cookie)
+                .json(&json!({"slug":slug,"name":slug,"description":"","patterns":[slug],"candidates":[[provider_id,"m"]],"enabled":enabled}))
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(response.status(), 200);
+        }
+    };
+    let create_key = |name: &'static str, models: Value| {
+        let client = client.clone();
+        let cookie = cookie.clone();
+        async move {
+            let created: Value = client
+                .post(url("/api/v1/keys"))
+                .header("cookie", &cookie)
+                .json(&json!({"name":name,"models":models,"token_limit":0,"max_amount_micros":0,"rpm":0,"tpm":0}))
+                .send()
+                .await
+                .unwrap()
+                .json()
+                .await
+                .unwrap();
+            created["id"].as_i64().unwrap()
+        }
+    };
+    // First route: no key may be extended (empty selection is ambiguous).
+    let early = create_key("early", json!([])).await;
+    create_route("alpha", true).await;
+    let keys_after_first = store.client_keys().await.unwrap();
+    assert!(
+        keys_after_first
+            .iter()
+            .find(|key| key.id == early)
+            .unwrap()
+            .models
+            .is_empty()
+    );
+    create_route("beta", true).await;
+    create_route("disabled-route", false).await;
+    let all = create_key("all", json!(["alpha", "beta"])).await;
+    let partial = create_key("partial", json!(["alpha"])).await;
+    let wildcard = create_key("wildcard", json!(["*"])).await;
+    let grouped = create_key("grouped", json!([])).await;
+    let group: Value = client
+        .post(url("/api/v1/model-groups"))
+        .header("cookie", &cookie)
+        .json(&json!({"name":"Group","members":["alpha","beta"]}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let group_id = group["id"].as_i64().unwrap();
+    let group_policy = client
+        .post(url(&format!("/api/v1/keys/{grouped}/policy")))
+        .header("cookie", &cookie)
+        .json(&json!({"ip_whitelist":[],"model_quotas":{},"allowed_groups":[],"excluded_providers":[],"model_groups":[group_id]}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(group_policy.status(), 200);
+    let disabled_key = create_key("disabled-key", json!(["alpha", "beta"])).await;
+    let disabled = client
+        .post(url(&format!("/api/v1/keys/{disabled_key}/enabled")))
+        .header("cookie", &cookie)
+        .json(&json!({"enabled":false}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(disabled.status(), 200);
+    create_route("gamma", true).await;
+    let keys = store.client_keys().await.unwrap();
+    let models_of = |id: i64| keys.iter().find(|key| key.id == id).unwrap().models.clone();
+    assert_eq!(models_of(all), vec!["alpha", "beta", "gamma"]);
+    assert_eq!(models_of(partial), vec!["alpha"]);
+    assert_eq!(models_of(wildcard), vec!["*"]);
+    assert!(
+        models_of(grouped).is_empty(),
+        "model-group keys are never extended"
+    );
+    assert!(models_of(early).is_empty());
+    // The disabled key keeps its stored scope: auto-grant only touches enabled keys.
+    let pool = sqlx::sqlite::SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect(&format!(
+            "sqlite://{}",
+            directory.path().join("auto-grant.db").display()
+        ))
+        .await
+        .unwrap();
+    let disabled_models: String = sqlx::query_scalar("SELECT models FROM client_keys WHERE id = ?")
+        .bind(disabled_key)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        disabled_models,
+        serde_json::to_string(&json!(["alpha", "beta"])).unwrap()
+    );
+    // A second new route only extends keys that now cover every enabled route.
+    create_route("delta", true).await;
+    let keys = store.client_keys().await.unwrap();
+    assert_eq!(
+        keys.iter().find(|key| key.id == all).unwrap().models,
+        vec!["alpha", "beta", "gamma", "delta"]
+    );
+    assert_eq!(
+        keys.iter().find(|key| key.id == partial).unwrap().models,
+        vec!["alpha"]
+    );
+}

@@ -1218,18 +1218,7 @@ impl Store {
         &self,
         input: UpsertClientKey,
     ) -> Result<CreatedClientKey, String> {
-        let expires_at = input
-            .expires_at
-            .as_deref()
-            .map(normalize_expiration)
-            .transpose()?;
-        if let Some(expiry) = expires_at.as_deref() {
-            let expiry = DateTime::parse_from_rfc3339(expiry)
-                .map_err(|error| format!("invalid client key expiration: {error}"))?;
-            if expiry < Utc::now() {
-                return Err("client key expiration must be in the future".into());
-            }
-        }
+        let expires_at = validated_expiration(input.expires_at.as_deref())?;
         let plaintext = input
             .secret
             .filter(|secret| !secret.trim().is_empty())
@@ -1237,8 +1226,88 @@ impl Store {
         let id = sqlx::query("INSERT INTO client_keys (token_hash, name, models, token_limit, max_amount_micros, rpm, tpm, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)").bind(token_hash(&plaintext)).bind(input.name).bind(serde_json::to_string(&input.models).map_err(|e| e.to_string())?).bind(input.token_limit).bind(input.max_amount_micros).bind(input.rpm).bind(input.tpm).bind(expires_at).execute(&self.pool).await.map_err(|e| e.to_string())?.last_insert_rowid();
         Ok(CreatedClientKey { id, plaintext })
     }
+    /// Edits an existing client key's name, scope and budgets. The token hash
+    /// and enabled state are never touched: the plaintext stays valid and
+    /// enabling/disabling goes through `set_client_key_enabled`. An expiration
+    /// equal to the stored value is kept as-is so editing other fields of an
+    /// already-expired key does not require re-futuring the date.
+    pub async fn update_client_key(&self, id: i64, input: UpsertClientKey) -> Result<(), String> {
+        let stored_expiration: Option<String> =
+            sqlx::query_scalar("SELECT expires_at FROM client_keys WHERE id = ?")
+                .bind(id)
+                .fetch_optional(&self.pool)
+                .await
+                .map_err(|e| e.to_string())?
+                .ok_or_else(|| "client key not found".to_string())?;
+        let expires_at = if input.expires_at == stored_expiration {
+            stored_expiration
+        } else {
+            validated_expiration(input.expires_at.as_deref())?
+        };
+        sqlx::query("UPDATE client_keys SET name = ?, models = ?, token_limit = ?, max_amount_micros = ?, rpm = ?, tpm = ?, expires_at = ? WHERE id = ?")
+            .bind(input.name)
+            .bind(serde_json::to_string(&input.models).map_err(|e| e.to_string())?)
+            .bind(input.token_limit)
+            .bind(input.max_amount_micros)
+            .bind(input.rpm)
+            .bind(input.tpm)
+            .bind(expires_at)
+            .bind(id)
+            .execute(&self.pool)
+            .await
+            .map_err(|e| e.to_string())?;
+        // The row was confirmed above; a concurrent revoke makes this a no-op.
+        Ok(())
+    }
+    /// Appends a newly created route's slug to every enabled client key whose
+    /// own model list already contains ALL other enabled route slugs (an
+    /// implicit "all routes" selection). Keys with partial selections, model
+    /// group grants or wildcard patterns are left untouched, and the very
+    /// first route never extends any key (an empty list cannot be told apart
+    /// from "all routes selected"). Returns the number of keys updated.
+    pub async fn auto_grant_route_slug(&self, route_id: i64, slug: &str) -> Result<u64, String> {
+        let existing: Vec<String> =
+            sqlx::query("SELECT slug FROM routes WHERE enabled = 1 AND id != ?")
+                .bind(route_id)
+                .fetch_all(&self.pool)
+                .await
+                .map_err(|e| e.to_string())?
+                .into_iter()
+                .map(|row| row.get("slug"))
+                .collect();
+        if existing.is_empty() {
+            return Ok(0);
+        }
+        let keys = sqlx::query("SELECT id, models FROM client_keys WHERE enabled = 1")
+            .fetch_all(&self.pool)
+            .await
+            .map_err(|e| e.to_string())?;
+        let mut updated = 0;
+        for row in keys {
+            let mut models: Vec<String> =
+                serde_json::from_str(row.get("models")).map_err(|e| e.to_string())?;
+            if models.iter().any(|model| model == slug) {
+                continue;
+            }
+            if !existing
+                .iter()
+                .all(|route_slug| models.iter().any(|model| model == route_slug))
+            {
+                continue;
+            }
+            models.push(slug.to_string());
+            sqlx::query("UPDATE client_keys SET models = ? WHERE id = ?")
+                .bind(serde_json::to_string(&models).map_err(|e| e.to_string())?)
+                .bind(row.get::<i64, _>("id"))
+                .execute(&self.pool)
+                .await
+                .map_err(|e| e.to_string())?;
+            updated += 1;
+        }
+        Ok(updated)
+    }
     pub async fn authenticate_client(&self, token: &str) -> Result<Option<ClientKey>, String> {
-        let Some(row) = sqlx::query("SELECT id, name, models, token_limit, max_amount_micros, rpm, tpm, expires_at FROM client_keys WHERE token_hash = ? AND enabled = 1").bind(token_hash(token)).fetch_optional(&self.pool).await.map_err(|e| e.to_string())? else { return Ok(None); };
+        let Some(row) = sqlx::query("SELECT id, name, models, token_limit, max_amount_micros, rpm, tpm, expires_at, enabled FROM client_keys WHERE token_hash = ? AND enabled = 1").bind(token_hash(token)).fetch_optional(&self.pool).await.map_err(|e| e.to_string())? else { return Ok(None); };
         if row
             .get::<Option<String>, _>("expires_at")
             .map(|v| DateTime::parse_from_rfc3339(&v).map(|d| d < Utc::now()))
@@ -1267,6 +1336,7 @@ impl Store {
             rpm: row.get("rpm"),
             tpm: row.get("tpm"),
             expires_at: row.get("expires_at"),
+            enabled: row.get("enabled"),
         }))
     }
     pub async fn revoke_client_key(&self, id: i64) -> Result<(), String> {
@@ -1278,7 +1348,7 @@ impl Store {
         Ok(())
     }
     pub async fn client_keys(&self) -> Result<Vec<ClientKey>, String> {
-        let rows = sqlx::query("SELECT id, name, models, token_limit, max_amount_micros, rpm, tpm, expires_at FROM client_keys WHERE enabled = 1 ORDER BY id").fetch_all(&self.pool).await.map_err(|e| e.to_string())?;
+        let rows = sqlx::query("SELECT id, name, models, token_limit, max_amount_micros, rpm, tpm, expires_at, enabled FROM client_keys ORDER BY id").fetch_all(&self.pool).await.map_err(|e| e.to_string())?;
         rows.into_iter()
             .map(|row| {
                 Ok(ClientKey {
@@ -1290,6 +1360,7 @@ impl Store {
                     rpm: row.get("rpm"),
                     tpm: row.get("tpm"),
                     expires_at: row.get("expires_at"),
+                    enabled: row.get("enabled"),
                 })
             })
             .collect()
@@ -1482,6 +1553,17 @@ impl Store {
             .map_err(|e| e.to_string())?;
         Ok(())
     }
+}
+
+fn validated_expiration(value: Option<&str>) -> Result<Option<String>, String> {
+    let Some(value) = value else { return Ok(None) };
+    let normalized = normalize_expiration(value)?;
+    let expiry = DateTime::parse_from_rfc3339(&normalized)
+        .map_err(|error| format!("invalid client key expiration: {error}"))?;
+    if expiry < Utc::now() {
+        return Err("client key expiration must be in the future".into());
+    }
+    Ok(Some(normalized))
 }
 
 fn normalize_expiration(value: &str) -> Result<String, String> {

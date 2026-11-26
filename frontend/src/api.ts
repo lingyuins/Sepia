@@ -1,4 +1,4 @@
-import type { KeyPolicy } from './key-policy'
+import type { KeyPolicy, KeyPolicyDraft } from './key-policy'
 import type { HeaderRule, ParamDefaultRule, ParamReplaceRule, PromptReplaceRule } from './rewrite'
 import type { AttemptRecord, Plugin, Provider, RequestRecord, RouteRule } from './workspace'
 import { clampWeight, normalizeRouteStrategy } from './route-strategy.ts'
@@ -11,7 +11,7 @@ export type ApiProvider = { id: number; name: string; protocol: ProviderProtocol
 export type ApiRoute = { id: number; slug: string; name: string; description: string; patterns: string[]; is_default: boolean; list_members: boolean; enabled: boolean; candidates: [number, string][]; strategy?: string; weights?: number[] } & WireRewrite
 export type ApiRequest = { id: string; protocol: string; model: string; route?: string; status: string; input_tokens: number; output_tokens: number; cost_micros: number; latency_ms: number; created_at: string; provider?: string; key?: string; client_ip?: string | null; first_byte_ms?: number | null; cached_tokens?: number; reasoning_tokens?: number; has_body?: boolean }
 export type ApiAttempt = { id: number; request_id: string; provider_id: number | null; provider_key_id: number | null; model: string; status: string; error: string | null; input_tokens: number; output_tokens: number; latency_ms: number; created_at: string }
-export type ApiClientKey = { id: number; name: string; models: string[]; token_limit: number; max_amount_micros: number; rpm: number; tpm: number; expires_at: string | null; model_groups?: number[] }
+export type ApiClientKey = { id: number; name: string; models: string[]; token_limit: number; max_amount_micros: number; rpm: number; tpm: number; expires_at: string | null; enabled: boolean; model_groups?: number[]; ip_whitelist?: string[]; model_quotas?: Record<string, { rpm: number; tpm: number }>; allowed_groups?: string[]; excluded_providers?: number[] }
 export type ApiGroup = { id: string; name: string; description: string }
 export type ApiModelGroup = { id: number; name: string; description: string; members: string[]; created_at: string; updated_at: string }
 export type ApiPlugin = { id: string; name: string; version: string; enabled: boolean; status: string; description: string; events: string[]; permissions: string[]; priority: number; has_ui: boolean; ui_title: string; config_schema: Record<string, unknown>; config: Record<string, unknown>; sha256: string; installed_at: string; updated_at: string }
@@ -146,6 +146,30 @@ export function providerInput(provider: Provider, keyDrafts: ProviderKeyDraft[] 
 export function keyInput(policy: KeyPolicy) {
   const expiresAt = policy.expiresAt ? policy.expiresAt.slice(0, 16) : null
   return { name: policy.name, models: policy.models, token_limit: policy.tokenLimit || 0, max_amount_micros: Math.round((policy.maxAmount || 0) * 1000000), rpm: policy.rpm, tpm: policy.tpm, expires_at: expiresAt }
+}
+// Prefills the edit dialog from a stored key. Scope entries are split back
+// into the two independent selections by the current route catalog; entries
+// that match neither stay in providerModels so saving never silently drops
+// stored grants (including ones a model group authorizes).
+export function keyEditDraft(key: ApiClientKey, routeSlugs: string[], providerNames: Map<number, string>): KeyPolicyDraft {
+  const routeSet = new Set(routeSlugs)
+  return {
+    name: key.name,
+    customValue: '',
+    maxAmount: key.max_amount_micros ? String(key.max_amount_micros / 1000000) : '',
+    tokenLimit: key.token_limit ? String(key.token_limit) : '',
+    rpm: String(key.rpm),
+    tpm: String(key.tpm),
+    modelQuotas: Object.keys(key.model_quotas ?? {}).length ? JSON.stringify(key.model_quotas) : '',
+    ipWhitelist: (key.ip_whitelist ?? []).join(', '),
+    expiresAt: key.expires_at ? key.expires_at.slice(0, 16) : '',
+    routeModels: key.models.filter((model) => routeSet.has(model)),
+    providerModels: key.models.filter((model) => !routeSet.has(model)),
+    allowedGroups: key.allowed_groups ?? [],
+    modelGroups: key.model_groups ?? [],
+    excludedProviders: (key.excluded_providers ?? []).map((id) => providerNames.get(id) ?? String(id)),
+    enabled: key.enabled,
+  }
 }
 export function policyInput(policy: KeyPolicy, providers: Provider[]) {
   return { ip_whitelist: policy.ipWhitelist, model_quotas: policy.modelQuotas, allowed_groups: policy.allowedGroups, model_groups: policy.modelGroups ?? [], excluded_providers: policy.excludedProviders.map((name) => { const provider = providers.find((item) => item.name === name || String(item.id) === name); if (!provider) throw new Error(`Unknown provider: ${name}`); return provider.id }) }
