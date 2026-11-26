@@ -3,7 +3,10 @@ use serde::Serialize;
 use serde_json::Value;
 use sqlx::Row;
 
-pub const DEFAULT_SOURCE: &str = "https://openrouter.ai/api/v1/models";
+pub const DEFAULT_SOURCE: &str = "https://models.dev/api.json";
+pub const DEFAULT_LITELLM_SOURCE: &str =
+    "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json";
+pub const DEFAULT_OPENROUTER_SOURCE: &str = "https://openrouter.ai/api/v1/models";
 
 #[derive(Debug, Clone, Serialize)]
 pub struct ModelMeta {
@@ -111,6 +114,249 @@ fn string_list(value: Option<&Value>) -> Vec<String> {
                 .collect()
         })
         .unwrap_or_default()
+}
+
+/// Parse a JSON numeric price (USD per token or per million tokens) into
+/// nanos per token without float rounding drift.
+fn price_nanos_number(value: Option<&Value>, per_million: bool) -> Option<i64> {
+    let number = value?.as_number()?;
+    let text = number.to_string();
+    if !per_million {
+        return price_nanos(Some(&text));
+    }
+    // Per-million prices divide by 1e6: shift the decimal exponent by -6
+    // instead of multiplying floats. A mantissa already in exponent form
+    // adds the exponents.
+    let shifted = match text.split_once(['e', 'E']) {
+        Some((mantissa, exponent)) => {
+            let exponent: i32 = exponent.parse().ok()?;
+            format!("{mantissa}e{}", exponent - 6)
+        }
+        None => format!("{text}e-6"),
+    };
+    price_nanos(Some(&shifted))
+}
+
+fn bool_flag(entry: &Value, key: &str) -> bool {
+    entry.get(key).and_then(Value::as_bool).unwrap_or(false)
+}
+
+/// Map one models.dev catalog entry (`{provider: {models: {id: entry}}}`).
+/// `cost` is USD per million tokens; deprecated entries are skipped.
+pub fn parse_models_dev_entry(provider_id: &str, entry: &Value) -> Option<(String, ModelMeta)> {
+    if entry.get("status").and_then(Value::as_str) == Some("deprecated") {
+        return None;
+    }
+    let id = entry.get("id")?.as_str()?;
+    let input = string_list(entry.pointer("/modalities/input"));
+    let output = string_list(entry.pointer("/modalities/output"));
+    let mut capabilities = Vec::new();
+    if bool_flag(entry, "tool_call") {
+        capabilities.push("tools".to_string());
+    }
+    if bool_flag(entry, "reasoning") {
+        capabilities.push("reasoning".to_string());
+    }
+    if bool_flag(entry, "structured_output") {
+        capabilities.push("structured".to_string());
+    }
+    if input.iter().any(|item| item == "image") {
+        capabilities.push("vision".to_string());
+    }
+    if input.iter().any(|item| item == "audio") {
+        capabilities.push("audio".to_string());
+    }
+    if input.iter().any(|item| item == "video") {
+        capabilities.push("video".to_string());
+    }
+    if output.iter().any(|item| item == "image") {
+        capabilities.push("image-output".to_string());
+    }
+    Some((
+        bare_id(id),
+        ModelMeta {
+            source_id: format!("{provider_id}/{id}"),
+            base_model: base_model(id),
+            display_name: entry
+                .get("name")
+                .and_then(Value::as_str)
+                .unwrap_or(id)
+                .to_string(),
+            description: entry
+                .get("description")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string(),
+            context_length: entry
+                .pointer("/limit/context")
+                .and_then(Value::as_i64)
+                .unwrap_or(0),
+            input_modalities: input,
+            output_modalities: output,
+            capabilities,
+            input_price_nanos: price_nanos_number(entry.pointer("/cost/input"), true),
+            output_price_nanos: price_nanos_number(entry.pointer("/cost/output"), true),
+        },
+    ))
+}
+
+/// Parse the whole models.dev catalog object into deduplicated entries keyed
+/// by bare model id. Direct providers win over router-style entries whose id
+/// carries a `vendor/` path; among equals the newest `last_updated` wins.
+pub fn parse_models_dev(body: &Value) -> Vec<(String, ModelMeta)> {
+    let Some(providers) = body.as_object() else {
+        return Vec::new();
+    };
+    let mut best: std::collections::HashMap<String, (bool, String, ModelMeta)> =
+        std::collections::HashMap::new();
+    for (provider_id, provider) in providers {
+        let Some(models) = provider.get("models").and_then(Value::as_object) else {
+            continue;
+        };
+        for entry in models.values() {
+            let Some((bare, meta)) = parse_models_dev_entry(provider_id, entry) else {
+                continue;
+            };
+            // A model id that itself contains a slash is a router-style
+            // passthrough (e.g. openrouter listing anthropic/claude); direct
+            // provider listings win over those.
+            let id = &meta.source_id[provider_id.len() + 1..];
+            let direct = !id.contains('/');
+            let updated = entry
+                .get("last_updated")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string();
+            match best.get(&bare) {
+                Some((was_direct, was_updated, _))
+                    if (*was_direct && !direct)
+                        || (*was_direct == direct && was_updated.as_str() >= updated.as_str()) => {}
+                _ => {
+                    best.insert(bare, (direct, updated, meta));
+                }
+            }
+        }
+    }
+    let mut entries: Vec<(String, ModelMeta)> = best
+        .into_iter()
+        .map(|(bare, (_, _, meta))| (bare, meta))
+        .collect();
+    entries.sort_by(|a, b| a.0.cmp(&b.0));
+    entries
+}
+
+/// Map one LiteLLM price-table entry. Costs are USD per token floats;
+/// `max_input_tokens` (fallback `max_tokens`) is the context window.
+pub fn parse_litellm_entry(key: &str, entry: &Value) -> Option<(String, ModelMeta)> {
+    if key == "sample_spec" || !entry.is_object() {
+        return None;
+    }
+    let input = price_nanos_number(entry.get("input_cost_per_token"), false)?;
+    let output = price_nanos_number(entry.get("output_cost_per_token"), false)?;
+    let mut capabilities = Vec::new();
+    if bool_flag(entry, "supports_function_calling") || bool_flag(entry, "supports_tool_choice") {
+        capabilities.push("tools".to_string());
+    }
+    if bool_flag(entry, "supports_reasoning") {
+        capabilities.push("reasoning".to_string());
+    }
+    if bool_flag(entry, "supports_response_schema") {
+        capabilities.push("structured".to_string());
+    }
+    if bool_flag(entry, "supports_vision") {
+        capabilities.push("vision".to_string());
+    }
+    if bool_flag(entry, "supports_audio_input") {
+        capabilities.push("audio".to_string());
+    }
+    let mut input_modalities = vec!["text".to_string()];
+    if bool_flag(entry, "supports_vision") {
+        input_modalities.push("image".to_string());
+    }
+    if bool_flag(entry, "supports_pdf_input") {
+        input_modalities.push("pdf".to_string());
+    }
+    if bool_flag(entry, "supports_audio_input") {
+        input_modalities.push("audio".to_string());
+    }
+    Some((
+        bare_id(key),
+        ModelMeta {
+            source_id: key.to_string(),
+            base_model: base_model(key),
+            display_name: String::new(),
+            description: String::new(),
+            context_length: entry
+                .get("max_input_tokens")
+                .or_else(|| entry.get("max_tokens"))
+                .and_then(Value::as_i64)
+                .unwrap_or(0),
+            input_modalities,
+            output_modalities: vec!["text".to_string()],
+            capabilities,
+            input_price_nanos: Some(input),
+            output_price_nanos: Some(output),
+        },
+    ))
+}
+
+/// Parse the LiteLLM price table into entries keyed by bare model id.
+/// Provider-prefixed duplicates collapse; the lexicographically first key
+/// wins so the result is deterministic across syncs.
+pub fn parse_litellm(body: &Value) -> Vec<(String, ModelMeta)> {
+    let Some(table) = body.as_object() else {
+        return Vec::new();
+    };
+    let mut best: std::collections::BTreeMap<String, (String, ModelMeta)> =
+        std::collections::BTreeMap::new();
+    for (key, entry) in table {
+        let Some((bare, meta)) = parse_litellm_entry(key, entry) else {
+            continue;
+        };
+        match best.get(&bare) {
+            Some((first_key, _)) if first_key.as_str() <= key.as_str() => {}
+            _ => {
+                best.insert(bare, (key.clone(), meta));
+            }
+        }
+    }
+    best.into_iter()
+        .map(|(bare, (_, meta))| (bare, meta))
+        .collect()
+}
+
+/// Merge OpenRouter-style entries over a base catalog (models.dev): base
+/// supplies coverage, OpenRouter supplies fresher live pricing for the same
+/// bare id. `primary` entries replace matching base entries field-for-field.
+pub fn merge_entries(
+    base: Vec<(String, ModelMeta)>,
+    primary: Vec<(String, ModelMeta)>,
+) -> Vec<(String, ModelMeta)> {
+    let mut merged: std::collections::BTreeMap<String, ModelMeta> = base.into_iter().collect();
+    for (bare, meta) in primary {
+        merged.insert(bare, meta);
+    }
+    merged.into_iter().collect()
+}
+
+/// Fill missing prices/contexts on merged entries from the LiteLLM price
+/// table. LiteLLM never overwrites a price another source already supplied;
+/// it only calibrates gaps (and zero contexts).
+pub fn calibrate_prices(entries: &mut [(String, ModelMeta)], litellm: &[(String, ModelMeta)]) {
+    for (_, meta) in entries.iter_mut() {
+        let Some(reference) = match_meta(litellm, &meta.source_id) else {
+            continue;
+        };
+        if meta.input_price_nanos.is_none() {
+            meta.input_price_nanos = reference.input_price_nanos;
+        }
+        if meta.output_price_nanos.is_none() {
+            meta.output_price_nanos = reference.output_price_nanos;
+        }
+        if meta.context_length == 0 {
+            meta.context_length = reference.context_length;
+        }
+    }
 }
 
 fn capabilities(entry: &Value) -> Vec<String> {
@@ -418,5 +664,128 @@ mod tests {
             "gpt-4o"
         );
         assert!(match_meta(&entries, "unknown-model").is_none());
+    }
+
+    #[test]
+    fn models_dev_maps_costs_capabilities_and_skips_deprecated() {
+        let entry = json!({
+            "id": "gpt-x",
+            "name": "GPT-X",
+            "description": "flagship",
+            "reasoning": true,
+            "tool_call": true,
+            "structured_output": true,
+            "last_updated": "2026-01-01",
+            "modalities": {"input": ["text", "image"], "output": ["text"]},
+            "limit": {"context": 128000, "output": 16384},
+            "cost": {"input": 2.5, "output": 10}
+        });
+        let (bare, meta) = parse_models_dev_entry("openai", &entry).unwrap();
+        assert_eq!(bare, "gpt-x");
+        assert_eq!(meta.source_id, "openai/gpt-x");
+        assert_eq!(meta.display_name, "GPT-X");
+        assert_eq!(meta.context_length, 128000);
+        assert_eq!(meta.input_price_nanos, Some(2_500));
+        assert_eq!(meta.output_price_nanos, Some(10_000));
+        assert_eq!(
+            meta.capabilities,
+            ["tools", "reasoning", "structured", "vision"]
+        );
+        let deprecated = json!({"id": "old", "status": "deprecated"});
+        assert!(parse_models_dev_entry("openai", &deprecated).is_none());
+        // Sub-nano per-million prices drop instead of rounding up.
+        let tiny = json!({"id": "tiny", "cost": {"input": 0.0000001, "output": 1}});
+        let (_, meta) = parse_models_dev_entry("p", &tiny).unwrap();
+        assert_eq!(meta.input_price_nanos, None);
+        assert_eq!(meta.output_price_nanos, Some(1_000));
+    }
+
+    #[test]
+    fn models_dev_dedupes_preferring_direct_and_newest() {
+        let body = json!({
+            "openrouter": {"models": {
+                "vendor/gpt-x": {"id": "vendor/gpt-x", "last_updated": "2026-05-01",
+                    "cost": {"input": 9, "output": 9}}
+            }},
+            "openai": {"models": {
+                "gpt-x": {"id": "gpt-x", "name": "GPT-X direct", "last_updated": "2026-01-01",
+                    "cost": {"input": 2.5, "output": 10}}
+            }},
+            "azure": {"models": {
+                "gpt-x": {"id": "gpt-x", "name": "GPT-X azure", "last_updated": "2026-03-01",
+                    "cost": {"input": 2.5, "output": 10}}
+            }}
+        });
+        let entries = parse_models_dev(&body);
+        assert_eq!(entries.len(), 1);
+        // Direct listing beats the router passthrough despite being older;
+        // among direct listings the newest last_updated wins.
+        assert_eq!(entries[0].1.source_id, "azure/gpt-x");
+    }
+
+    #[test]
+    fn litellm_parses_costs_and_dedupes_prefixed_keys() {
+        let body = json!({
+            "sample_spec": {"input_cost_per_token": 1},
+            "gpt-x": {"input_cost_per_token": 2.5e-6, "output_cost_per_token": 1e-5,
+                "max_input_tokens": 128000, "supports_function_calling": true,
+                "supports_vision": true, "mode": "chat"},
+            "azure/gpt-x": {"input_cost_per_token": 9e-6, "output_cost_per_token": 9e-5},
+            "no-prices": {"mode": "chat"}
+        });
+        let entries = parse_litellm(&body);
+        assert_eq!(entries.len(), 1);
+        let (bare, meta) = &entries[0];
+        assert_eq!(bare, "gpt-x");
+        // Lexicographically first key wins deterministically.
+        assert_eq!(meta.source_id, "azure/gpt-x");
+        assert_eq!(meta.input_price_nanos, Some(9_000));
+        assert_eq!(meta.output_price_nanos, Some(90_000));
+        let (_, direct) = parse_litellm_entry(
+            "gpt-x",
+            &json!({"input_cost_per_token": 2.5e-6, "output_cost_per_token": 1e-5,
+                "max_input_tokens": 128000, "supports_function_calling": true,
+                "supports_vision": true}),
+        )
+        .unwrap();
+        assert_eq!(direct.input_price_nanos, Some(2_500));
+        assert_eq!(direct.context_length, 128000);
+        assert_eq!(direct.capabilities, ["tools", "vision"]);
+        assert_eq!(direct.input_modalities, ["text", "image"]);
+    }
+
+    #[test]
+    fn merge_and_calibrate_fill_gaps_without_overwriting() {
+        let base = parse_models_dev(&json!({
+            "openai": {"models": {
+                "gpt-x": {"id": "gpt-x", "name": "GPT-X", "limit": {"context": 128000},
+                    "cost": {"input": 2.5, "output": 10}},
+                "doubao-x": {"id": "doubao-x", "name": "Doubao X"}
+            }}
+        }));
+        let overlay = vec![
+            parse_entry(&json!({"id": "openai/gpt-x", "name": "OpenAI: GPT-X live",
+                "context_length": 200000,
+                "pricing": {"prompt": "0.000003", "completion": "0.000012"}}))
+            .unwrap(),
+        ];
+        let mut merged = merge_entries(base, overlay);
+        assert_eq!(merged.len(), 2);
+        let litellm = parse_litellm(&json!({
+            "doubao-x": {"input_cost_per_token": 4e-7, "output_cost_per_token": 8e-7,
+                "max_input_tokens": 256000},
+            "gpt-x": {"input_cost_per_token": 9e-6, "output_cost_per_token": 9e-5}
+        }));
+        calibrate_prices(&mut merged, &litellm);
+        let doubao = merged.iter().find(|(id, _)| id == "doubao-x").unwrap();
+        assert_eq!(doubao.1.input_price_nanos, Some(400));
+        assert_eq!(doubao.1.output_price_nanos, Some(800));
+        assert_eq!(doubao.1.context_length, 256000);
+        let gpt = merged.iter().find(|(id, _)| id == "gpt-x").unwrap();
+        // OpenRouter overlay replaced models.dev wholesale; LiteLLM never
+        // overwrites prices another source already supplied.
+        assert_eq!(gpt.1.display_name, "GPT-X live");
+        assert_eq!(gpt.1.input_price_nanos, Some(3_000));
+        assert_eq!(gpt.1.context_length, 200000);
     }
 }

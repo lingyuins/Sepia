@@ -65,7 +65,7 @@ Sepia 是一个自托管的多供应商 AI 网关。连接上游模型服务，�
 | 统一协议 | 原生及跨协议 JSON/SSE 转换，支持文本、函数工具、工具调用/结果及图像、音频、文件内容的显式映射 |
 | OpenAI Responses | 函数工具、多模态输入、`previous_response_id`、会话、输入项目分页、后台轮询/取消及流事件回放 |
 | 辅助端点 | embeddings、rerank、moderations、图像生成/编辑、语音合成/转写/翻译、视频生成与轮询、搜索及 Suno 风格代理，原样透传至 OpenAI 上游并复用鉴权、路由、配额与故障转移 |
-| 模型广场 | 按变体家族聚合各供应商模型，展示真实渠道、可用性与已配置价格；一键同步 OpenAI 风格模型元数据（默认 OpenRouter），参考价与配置价分离标注，支持逐模型改价 |
+| 模型广场 | 按变体家族聚合各供应商模型，展示真实渠道、可用性与已配置价格；一键同步多源模型元数据（models.dev 主源 + OpenRouter 实时覆盖 + LiteLLM 价格校准，辅助源失败自动降级并提示），参考价与配置价分离标注，支持逐模型改价 |
 | 客户端密钥 | 明文仅在创建时返回一次；模型/路由范围、金额与 Token 额度、RPM/TPM、IP/CIDR、分组与供应商限制、有效期及撤销 |
 | 请求观测与费用 | 记录客户端 IP、首字延迟、缓存输入与推理输出 Token 明细及真实总延迟；可选正文记录（默认关闭，1 MiB 截断）；Token/费用分析按真实请求日志聚合 |
 | 插件系统 | 本地 `.zip` 安装（manifest 权限校验、SHA256 记录、semver 拒降级），wasmtime 沙箱执行（fuel/epoch 超时、内存上限、无 WASI）；请求/路由/响应改写、观测、插件供应商与 RPC 钩子及 kv/secret/http/log 宿主能力；控制台启停、配置编辑、沙箱 iframe 插件 UI 与卸载 |
@@ -183,7 +183,9 @@ Compose 将端口仅绑定到本机回环地址，并要求在 `.env` 中提供 
 | `SEPIA_TRUSTED_PROXY=true` | 非回环监听所必需；由受信代理终止 TLS，并按 `X-Forwarded-For` / `X-Real-IP` 识别真实客户端 IP |
 | `SEPIA_DEV_INSECURE_KEYSTORE=1` | 仅 debug 构建使用文件测试密钥；禁止用于生产 |
 | `SEPIA_GATEWAY_URL` | Vite 开发代理目标，不是浏览器管理 API 的跨域地址 |
-| `SEPIA_METADATA_SOURCE` | 模型广场元数据同步源（OpenAI 风格模型列表），默认 `https://openrouter.ai/api/v1/models` |
+| `SEPIA_METADATA_SOURCE` | 模型广场元数据主源，默认 `https://models.dev/api.json`（models.dev 目录）；也接受 OpenAI 风格 `{data: […]}` 模型列表地址 |
+| `SEPIA_OPENROUTER_SOURCE` | OpenRouter 实时元数据覆盖层（OpenAI 风格模型列表），默认 `https://openrouter.ai/api/v1/models`；设为空字符串可禁用 |
+| `SEPIA_LITELLM_SOURCE` | LiteLLM 价格校准表，默认 `https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json`；只填充其他源缺失的价格/上下文，不覆盖已有值；设为空字符串可禁用 |
 | `SEPIA_UPDATE_SOURCE` | 应用内更新的 Release 检查源（GitHub `releases/latest` API 地址），默认 `https://api.github.com/repos/lingyuins/Sepia/releases/latest` |
 | `SEPIA_GITHUB_TOKEN` | 可选的 GitHub 令牌，提高更新检查的 API 速率限制；仅用于读取 Release 信息 |
 
@@ -441,7 +443,7 @@ The repository contains a working React 18 + TypeScript console, a Rust/Axum gat
 | Unified protocols | Native and cross-protocol JSON/SSE conversion for text, function tools, tool calls/results, and explicit image, audio, and file mappings |
 | OpenAI Responses | Function tools, multimodal input, `previous_response_id`, conversations, input-item pagination, background polling/cancellation, and stream-event replay |
 | Auxiliary endpoints | Embeddings, rerank, moderations, image generation/edits, speech/transcription/translation, video generation with polling, search, and a Suno-style proxy pass bodies through verbatim to OpenAI upstreams, reusing auth, routing, quotas, and failover |
-| Model Plaza | Groups provider models into variant families with real channels, availability, and configured prices; one action syncs OpenAI-style model metadata (OpenRouter by default); reference prices are labeled separately from configured prices, which are editable per model |
+| Model Plaza | Groups provider models into variant families with real channels, availability, and configured prices; one action syncs multi-source model metadata (models.dev primary + OpenRouter live overlay + LiteLLM price calibration; auxiliary sources degrade gracefully with disclosed warnings); reference prices are labeled separately from configured prices, which are editable per model |
 | Client keys | Plaintext is returned only once at creation; scope keys by model/route, amount/token budgets, RPM/TPM, IP/CIDR, groups, excluded providers, expiration, and revocation |
 | Request observation and costs | Client IP, time-to-first-byte, cached-input and reasoning-output token detail, and real total latency per request; optional body capture (off by default, capped at 1 MiB); token/cost analytics aggregate real request logs |
 | Plugin system | Local `.zip` install with manifest-validated permissions, SHA256 recording, and semver downgrade rejection; wasmtime sandboxed execution (fuel/epoch timeouts, memory caps, no WASI); relay/route/response rewrite, observation, plugin-backed provider, and RPC hooks plus kv/secret/http/log host capabilities; console enable/disable, config editing, sandboxed iframe plugin UI, and uninstall |
@@ -559,7 +561,9 @@ With `SEPIA_TRUSTED_PROXY=true` the gateway resolves the real client IP from `X-
 | `SEPIA_TRUSTED_PROXY=true` | Required for non-loopback listening; TLS terminates at a trusted proxy, whose `X-Forwarded-For` / `X-Real-IP` supply the client IP |
 | `SEPIA_DEV_INSECURE_KEYSTORE=1` | Debug builds only; uses a file test key and must never protect production secrets |
 | `SEPIA_GATEWAY_URL` | Vite development proxy target, not a cross-origin browser management API setting |
-| `SEPIA_METADATA_SOURCE` | Model Plaza metadata sync source (OpenAI-style model list); defaults to `https://openrouter.ai/api/v1/models` |
+| `SEPIA_METADATA_SOURCE` | Model Plaza primary metadata source; defaults to `https://models.dev/api.json` (the models.dev catalog); an OpenAI-style `{data: […]}` model-list URL is also accepted |
+| `SEPIA_OPENROUTER_SOURCE` | OpenRouter live metadata overlay (OpenAI-style model list); defaults to `https://openrouter.ai/api/v1/models`; set to an empty string to disable |
+| `SEPIA_LITELLM_SOURCE` | LiteLLM price-calibration table; defaults to `https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json`; fills only prices/contexts missing from other sources and never overwrites them; set to an empty string to disable |
 | `SEPIA_UPDATE_SOURCE` | In-app update release-check source (GitHub `releases/latest` API URL); defaults to `https://api.github.com/repos/lingyuins/Sepia/releases/latest` |
 | `SEPIA_GITHUB_TOKEN` | Optional GitHub token to raise the update-check API rate limit; only used to read release information |
 

@@ -101,6 +101,10 @@ async fn main() -> Result<(), String> {
             trusted_proxy,
             metadata_source: std::env::var("SEPIA_METADATA_SOURCE")
                 .unwrap_or_else(|_| sepia_gateway::metadata::DEFAULT_SOURCE.into()),
+            litellm_source: std::env::var("SEPIA_LITELLM_SOURCE")
+                .unwrap_or_else(|_| sepia_gateway::metadata::DEFAULT_LITELLM_SOURCE.into()),
+            openrouter_source: std::env::var("SEPIA_OPENROUTER_SOURCE")
+                .unwrap_or_else(|_| sepia_gateway::metadata::DEFAULT_OPENROUTER_SOURCE.into()),
             plugins,
             routing_stats: sepia_gateway::strategy::RoutingStats::shared(),
             events: sepia_gateway::events::Events::new(),

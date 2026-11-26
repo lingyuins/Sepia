@@ -397,47 +397,119 @@ async fn providers(State(state): State<AppState>) -> Response {
 }
 async fn sync_model_metadata(State(state): State<AppState>) -> Response {
     let source = state.metadata_source.clone();
-    let body = match state.http().get(&source).send().await {
-        Ok(response) => match response.json::<serde_json::Value>().await {
-            Ok(body) => body,
-            Err(message) => {
-                return error(
-                    StatusCode::BAD_GATEWAY,
-                    format!("metadata source unreadable: {message}"),
-                );
-            }
-        },
+    let client = state.http();
+    // Fetch all configured sources concurrently. The primary source is
+    // required; the LiteLLM calibration table and OpenRouter overlay are
+    // best-effort — a failing auxiliary source degrades coverage, not the sync.
+    let fetch = |url: String| {
+        let client = client.clone();
+        async move {
+            let response = client.get(&url).send().await.map_err(|e| e.to_string())?;
+            response
+                .json::<serde_json::Value>()
+                .await
+                .map_err(|e| e.to_string())
+        }
+    };
+    let primary = fetch(source.clone());
+    let litellm = async {
+        if state.litellm_source.is_empty() {
+            None
+        } else {
+            Some(fetch(state.litellm_source.clone()).await)
+        }
+    };
+    let openrouter = async {
+        if state.openrouter_source.is_empty() {
+            None
+        } else {
+            Some(fetch(state.openrouter_source.clone()).await)
+        }
+    };
+    let (primary, litellm, openrouter) = tokio::join!(primary, litellm, openrouter);
+    let body = match primary {
+        Ok(body) => body,
         Err(message) => {
             return error(
                 StatusCode::BAD_GATEWAY,
-                format!("metadata source unreachable: {message}"),
+                format!("metadata source unreadable: {message}"),
             );
         }
     };
-    let entries: Vec<(String, crate::metadata::ModelMeta)> = body
+    // The primary source is either a models.dev catalog object or an
+    // OpenAI-style `{data: [...]}` list (SEPIA_METADATA_SOURCE override).
+    let mut entries = if body
         .get("data")
         .and_then(serde_json::Value::as_array)
-        .map(|items| {
-            items
-                .iter()
-                .filter_map(crate::metadata::parse_entry)
-                .collect()
-        })
-        .unwrap_or_default();
+        .is_some()
+    {
+        body["data"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(crate::metadata::parse_entry)
+            .collect::<Vec<_>>()
+    } else {
+        crate::metadata::parse_models_dev(&body)
+    };
+    let mut warnings: Vec<String> = Vec::new();
+    let mut sources = vec![source.clone()];
+    if let Some(result) = openrouter {
+        match result {
+            Ok(body) => {
+                let overlay: Vec<_> = body
+                    .get("data")
+                    .and_then(serde_json::Value::as_array)
+                    .map(|items| {
+                        items
+                            .iter()
+                            .filter_map(crate::metadata::parse_entry)
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                if overlay.is_empty() {
+                    warnings.push("openrouter source returned no models".to_string());
+                } else {
+                    entries = crate::metadata::merge_entries(entries, overlay);
+                    sources.push(state.openrouter_source.clone());
+                }
+            }
+            Err(message) => warnings.push(format!("openrouter source skipped: {message}")),
+        }
+    }
+    if let Some(result) = litellm {
+        match result {
+            Ok(body) => {
+                let table = crate::metadata::parse_litellm(&body);
+                if table.is_empty() {
+                    warnings.push("litellm source returned no prices".to_string());
+                } else {
+                    crate::metadata::calibrate_prices(&mut entries, &table);
+                    sources.push(state.litellm_source.clone());
+                }
+            }
+            Err(message) => warnings.push(format!("litellm source skipped: {message}")),
+        }
+    }
     if entries.is_empty() {
         return error(
             StatusCode::BAD_GATEWAY,
             "metadata source returned no models".to_string(),
         );
     }
-    let prices_filled = match state.store.replace_model_metadata(&source, &entries).await {
+    let source_label = sources.join(" + ");
+    let prices_filled = match state
+        .store
+        .replace_model_metadata(&source_label, &entries)
+        .await
+    {
         Ok(filled) => filled,
         Err(message) => return error(StatusCode::INTERNAL_SERVER_ERROR, message),
     };
     // Prices/contexts feed cost-optimized and context-fit ordering.
     let _ = state.snapshots.refresh(&state.store).await;
     let (_, fetched_at) = state.store.catalog_meta().await.unwrap_or((None, None));
-    Json(json!({"count": entries.len(), "prices_filled": prices_filled, "source": source, "fetched_at": fetched_at}))
+    Json(json!({"count": entries.len(), "prices_filled": prices_filled, "source": source_label, "sources": sources, "warnings": warnings, "fetched_at": fetched_at}))
         .into_response()
 }
 async fn model_catalog(State(state): State<AppState>) -> Response {

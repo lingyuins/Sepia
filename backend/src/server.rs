@@ -35,6 +35,12 @@ pub struct AppState {
     /// `X-Forwarded-For`/`X-Real-IP` are authoritative for the client address.
     pub trusted_proxy: bool,
     pub metadata_source: String,
+    /// Optional LiteLLM price table used to fill price/context gaps; empty
+    /// disables the calibration layer.
+    pub litellm_source: String,
+    /// Optional OpenRouter-style catalog merged over the primary source for
+    /// fresher live pricing; empty disables the overlay.
+    pub openrouter_source: String,
     pub plugins: crate::plugin::SharedRuntime,
     pub routing_stats: std::sync::Arc<crate::strategy::RoutingStats>,
     /// Workspace change fan-out for the console SSE stream.
@@ -98,6 +104,8 @@ impl AppState {
             secure_cookie: false,
             trusted_proxy: false,
             metadata_source: crate::metadata::DEFAULT_SOURCE.into(),
+            litellm_source: String::new(),
+            openrouter_source: String::new(),
             plugins: crate::plugin::shared(crate::plugin::PluginRuntime::new().unwrap()),
             routing_stats: crate::strategy::RoutingStats::shared(),
             events: Default::default(),

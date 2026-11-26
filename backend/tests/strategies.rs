@@ -261,6 +261,8 @@ async fn strategy_and_weights_round_trip_through_management_api() {
         secure_cookie: false,
         trusted_proxy: false,
         metadata_source: sepia_gateway::metadata::DEFAULT_SOURCE.into(),
+        litellm_source: String::new(),
+        openrouter_source: String::new(),
         plugins: sepia_gateway::plugin::shared(
             sepia_gateway::plugin::PluginRuntime::new().unwrap(),
         ),

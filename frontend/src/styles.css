@@ -1231,6 +1231,9 @@ kbd { font-family: var(--font-mono); }
 .plaza-sync .spin { animation: plaza-spin 1s linear infinite; }
 @keyframes plaza-spin { to { transform: rotate(360deg); } }
 .plaza-sync-note { color: var(--text-muted); font-size: 12px; margin: -4px 0 12px; }
+.plaza-sync-warnings { color: var(--warning); }
+.plaza-sync-warnings ul { margin: 4px 0 0; padding-left: 18px; }
+.plaza-sync-warnings li { overflow-wrap: anywhere; }
 .plaza-load-error .button { margin-top: 4px; }
 .plaza-pagination { margin-top: 18px; padding: 14px 0 0; }
 .plaza-reference { display: flex; align-items: center; flex-wrap: wrap; gap: 4px; color: var(--text-muted); font-size: 12px; }

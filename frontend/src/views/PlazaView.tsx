@@ -179,6 +179,7 @@ export function PlazaView() {
   const [catalog, setCatalog] = useState<CatalogResponse | null>(null)
   const [loadError, setLoadError] = useState('')
   const [syncing, setSyncing] = useState(false)
+  const [syncWarnings, setSyncWarnings] = useState<string[]>([])
   const [query, setQuery] = useState('')
   const [kind, setKind] = useState<'all' | PlazaKind>('all')
   const [groupId, setGroupId] = useState('all')
@@ -223,17 +224,25 @@ export function PlazaView() {
 
   const syncMetadata = async () => {
     setSyncing(true)
+    setSyncWarnings([])
     try {
-      const result = await api<{ count: number; prices_filled: number }>(
-        '/api/v1/models/metadata/sync',
-        { method: 'POST' },
-      )
-      notify(
+      const result = await api<{
+        count: number
+        prices_filled: number
+        warnings?: string[]
+      }>('/api/v1/models/metadata/sync', { method: 'POST' })
+      const warnings = result.warnings ?? []
+      setSyncWarnings(warnings)
+      const summary =
         result.prices_filled > 0
           ? `${t('plazaSyncDone', { count: result.count })} ${t('plazaSyncPricesFilled', {
               count: result.prices_filled,
             })}`
-          : t('plazaSyncDone', { count: result.count }),
+          : t('plazaSyncDone', { count: result.count })
+      notify(
+        warnings.length > 0
+          ? `${summary} · ${t('plazaSyncDegraded', { count: warnings.length })}`
+          : summary,
       )
       await refresh(undefined, ['providers', 'routes'])
     } catch (cause) {
@@ -436,6 +445,17 @@ export function PlazaView() {
             <div className="plaza-sync-note">
               {t('plazaSyncedAt', { date: catalog.fetched_at })}
               {catalog.source ? ` · ${catalog.source}` : ''}
+            </div>
+          )}
+
+          {syncWarnings.length > 0 && (
+            <div className="plaza-sync-note plaza-sync-warnings" role="status">
+              <strong>{t('plazaSyncDegraded', { count: syncWarnings.length })}</strong>
+              <ul>
+                {syncWarnings.map((warning) => (
+                  <li key={warning}>{warning}</li>
+                ))}
+              </ul>
             </div>
           )}
 

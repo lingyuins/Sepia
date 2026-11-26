@@ -30,6 +30,8 @@ async fn management_requires_session_and_client_secret_is_returned_once() {
         secure_cookie: false,
         trusted_proxy: false,
         metadata_source: sepia_gateway::metadata::DEFAULT_SOURCE.into(),
+        litellm_source: String::new(),
+        openrouter_source: String::new(),
         plugins: sepia_gateway::plugin::shared(
             sepia_gateway::plugin::PluginRuntime::new().unwrap(),
         ),
@@ -290,6 +292,8 @@ async fn provider_creation_discovers_models_before_persisting() {
         secure_cookie: false,
         trusted_proxy: false,
         metadata_source: sepia_gateway::metadata::DEFAULT_SOURCE.into(),
+        litellm_source: String::new(),
+        openrouter_source: String::new(),
         plugins: sepia_gateway::plugin::shared(
             sepia_gateway::plugin::PluginRuntime::new().unwrap(),
         ),
@@ -391,6 +395,8 @@ async fn model_normalize_settings_round_trip_and_unknown_key_rejected() {
         secure_cookie: false,
         trusted_proxy: false,
         metadata_source: sepia_gateway::metadata::DEFAULT_SOURCE.into(),
+        litellm_source: String::new(),
+        openrouter_source: String::new(),
         plugins: sepia_gateway::plugin::shared(
             sepia_gateway::plugin::PluginRuntime::new().unwrap(),
         ),
@@ -509,6 +515,8 @@ async fn workspace_and_gateway_address_settings_round_trip() {
         secure_cookie: false,
         trusted_proxy: false,
         metadata_source: sepia_gateway::metadata::DEFAULT_SOURCE.into(),
+        litellm_source: String::new(),
+        openrouter_source: String::new(),
         plugins: sepia_gateway::plugin::shared(
             sepia_gateway::plugin::PluginRuntime::new().unwrap(),
         ),

@@ -495,3 +495,228 @@ async fn metadata_sync_reports_unreachable_source() {
     assert!(source.is_none());
     assert!(fetched_at.is_none());
 }
+
+#[tokio::test]
+async fn metadata_sync_merges_models_dev_openrouter_and_litellm() {
+    let directory = tempfile::tempdir().unwrap();
+    let store = Store::connect(&directory.path().join("multisource.db"))
+        .await
+        .unwrap();
+    let mut state = AppState::for_testing(store.clone()).await;
+    // models.dev catalog: gpt-x carries live prices; doubao-x has metadata
+    // only, so the LiteLLM table must calibrate its gap.
+    let models_dev = json!({
+        "openai": {"models": {
+            "gpt-x": {"id": "gpt-x", "name": "GPT-X", "last_updated": "2026-01-01",
+                "limit": {"context": 128000},
+                "cost": {"input": 2.5, "output": 10}}
+        }},
+        "volcengine": {"models": {
+            "doubao-x": {"id": "doubao-x", "name": "Doubao X", "reasoning": true}
+        }}
+    });
+    let openrouter = json!({"data": [
+        {"id": "openai/gpt-x", "name": "OpenAI: GPT-X live", "context_length": 200000,
+         "pricing": {"prompt": "0.000003", "completion": "0.000012"}}
+    ]});
+    let litellm = json!({
+        "sample_spec": {"mode": "chat"},
+        "doubao-x": {"input_cost_per_token": 4e-7, "output_cost_per_token": 8e-7,
+            "max_input_tokens": 256000, "supports_reasoning": true},
+        "gpt-x": {"input_cost_per_token": 9e-6, "output_cost_per_token": 9e-5}
+    });
+    let mock = {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        tokio::spawn(
+            axum::serve(
+                listener,
+                axum::Router::new()
+                    .route(
+                        "/models-dev",
+                        axum::routing::get(move || {
+                            let body = models_dev.clone();
+                            async move { axum::Json(body) }
+                        }),
+                    )
+                    .route(
+                        "/openrouter",
+                        axum::routing::get(move || {
+                            let body = openrouter.clone();
+                            async move { axum::Json(body) }
+                        }),
+                    )
+                    .route(
+                        "/litellm",
+                        axum::routing::get(move || {
+                            let body = litellm.clone();
+                            async move { axum::Json(body) }
+                        }),
+                    )
+                    .route(
+                        "/broken",
+                        axum::routing::get(|| async {
+                            (axum::http::StatusCode::INTERNAL_SERVER_ERROR, "boom")
+                        }),
+                    ),
+            )
+            .into_future(),
+        );
+        address
+    };
+    state.metadata_source = format!("http://{mock}/models-dev");
+    state.openrouter_source = format!("http://{mock}/openrouter");
+    state.litellm_source = format!("http://{mock}/litellm");
+    let keys = state.keys.clone();
+    store
+        .create_provider(
+            NewProvider {
+                name: "multi".into(),
+                protocol: ProviderProtocol::OpenAI,
+                endpoint: "http://multi.example/v1".into(),
+                models: vec!["gpt-x".into(), "doubao-x".into()],
+                plugin_id: None,
+                mode: "single".into(),
+                rewrite: Default::default(),
+            },
+            "multi-key",
+            &[],
+            &keys,
+        )
+        .await
+        .unwrap();
+    let address = {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        tokio::spawn(
+            axum::serve(
+                listener,
+                sepia_gateway::server::app(state.clone())
+                    .into_make_service_with_connect_info::<std::net::SocketAddr>(),
+            )
+            .into_future(),
+        );
+        address
+    };
+    let client = reqwest::Client::new();
+    let url = |path: &str| format!("http://{address}{path}");
+    client
+        .post(url("/api/v1/auth/bootstrap"))
+        .json(&json!({"username":"admin","password":"correct horse","token":state.bootstrap_token}))
+        .send()
+        .await
+        .unwrap();
+    let login = client
+        .post(url("/api/v1/auth/login"))
+        .json(&json!({"username":"admin","password":"correct horse"}))
+        .send()
+        .await
+        .unwrap();
+    let cookie = login
+        .headers()
+        .get("set-cookie")
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .split(';')
+        .next()
+        .unwrap()
+        .to_string();
+
+    let sync = client
+        .post(url("/api/v1/models/metadata/sync"))
+        .header("cookie", &cookie)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(sync.status(), 200);
+    let sync_body: Value = sync.json().await.unwrap();
+    assert_eq!(sync_body["count"], 2);
+    assert_eq!(sync_body["prices_filled"], 2);
+    assert_eq!(sync_body["warnings"].as_array().unwrap().len(), 0);
+    assert_eq!(sync_body["sources"].as_array().unwrap().len(), 3);
+    let catalog: Value = client
+        .get(url("/api/v1/models/catalog"))
+        .header("cookie", &cookie)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let models = catalog["models"].as_array().unwrap();
+    let doubao = models.iter().find(|m| m["model"] == "doubao-x").unwrap();
+    // LiteLLM calibrates the models.dev price gap without overwriting names.
+    assert_eq!(doubao["metadata"]["display_name"], "Doubao X");
+    assert_eq!(doubao["metadata"]["input_price_nanos"], 400);
+    assert_eq!(doubao["metadata"]["output_price_nanos"], 800);
+    assert_eq!(doubao["metadata"]["context_length"], 256000);
+    let gpt = models.iter().find(|m| m["model"] == "gpt-x").unwrap();
+    // OpenRouter overlay replaces models.dev wholesale; LiteLLM must not
+    // overwrite the overlay price.
+    assert_eq!(gpt["metadata"]["display_name"], "GPT-X live");
+    assert_eq!(gpt["metadata"]["input_price_nanos"], 3_000);
+    assert_eq!(gpt["metadata"]["context_length"], 200000);
+    for model in models {
+        assert!(model["channels"][0]["input_price_micros"].as_i64().unwrap() > 0);
+    }
+
+    // A broken auxiliary source degrades coverage, not the sync: the primary
+    // still lands, the failure is disclosed in warnings, and the other
+    // auxiliary layer keeps calibrating.
+    state.litellm_source = format!("http://{mock}/broken");
+    // The running app captured the old state; restart with the broken source.
+    let address2 = {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        tokio::spawn(
+            axum::serve(
+                listener,
+                sepia_gateway::server::app(state.clone())
+                    .into_make_service_with_connect_info::<std::net::SocketAddr>(),
+            )
+            .into_future(),
+        );
+        address
+    };
+    let url2 = |path: &str| format!("http://{address2}{path}");
+    let login = client
+        .post(url2("/api/v1/auth/login"))
+        .json(&json!({"username":"admin","password":"correct horse"}))
+        .send()
+        .await
+        .unwrap();
+    let cookie = login
+        .headers()
+        .get("set-cookie")
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .split(';')
+        .next()
+        .unwrap()
+        .to_string();
+    let sync = client
+        .post(url2("/api/v1/models/metadata/sync"))
+        .header("cookie", &cookie)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(sync.status(), 200);
+    let sync_body: Value = sync.json().await.unwrap();
+    assert_eq!(sync_body["count"], 2);
+    assert_eq!(sync_body["sources"].as_array().unwrap().len(), 2);
+    let warnings = sync_body["warnings"].as_array().unwrap();
+    assert_eq!(warnings.len(), 1);
+    assert!(
+        warnings[0]
+            .as_str()
+            .unwrap()
+            .starts_with("litellm source skipped")
+    );
+    // Without LiteLLM the doubao price gap stays empty this round.
+    assert_eq!(sync_body["prices_filled"], 0);
+    let stored = store.model_metadata().await.unwrap();
+    let doubao = stored.iter().find(|(id, _)| id == "doubao-x").unwrap();
+    assert!(doubao.1.input_price_nanos.is_none());
+}

@@ -29,6 +29,8 @@ async fn start_gateway() -> (String, tempfile::TempDir) {
         secure_cookie: false,
         trusted_proxy: false,
         metadata_source: sepia_gateway::metadata::DEFAULT_SOURCE.into(),
+        litellm_source: String::new(),
+        openrouter_source: String::new(),
         plugins: sepia_gateway::plugin::shared(
             sepia_gateway::plugin::PluginRuntime::new().unwrap(),
         ),

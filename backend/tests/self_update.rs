@@ -156,6 +156,8 @@ async fn gateway(directory: &std::path::Path) -> (SocketAddr, String) {
         secure_cookie: false,
         trusted_proxy: false,
         metadata_source: sepia_gateway::metadata::DEFAULT_SOURCE.into(),
+        litellm_source: String::new(),
+        openrouter_source: String::new(),
         plugins: sepia_gateway::plugin::shared(
             sepia_gateway::plugin::PluginRuntime::new().unwrap(),
         ),
