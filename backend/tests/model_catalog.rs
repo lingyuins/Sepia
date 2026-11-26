@@ -369,7 +369,7 @@ async fn metadata_sync_fetches_source_and_matches_variants() {
     assert_eq!(sync.status(), 200);
     let sync_body: Value = sync.json().await.unwrap();
     assert_eq!(sync_body["count"], 3);
-    assert_eq!(sync_body["source"], format!("http://{mock}/models"));
+    assert_eq!(sync_body["source"], "127.0.0.1");
     assert!(sync_body["fetched_at"].as_str().is_some());
     // Sync fills only unset channel prices; configured prices stay untouched.
     assert_eq!(sync_body["prices_filled"], 1);
@@ -383,7 +383,7 @@ async fn metadata_sync_fetches_source_and_matches_variants() {
         .json()
         .await
         .unwrap();
-    assert_eq!(catalog["source"], format!("http://{mock}/models"));
+    assert_eq!(catalog["source"], "127.0.0.1");
     let models = catalog["models"].as_array().unwrap();
     assert_eq!(models.len(), 3);
     let plain = &models[0];
@@ -652,9 +652,9 @@ async fn metadata_sync_merges_models_dev_openrouter_and_litellm() {
     assert_eq!(doubao["metadata"]["output_price_nanos"], 800);
     assert_eq!(doubao["metadata"]["context_length"], 256000);
     let gpt = models.iter().find(|m| m["model"] == "gpt-x").unwrap();
-    // OpenRouter overlay replaces models.dev wholesale; LiteLLM must not
-    // overwrite the overlay price.
-    assert_eq!(gpt["metadata"]["display_name"], "GPT-X live");
+    // The OpenRouter overlay supplies live prices/context, but the base's
+    // display name survives a sparse overlay; LiteLLM never overwrites.
+    assert_eq!(gpt["metadata"]["display_name"], "GPT-X");
     assert_eq!(gpt["metadata"]["input_price_nanos"], 3_000);
     assert_eq!(gpt["metadata"]["context_length"], 200000);
     for model in models {
@@ -719,4 +719,61 @@ async fn metadata_sync_merges_models_dev_openrouter_and_litellm() {
     let stored = store.model_metadata().await.unwrap();
     let doubao = stored.iter().find(|(id, _)| id == "doubao-x").unwrap();
     assert!(doubao.1.input_price_nanos.is_none());
+
+    // A dead primary source falls back to the OpenRouter overlay as the base
+    // catalog instead of failing the whole sync; the failure is disclosed.
+    state.metadata_source = format!("http://{mock}/broken");
+    state.litellm_source = format!("http://{mock}/litellm");
+    let address3 = {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        tokio::spawn(
+            axum::serve(
+                listener,
+                sepia_gateway::server::app(state.clone())
+                    .into_make_service_with_connect_info::<std::net::SocketAddr>(),
+            )
+            .into_future(),
+        );
+        address
+    };
+    let url3 = |path: &str| format!("http://{address3}{path}");
+    let login = client
+        .post(url3("/api/v1/auth/login"))
+        .json(&json!({"username":"admin","password":"correct horse"}))
+        .send()
+        .await
+        .unwrap();
+    let cookie = login
+        .headers()
+        .get("set-cookie")
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .split(';')
+        .next()
+        .unwrap()
+        .to_string();
+    let sync = client
+        .post(url3("/api/v1/models/metadata/sync"))
+        .header("cookie", &cookie)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(sync.status(), 200);
+    let sync_body: Value = sync.json().await.unwrap();
+    // Only the overlay's gpt-x lands; doubao-x was models.dev-only.
+    assert_eq!(sync_body["count"], 1);
+    assert_eq!(sync_body["sources"].as_array().unwrap().len(), 2);
+    let warnings = sync_body["warnings"].as_array().unwrap();
+    assert_eq!(warnings.len(), 1);
+    assert!(
+        warnings[0]
+            .as_str()
+            .unwrap()
+            .starts_with("primary source skipped")
+    );
+    let stored = store.model_metadata().await.unwrap();
+    let gpt = stored.iter().find(|(id, _)| id == "gpt-x").unwrap();
+    assert_eq!(gpt.1.input_price_nanos, Some(3_000));
 }

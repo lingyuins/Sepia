@@ -398,13 +398,19 @@ async fn providers(State(state): State<AppState>) -> Response {
 async fn sync_model_metadata(State(state): State<AppState>) -> Response {
     let source = state.metadata_source.clone();
     let client = state.http();
-    // Fetch all configured sources concurrently. The primary source is
-    // required; the LiteLLM calibration table and OpenRouter overlay are
-    // best-effort — a failing auxiliary source degrades coverage, not the sync.
+    // Fetch all configured sources concurrently. Every source is best-effort
+    // on its own: the sync only fails when no source yields any model.
+    // Metadata bodies are several MB; bound each fetch so a stalled source
+    // cannot hold the request open indefinitely.
     let fetch = |url: String| {
         let client = client.clone();
         async move {
-            let response = client.get(&url).send().await.map_err(|e| e.to_string())?;
+            let response = client
+                .get(&url)
+                .timeout(std::time::Duration::from_secs(60))
+                .send()
+                .await
+                .map_err(|e| e.to_string())?;
             response
                 .json::<serde_json::Value>()
                 .await
@@ -427,33 +433,56 @@ async fn sync_model_metadata(State(state): State<AppState>) -> Response {
         }
     };
     let (primary, litellm, openrouter) = tokio::join!(primary, litellm, openrouter);
-    let body = match primary {
-        Ok(body) => body,
-        Err(message) => {
-            return error(
-                StatusCode::BAD_GATEWAY,
-                format!("metadata source unreadable: {message}"),
-            );
+    let mut warnings: Vec<String> = Vec::new();
+    // Short labels for the stored/displayed source line; the full URLs stay
+    // in `sources` for diagnostics. Custom overrides fall back to their host.
+    let label = |url: &str, default: &str, name: &str| {
+        if url == default {
+            name.to_string()
+        } else {
+            reqwest::Url::parse(url)
+                .ok()
+                .and_then(|u| u.host_str().map(str::to_string))
+                .unwrap_or_else(|| url.to_string())
         }
     };
+    let mut labels: Vec<String> = Vec::new();
+    let mut sources: Vec<String> = Vec::new();
     // The primary source is either a models.dev catalog object or an
     // OpenAI-style `{data: [...]}` list (SEPIA_METADATA_SOURCE override).
-    let mut entries = if body
-        .get("data")
-        .and_then(serde_json::Value::as_array)
-        .is_some()
-    {
-        body["data"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .filter_map(crate::metadata::parse_entry)
-            .collect::<Vec<_>>()
-    } else {
-        crate::metadata::parse_models_dev(&body)
+    let mut entries: Vec<(String, crate::metadata::ModelMeta)> = match primary {
+        Ok(body) => {
+            let parsed = if body
+                .get("data")
+                .and_then(serde_json::Value::as_array)
+                .is_some()
+            {
+                body["data"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .filter_map(crate::metadata::parse_entry)
+                    .collect::<Vec<_>>()
+            } else {
+                crate::metadata::parse_models_dev(&body)
+            };
+            if parsed.is_empty() {
+                warnings.push("primary source returned no models".to_string());
+            } else {
+                labels.push(label(
+                    &source,
+                    crate::metadata::DEFAULT_SOURCE,
+                    "models.dev",
+                ));
+                sources.push(source.clone());
+            }
+            parsed
+        }
+        Err(message) => {
+            warnings.push(format!("primary source skipped: {message}"));
+            Vec::new()
+        }
     };
-    let mut warnings: Vec<String> = Vec::new();
-    let mut sources = vec![source.clone()];
     if let Some(result) = openrouter {
         match result {
             Ok(body) => {
@@ -471,6 +500,11 @@ async fn sync_model_metadata(State(state): State<AppState>) -> Response {
                     warnings.push("openrouter source returned no models".to_string());
                 } else {
                     entries = crate::metadata::merge_entries(entries, overlay);
+                    labels.push(label(
+                        &state.openrouter_source,
+                        crate::metadata::DEFAULT_OPENROUTER_SOURCE,
+                        "OpenRouter",
+                    ));
                     sources.push(state.openrouter_source.clone());
                 }
             }
@@ -485,6 +519,11 @@ async fn sync_model_metadata(State(state): State<AppState>) -> Response {
                     warnings.push("litellm source returned no prices".to_string());
                 } else {
                     crate::metadata::calibrate_prices(&mut entries, &table);
+                    labels.push(label(
+                        &state.litellm_source,
+                        crate::metadata::DEFAULT_LITELLM_SOURCE,
+                        "LiteLLM",
+                    ));
                     sources.push(state.litellm_source.clone());
                 }
             }
@@ -494,10 +533,10 @@ async fn sync_model_metadata(State(state): State<AppState>) -> Response {
     if entries.is_empty() {
         return error(
             StatusCode::BAD_GATEWAY,
-            "metadata source returned no models".to_string(),
+            "no metadata source returned models".to_string(),
         );
     }
-    let source_label = sources.join(" + ");
+    let source_label = labels.join(" + ");
     let prices_filled = match state
         .store
         .replace_model_metadata(&source_label, &entries)

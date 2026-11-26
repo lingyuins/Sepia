@@ -916,7 +916,7 @@ export const translations = {
   plazaSyncMetadata: ['Sync model data', '同步模型数据', 'モデルデータを同期'],
   plazaSyncDone: ['Synced {count} model entries', '已同步 {count} 条模型数据', '{count} 件のモデルデータを同期しました'],
   plazaSyncPricesFilled: ['· auto-filled {count} unset price(s) from reference data', '· 已按参考数据自动填入 {count} 个未设置的价格', '· 参考データから未設定の価格 {count} 件を自動入力しました'],
-  plazaSyncDegraded: ['{count} auxiliary source(s) skipped', '{count} 个辅助数据源被跳过', '{count} 件の補助データソースをスキップしました'],
+  plazaSyncDegraded: ['{count} metadata source(s) skipped', '{count} 个元数据源被跳过', '{count} 件のメタデータソースをスキップしました'],
   plazaSyncedAt: ['Model data synced {date}', '模型数据同步于 {date}', 'モデルデータ同期：{date}'],
   plazaVariantCount: ['{count} variants', '{count} 个变体', '{count} バリアント'],
   plazaReferencePrice: ['Reference', '参考价', '参考価格'],

@@ -246,13 +246,23 @@ pub fn parse_models_dev(body: &Value) -> Vec<(String, ModelMeta)> {
 }
 
 /// Map one LiteLLM price-table entry. Costs are USD per token floats;
-/// `max_input_tokens` (fallback `max_tokens`) is the context window.
+/// `max_input_tokens` (fallback `max_tokens`) is the context window. Entries
+/// with neither a price nor a context are skipped; a single-sided price
+/// (embedding/rerank rows often carry only input cost) is kept.
 pub fn parse_litellm_entry(key: &str, entry: &Value) -> Option<(String, ModelMeta)> {
     if key == "sample_spec" || !entry.is_object() {
         return None;
     }
-    let input = price_nanos_number(entry.get("input_cost_per_token"), false)?;
-    let output = price_nanos_number(entry.get("output_cost_per_token"), false)?;
+    let input = price_nanos_number(entry.get("input_cost_per_token"), false);
+    let output = price_nanos_number(entry.get("output_cost_per_token"), false);
+    let context_length = entry
+        .get("max_input_tokens")
+        .or_else(|| entry.get("max_tokens"))
+        .and_then(Value::as_i64)
+        .unwrap_or(0);
+    if input.is_none() && output.is_none() && context_length == 0 {
+        return None;
+    }
     let mut capabilities = Vec::new();
     if bool_flag(entry, "supports_function_calling") || bool_flag(entry, "supports_tool_choice") {
         capabilities.push("tools".to_string());
@@ -286,57 +296,95 @@ pub fn parse_litellm_entry(key: &str, entry: &Value) -> Option<(String, ModelMet
             base_model: base_model(key),
             display_name: String::new(),
             description: String::new(),
-            context_length: entry
-                .get("max_input_tokens")
-                .or_else(|| entry.get("max_tokens"))
-                .and_then(Value::as_i64)
-                .unwrap_or(0),
+            context_length,
             input_modalities,
             output_modalities: vec!["text".to_string()],
             capabilities,
-            input_price_nanos: Some(input),
-            output_price_nanos: Some(output),
+            input_price_nanos: input,
+            output_price_nanos: output,
         },
     ))
 }
 
 /// Parse the LiteLLM price table into entries keyed by bare model id.
-/// Provider-prefixed duplicates collapse; the lexicographically first key
-/// wins so the result is deterministic across syncs.
+/// Provider-prefixed duplicates collapse: unprefixed keys carry the vendor's
+/// official pricing, so they win over `azure/`-style prefixed entries; among
+/// equals the lexicographically first key wins, keeping syncs deterministic.
 pub fn parse_litellm(body: &Value) -> Vec<(String, ModelMeta)> {
     let Some(table) = body.as_object() else {
         return Vec::new();
     };
-    let mut best: std::collections::BTreeMap<String, (String, ModelMeta)> =
+    let mut best: std::collections::BTreeMap<String, (bool, String, ModelMeta)> =
         std::collections::BTreeMap::new();
     for (key, entry) in table {
         let Some((bare, meta)) = parse_litellm_entry(key, entry) else {
             continue;
         };
+        let direct = !key.contains('/');
         match best.get(&bare) {
-            Some((first_key, _)) if first_key.as_str() <= key.as_str() => {}
+            Some((was_direct, first_key, _))
+                if (*was_direct && !direct)
+                    || (*was_direct == direct && first_key.as_str() <= key.as_str()) => {}
             _ => {
-                best.insert(bare, (key.clone(), meta));
+                best.insert(bare, (direct, key.clone(), meta));
             }
         }
     }
     best.into_iter()
-        .map(|(bare, (_, meta))| (bare, meta))
+        .map(|(bare, (_, _, meta))| (bare, meta))
         .collect()
 }
 
-/// Merge OpenRouter-style entries over a base catalog (models.dev): base
-/// supplies coverage, OpenRouter supplies fresher live pricing for the same
-/// bare id. `primary` entries replace matching base entries field-for-field.
+/// Merge OpenRouter-style entries over a base catalog (models.dev). The base
+/// keeps every field it already carries; the overlay only fills gaps, except
+/// prices and context where the overlay's live values win when present.
+/// Overlay-only models are appended. A wholesale replace would erase the
+/// base's richer descriptions/modalities/capabilities whenever the overlay
+/// entry is sparse (OpenRouter free variants often carry `"0"` prices).
 pub fn merge_entries(
     base: Vec<(String, ModelMeta)>,
-    primary: Vec<(String, ModelMeta)>,
+    overlay: Vec<(String, ModelMeta)>,
 ) -> Vec<(String, ModelMeta)> {
     let mut merged: std::collections::BTreeMap<String, ModelMeta> = base.into_iter().collect();
-    for (bare, meta) in primary {
-        merged.insert(bare, meta);
+    for (bare, over) in overlay {
+        match merged.get_mut(&bare) {
+            Some(meta) => fill_gaps(meta, &over),
+            None => {
+                merged.insert(bare, over);
+            }
+        }
     }
     merged.into_iter().collect()
+}
+
+/// Copy every field the overlay supplies onto a base entry whose field is
+/// empty/missing. Prices and context are the exception: a present overlay
+/// value wins because it is fresher live data.
+fn fill_gaps(meta: &mut ModelMeta, over: &ModelMeta) {
+    if meta.display_name.is_empty() && !over.display_name.is_empty() {
+        meta.display_name = over.display_name.clone();
+    }
+    if meta.description.is_empty() && !over.description.is_empty() {
+        meta.description = over.description.clone();
+    }
+    if meta.input_modalities.is_empty() && !over.input_modalities.is_empty() {
+        meta.input_modalities = over.input_modalities.clone();
+    }
+    if meta.output_modalities.is_empty() && !over.output_modalities.is_empty() {
+        meta.output_modalities = over.output_modalities.clone();
+    }
+    if meta.capabilities.is_empty() && !over.capabilities.is_empty() {
+        meta.capabilities = over.capabilities.clone();
+    }
+    if over.input_price_nanos.is_some() {
+        meta.input_price_nanos = over.input_price_nanos;
+    }
+    if over.output_price_nanos.is_some() {
+        meta.output_price_nanos = over.output_price_nanos;
+    }
+    if over.context_length > 0 {
+        meta.context_length = over.context_length;
+    }
 }
 
 /// Fill missing prices/contexts on merged entries from the LiteLLM price
@@ -724,45 +772,64 @@ mod tests {
     }
 
     #[test]
-    fn litellm_parses_costs_and_dedupes_prefixed_keys() {
+    fn litellm_parses_costs_and_prefers_unprefixed_keys() {
         let body = json!({
             "sample_spec": {"input_cost_per_token": 1},
             "gpt-x": {"input_cost_per_token": 2.5e-6, "output_cost_per_token": 1e-5,
                 "max_input_tokens": 128000, "supports_function_calling": true,
                 "supports_vision": true, "mode": "chat"},
             "azure/gpt-x": {"input_cost_per_token": 9e-6, "output_cost_per_token": 9e-5},
+            "bedrock/gpt-x": {"input_cost_per_token": 8e-6, "output_cost_per_token": 8e-5},
             "no-prices": {"mode": "chat"}
         });
         let entries = parse_litellm(&body);
         assert_eq!(entries.len(), 1);
         let (bare, meta) = &entries[0];
         assert_eq!(bare, "gpt-x");
-        // Lexicographically first key wins deterministically.
-        assert_eq!(meta.source_id, "azure/gpt-x");
-        assert_eq!(meta.input_price_nanos, Some(9_000));
-        assert_eq!(meta.output_price_nanos, Some(90_000));
-        let (_, direct) = parse_litellm_entry(
-            "gpt-x",
-            &json!({"input_cost_per_token": 2.5e-6, "output_cost_per_token": 1e-5,
-                "max_input_tokens": 128000, "supports_function_calling": true,
-                "supports_vision": true}),
-        )
-        .unwrap();
-        assert_eq!(direct.input_price_nanos, Some(2_500));
-        assert_eq!(direct.context_length, 128000);
-        assert_eq!(direct.capabilities, ["tools", "vision"]);
-        assert_eq!(direct.input_modalities, ["text", "image"]);
+        // The unprefixed key is the vendor's official price; prefixed
+        // duplicates only serve as fallback when no direct key exists.
+        assert_eq!(meta.source_id, "gpt-x");
+        assert_eq!(meta.input_price_nanos, Some(2_500));
+        assert_eq!(meta.output_price_nanos, Some(10_000));
+        assert_eq!(meta.context_length, 128000);
+        assert_eq!(meta.capabilities, ["tools", "vision"]);
+        assert_eq!(meta.input_modalities, ["text", "image"]);
+        let prefixed_only = parse_litellm(&json!({
+            "azure/gpt-x": {"input_cost_per_token": 9e-6, "output_cost_per_token": 9e-5},
+            "bedrock/gpt-x": {"input_cost_per_token": 8e-6, "output_cost_per_token": 8e-5}
+        }));
+        // Among prefixed keys the lexicographically first wins deterministically.
+        assert_eq!(prefixed_only[0].1.source_id, "azure/gpt-x");
     }
 
     #[test]
-    fn merge_and_calibrate_fill_gaps_without_overwriting() {
+    fn litellm_keeps_single_sided_prices_and_context_only_rows() {
+        let body = json!({
+            "text-embed-x": {"input_cost_per_token": 1e-7, "mode": "embedding"},
+            "context-only": {"max_input_tokens": 32000, "mode": "chat"},
+            "empty-row": {"mode": "chat"}
+        });
+        let entries = parse_litellm(&body);
+        assert_eq!(entries.len(), 2);
+        let embed = entries.iter().find(|(id, _)| id == "text-embed-x").unwrap();
+        assert_eq!(embed.1.input_price_nanos, Some(100));
+        assert_eq!(embed.1.output_price_nanos, None);
+        let ctx = entries.iter().find(|(id, _)| id == "context-only").unwrap();
+        assert_eq!(ctx.1.context_length, 32000);
+        assert_eq!(ctx.1.input_price_nanos, None);
+    }
+
+    #[test]
+    fn merge_and_calibrate_fill_gaps_without_erasing_base_fields() {
         let base = parse_models_dev(&json!({
             "openai": {"models": {
-                "gpt-x": {"id": "gpt-x", "name": "GPT-X", "limit": {"context": 128000},
+                "gpt-x": {"id": "gpt-x", "name": "GPT-X", "description": "flagship",
+                    "reasoning": true, "limit": {"context": 128000},
                     "cost": {"input": 2.5, "output": 10}},
                 "doubao-x": {"id": "doubao-x", "name": "Doubao X"}
             }}
         }));
+        // Sparse overlay: live prices/context but no description/capabilities.
         let overlay = vec![
             parse_entry(&json!({"id": "openai/gpt-x", "name": "OpenAI: GPT-X live",
                 "context_length": 200000,
@@ -782,10 +849,27 @@ mod tests {
         assert_eq!(doubao.1.output_price_nanos, Some(800));
         assert_eq!(doubao.1.context_length, 256000);
         let gpt = merged.iter().find(|(id, _)| id == "gpt-x").unwrap();
-        // OpenRouter overlay replaced models.dev wholesale; LiteLLM never
-        // overwrites prices another source already supplied.
-        assert_eq!(gpt.1.display_name, "GPT-X live");
+        // Overlay prices/context win, but the base's description and
+        // capabilities survive a sparse overlay; LiteLLM never overwrites.
+        assert_eq!(gpt.1.display_name, "GPT-X");
+        assert_eq!(gpt.1.description, "flagship");
+        assert_eq!(gpt.1.capabilities, ["reasoning"]);
         assert_eq!(gpt.1.input_price_nanos, Some(3_000));
         assert_eq!(gpt.1.context_length, 200000);
+        // A zero-priced overlay on the same bare id must not erase base prices.
+        let base2 = parse_models_dev(&json!({
+            "openai": {"models": {
+                "gpt-y": {"id": "gpt-y", "cost": {"input": 2.5, "output": 10}}
+            }}
+        }));
+        let zero_overlay = vec![
+            parse_entry(&json!({"id": "openai/gpt-y",
+                "pricing": {"prompt": "0", "completion": "0"}}))
+            .unwrap(),
+        ];
+        let merged2 = merge_entries(base2, zero_overlay);
+        assert_eq!(merged2.len(), 1);
+        assert_eq!(merged2[0].1.input_price_nanos, Some(2_500));
+        assert_eq!(merged2[0].1.output_price_nanos, Some(10_000));
     }
 }
