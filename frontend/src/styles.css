@@ -568,6 +568,8 @@ kbd { font-family: var(--font-mono); }
 .api-key-row strong { display: block; color: var(--text); font-size: 13px; font-weight: 500; }
 .api-key-row > div > span { display: block; margin-top: 5px; color: var(--text-muted); font-size: 12px; }
 .api-key-row code { color: var(--text-secondary); font-size: 12px; }
+.api-key-row.is-disabled .key-icon { color: var(--text-muted); background: var(--surface); }
+.api-key-row.is-disabled strong, .api-key-row.is-disabled code { color: var(--text-muted); }
 .passkey-add-row { display: flex; align-items: center; gap: 10px; margin-top: 16px; }
 .passkey-add-row .field { flex: 1; min-width: 0; }
 .passkey-add-row .button { flex-shrink: 0; white-space: nowrap; }

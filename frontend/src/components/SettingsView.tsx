@@ -35,7 +35,7 @@ import {
   waitForRestart,
   type UpdateCheckResult,
 } from '../self-update'
-import { DialogActions, Modal, Toggle, SectionHeading } from '../components/UI'
+import { DialogActions, Modal, Toggle, SectionHeading, StatusText } from '../components/UI'
 import { Dropdown } from './Dropdown'
 import KeyPolicyDialog, { type PreviewKey } from './KeyPolicyDialog'
 import ModelNormalizeEditor from './ModelNormalizeEditor'
@@ -417,11 +417,16 @@ export default function SettingsView() {
     ? keyEditDraft(editingKey, routes.filter((route) => route.active).map((route) => route.slug || String(route.id)), new Map(providers.map((provider) => [provider.id, provider.name])))
     : undefined
 
-  const revokeKey = async (id: number) => {
+  const toggleKey = async (id: number, enabled: boolean) => {
     try {
-      await run(() => api(`/api/v1/keys/${id}/revoke`, { method: 'POST' }), ['keys'])
-      if (createdKey?.id === id) setCreatedKey(null)
-      notify(t('keyRemoved'))
+      await run(() =>
+        api(`/api/v1/keys/${id}/enabled`, {
+          method: 'POST',
+          body: JSON.stringify({ enabled }),
+        }), ['keys'],
+      )
+      if (!enabled && createdKey?.id === id) setCreatedKey(null)
+      notify(t(enabled ? 'keyEnabledNotice' : 'keyDisabledNotice'))
     } catch (cause) {
       notify(cause instanceof Error ? cause.message : String(cause))
     }
@@ -919,7 +924,7 @@ export default function SettingsView() {
                 {clientKeys.map((key) => {
                   const value = createdKey?.id === key.id ? createdKey.value : ''
                   return (
-                    <div className="api-key-row" key={key.id}>
+                    <div className={`api-key-row ${key.enabled ? '' : 'is-disabled'}`} key={key.id}>
                       <span className="key-icon">
                         <KeyRound size={17} />
                       </span>
@@ -927,6 +932,7 @@ export default function SettingsView() {
                         <strong>{key.name}</strong>
                         <span className="tabular">
                           {key.models.length} {t('models')} · {key.rpm} RPM
+                          {!key.enabled && <> · <StatusText tone="warning">{t('disabled')}</StatusText></>}
                         </span>
                       </div>
                       <code className="mono">
@@ -963,14 +969,11 @@ export default function SettingsView() {
                         </button>
                       )}
                       {isAdmin && (
-                        <button
-                          type="button"
-                          className="icon-button danger-icon"
-                          onClick={() => revokeKey(key.id)}
-                          aria-label={t('deleteNamed', { name: key.name })}
-                        >
-                          <Trash2 size={15} />
-                        </button>
+                        <Toggle
+                          label={t('toggleNamed', { name: key.name })}
+                          checked={key.enabled}
+                          onChange={() => toggleKey(key.id, !key.enabled)}
+                        />
                       )}
                     </div>
                   )
