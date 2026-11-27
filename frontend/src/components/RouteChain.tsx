@@ -39,6 +39,11 @@ export function RouteChain({
   const [expanded, setExpanded] = useState(false)
   const collapsible = candidates.length > 3
   const visibleCandidates = collapsible && !expanded ? candidates.slice(0, 2) : candidates
+  // The instance is reused across route selections (no key in RoutingView /
+  // Overview); a new route must always start collapsed.
+  useEffect(() => {
+    setExpanded(false)
+  }, [route.id])
   useEffect(() => {
     const el = chainRef.current
     if (!el) return
