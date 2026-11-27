@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { ArrowRight, GitBranch, KeyRound } from 'lucide-react'
 import {
   useTranslation,
@@ -30,6 +30,19 @@ export function RouteChain({
   const [attempts, setAttempts] = useState<{ requestId: string; records: AttemptRecord[] } | null>(
     null,
   )
+  // With many candidates the horizontal chain gets cramped; switch to the
+  // vertical layout once the nodes would be narrower than ~170px.
+  const chainRef = useRef<HTMLDivElement>(null)
+  const [dense, setDense] = useState(false)
+  useEffect(() => {
+    const el = chainRef.current
+    if (!el) return
+    const update = () => setDense(el.clientWidth / (candidates.length + 1) < 214)
+    update()
+    const observer = new ResizeObserver(update)
+    observer.observe(el)
+    return () => observer.disconnect()
+  }, [candidates.length])
 
   useEffect(() => {
     if (!latestRequest) {
@@ -69,7 +82,7 @@ export function RouteChain({
   }
 
   return (
-    <div className={`route-chain ${compact ? 'compact' : ''}`}>
+    <div ref={chainRef} className={`route-chain ${compact ? 'compact' : ''} ${dense ? 'dense' : ''}`}>
       <div className="route-chain-node route-chain-entry">
         <small>
           <KeyRound size={13} />
