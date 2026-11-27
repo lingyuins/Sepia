@@ -511,9 +511,9 @@ fn extract_task_id(value: &Value) -> Option<String> {
         _ => None,
     }
 }
-fn usage_tokens(value: &Value) -> (u64, u64) {
+fn usage_tokens(value: &Value) -> (u64, u64, u64) {
     let Some(usage) = value.get("usage") else {
-        return (0, 0);
+        return (0, 0, 0);
     };
     let token = |keys: &[&str]| -> u64 {
         keys.iter()
@@ -522,10 +522,15 @@ fn usage_tokens(value: &Value) -> (u64, u64) {
     };
     let input = token(&["prompt_tokens", "input_tokens"]);
     let output = token(&["completion_tokens", "output_tokens"]);
+    let cached = usage
+        .pointer("/prompt_tokens_details/cached_tokens")
+        .or_else(|| usage.pointer("/input_tokens_details/cached_tokens"))
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
     if input == 0 && output == 0 {
-        (token(&["total_tokens"]), 0)
+        (token(&["total_tokens"]), 0, cached)
     } else {
-        (input, output)
+        (input, output, cached)
     }
 }
 fn upstream_url(provider: &crate::Provider, prepared: &Prepared) -> String {
@@ -1047,11 +1052,11 @@ async fn forward(
                         .record(route.id, provider.id, model, true, first_byte_ms);
                 }
                 let value: Option<Value> = serde_json::from_slice(&bytes).ok();
-                let (input_tokens, output_tokens) =
-                    value.as_ref().map(usage_tokens).unwrap_or((0, 0));
+                let (input_tokens, output_tokens, cached_tokens) =
+                    value.as_ref().map(usage_tokens).unwrap_or((0, 0, 0));
                 let _ = state
                     .store
-                    .set_request_details(&request_id, first_byte_ms, 0, 0)
+                    .set_request_details(&request_id, first_byte_ms, cached_tokens, 0)
                     .await;
                 if let Some(response) = record_attempt(
                     &state,
@@ -1073,7 +1078,7 @@ async fn forward(
                 }
                 let cost = state
                     .store
-                    .model_cost(model, input_tokens, output_tokens)
+                    .model_cost(model, input_tokens, output_tokens, cached_tokens, true)
                     .await
                     .unwrap_or(0);
                 if guard

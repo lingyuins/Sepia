@@ -156,6 +156,8 @@ pub struct PriceInput {
     model: String,
     input_price_micros: i64,
     output_price_micros: i64,
+    #[serde(default)]
+    cache_read_price_micros: i64,
 }
 #[derive(Deserialize)]
 pub struct KeyInput {
@@ -579,9 +581,9 @@ async fn model_catalog(State(state): State<AppState>) -> Response {
             Err(message) => return error(StatusCode::INTERNAL_SERVER_ERROR, message),
         };
         for model in &provider.models {
-            let price = prices
-                .iter()
-                .find(|(provider_id, priced, _, _)| *provider_id == provider.id && priced == model);
+            let price = prices.iter().find(|(provider_id, priced, _, _, _)| {
+                *provider_id == provider.id && priced == model
+            });
             let entry = json!({
                 "provider_id": provider.id,
                 "provider": provider.name,
@@ -589,8 +591,9 @@ async fn model_catalog(State(state): State<AppState>) -> Response {
                 "protocol": provider.protocol,
                 "enabled": provider.enabled,
                 "key_count": keys.iter().filter(|key| key.models.as_ref().is_none_or(|models| models.iter().any(|item| item == model))).count(),
-                "input_price_micros": price.map(|(_, _, input, _)| *input),
-                "output_price_micros": price.map(|(_, _, _, output)| *output),
+                "input_price_micros": price.map(|(_, _, input, _, _)| *input),
+                "output_price_micros": price.map(|(_, _, _, output, _)| *output),
+                "cache_read_price_micros": price.and_then(|(_, _, _, _, cache)| (*cache > 0).then_some(*cache)),
                 "routes": routes.iter().filter(|route| route.enabled && route.candidates.iter().any(|(_, candidate)| candidate == model)).map(|route| json!({"slug":route.slug,"name":route.name,"strategy":route.strategy})).collect::<Vec<_>>(),
             });
             match models.iter_mut().find(|(name, _)| name == model) {
@@ -1388,6 +1391,7 @@ async fn set_price(State(state): State<AppState>, Json(input): Json<PriceInput>)
             &input.model,
             input.input_price_micros,
             input.output_price_micros,
+            input.cache_read_price_micros,
         )
         .await
     {

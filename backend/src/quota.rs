@@ -172,17 +172,39 @@ impl Store {
         self.settle_quota_inner(reservation, actual_tokens, Some(actual_cost))
             .await
     }
+    /// Cost in micros for one request. `cached_tokens` bills at the
+    /// cache-read price when configured (>0), else at the normal input
+    /// price. `cached_included` says whether `input_tokens` already counts
+    /// the cached tokens (OpenAI/Gemini/Responses: yes; Anthropic reports
+    /// `input_tokens` excluding cache reads: no).
     pub async fn model_cost(
         &self,
         model: &str,
         input_tokens: u64,
         output_tokens: u64,
+        cached_tokens: u64,
+        cached_included: bool,
     ) -> Result<i64, String> {
-        let row = sqlx::query("SELECT input_price_micros, output_price_micros FROM provider_models WHERE model = ? ORDER BY (input_price_micros + output_price_micros) DESC LIMIT 1").bind(model).fetch_optional(&self.pool).await.map_err(|e| e.to_string())?;
+        let row = sqlx::query("SELECT input_price_micros, output_price_micros, cache_read_price_micros FROM provider_models WHERE model = ? ORDER BY (input_price_micros + output_price_micros) DESC LIMIT 1").bind(model).fetch_optional(&self.pool).await.map_err(|e| e.to_string())?;
         Ok(row
             .map(|row| {
-                ((row.get::<i64, _>("input_price_micros") as i128 * input_tokens as i128
-                    + row.get::<i64, _>("output_price_micros") as i128 * output_tokens as i128)
+                let input_price = row.get::<i64, _>("input_price_micros") as i128;
+                let output_price = row.get::<i64, _>("output_price_micros") as i128;
+                let cache_price = row.get::<i64, _>("cache_read_price_micros") as i128;
+                let cache_price = if cache_price > 0 {
+                    cache_price
+                } else {
+                    input_price
+                };
+                let cached = cached_tokens as i128;
+                let uncached = if cached_included {
+                    (input_tokens as i128 - cached).max(0)
+                } else {
+                    input_tokens as i128
+                };
+                ((uncached * input_price
+                    + cached * cache_price
+                    + output_tokens as i128 * output_price)
                     / 1_000_000) as i64
             })
             .unwrap_or(0))
@@ -193,11 +215,15 @@ impl Store {
         model: &str,
         input_price_micros: i64,
         output_price_micros: i64,
+        cache_read_price_micros: i64,
     ) -> Result<(), String> {
         if input_price_micros <= 0 || output_price_micros <= 0 {
             return Err("model pricing required".into());
         }
-        sqlx::query("UPDATE provider_models SET input_price_micros = ?, output_price_micros = ? WHERE provider_id = ? AND model = ?").bind(input_price_micros).bind(output_price_micros).bind(provider_id).bind(model).execute(&self.pool).await.map_err(|e| e.to_string())?;
+        if cache_read_price_micros < 0 {
+            return Err("cache read price cannot be negative".into());
+        }
+        sqlx::query("UPDATE provider_models SET input_price_micros = ?, output_price_micros = ?, cache_read_price_micros = ? WHERE provider_id = ? AND model = ?").bind(input_price_micros).bind(output_price_micros).bind(cache_read_price_micros).bind(provider_id).bind(model).execute(&self.pool).await.map_err(|e| e.to_string())?;
         Ok(())
     }
     pub async fn amount_used(&self, key_id: i64) -> Result<i64, String> {

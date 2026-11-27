@@ -16,7 +16,7 @@ const route = (overrides = {}) => ({
 
 const channel = (overrides = {}) => ({
   provider_id: 1, provider: 'alpha', group_id: 'official', protocol: 'openai', enabled: true,
-  key_count: 2, input_price_micros: 1_000_000, output_price_micros: 2_000_000,
+  key_count: 2, input_price_micros: 1_000_000, output_price_micros: 2_000_000, cache_read_price_micros: 100_000,
   routes: [{ slug: 'smart-x', name: 'Smart X' }],
   ...overrides,
 })
@@ -41,6 +41,9 @@ test('mapCatalog converts snake_case records including metadata', () => {
   assert.equal(models[0].metadata.inputPriceNanos, 1_000)
   assert.equal(models[0].channels[0].inputPriceMicros, 1_000_000)
   assert.equal(models[0].channels[1].inputPriceMicros, null)
+  assert.equal(models[0].channels[0].cacheReadPriceMicros, 100_000)
+  assert.equal(models[0].channels[1].cacheReadPriceMicros, 100_000)
+  assert.equal(mapCatalog([{ model: 'm', base_model: 'm', metadata: null, channels: [channel({ cache_read_price_micros: null })] }])[0].channels[0].cacheReadPriceMicros, null)
   assert.equal(models[2].metadata, null)
 })
 

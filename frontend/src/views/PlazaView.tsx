@@ -107,18 +107,24 @@ function PriceEditor({
   const [output, setOutput] = useState(
     channel.outputPriceMicros === null ? '' : String(channel.outputPriceMicros / 1_000_000),
   )
+  const [cacheRead, setCacheRead] = useState(
+    channel.cacheReadPriceMicros === null ? '' : String(channel.cacheReadPriceMicros / 1_000_000),
+  )
   const [saving, setSaving] = useState(false)
 
   const save = async () => {
     const inputValue = Number(input)
     const outputValue = Number(output)
+    const cacheValue = cacheRead.trim() ? Number(cacheRead) : 0
     if (
       !input.trim() ||
       !output.trim() ||
       !Number.isFinite(inputValue) ||
       !Number.isFinite(outputValue) ||
       inputValue <= 0 ||
-      outputValue <= 0
+      outputValue <= 0 ||
+      !Number.isFinite(cacheValue) ||
+      cacheValue < 0
     ) {
       notify(t('plazaPriceInvalid'))
       return
@@ -133,6 +139,7 @@ function PriceEditor({
             model,
             input_price_micros: Math.round(inputValue * 1_000_000),
             output_price_micros: Math.round(outputValue * 1_000_000),
+            cache_read_price_micros: Math.round(cacheValue * 1_000_000),
           }),
         }), ['providers', 'routes'],
       )
@@ -166,6 +173,14 @@ function PriceEditor({
         type="number"
         placeholder="2.00"
         hint={t('plazaPriceHint')}
+      />
+      <Field
+        label={`${t('plazaCacheReadPrice')} (USD ${t('plazaPriceUnit')})`}
+        value={cacheRead}
+        onChange={setCacheRead}
+        type="number"
+        placeholder="0.10"
+        hint={t('plazaCacheReadPriceHint')}
       />
       <DialogActions onClose={onClose} label={t('saveChanges')} disabled={saving} />
     </form>
@@ -796,6 +811,12 @@ export function PlazaView() {
                               {t('plazaOutputPrice')}{' '}
                               <strong>{formatPrice(channel.outputPriceMicros)}</strong>
                             </span>
+                            {channel.cacheReadPriceMicros !== null && (
+                              <span>
+                                {t('plazaCacheReadPrice')}{' '}
+                                <strong>{formatPrice(channel.cacheReadPriceMicros)}</strong>
+                              </span>
+                            )}
                             <button
                               type="button"
                               className="button text-button"

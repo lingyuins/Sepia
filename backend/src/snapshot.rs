@@ -49,7 +49,7 @@ async fn snapshot(store: &Store) -> Result<ConfigSnapshot, String> {
         .model_prices()
         .await?
         .into_iter()
-        .map(|(provider_id, model, input, output)| ((provider_id, model), (input, output)))
+        .map(|(provider_id, model, input, output, _)| ((provider_id, model), (input, output)))
         .collect();
     let mut contexts = HashMap::new();
     for (model, meta) in store.model_metadata().await? {

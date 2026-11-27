@@ -28,7 +28,7 @@ async fn large_catalog_is_compressed_without_changing_records() {
         .unwrap();
     for model in &provider.models {
         store
-            .set_model_price(provider.id, model, 1_000_000, 2_000_000)
+            .set_model_price(provider.id, model, 1_000_000, 2_000_000, 0)
             .await
             .unwrap();
     }
@@ -147,7 +147,7 @@ async fn catalog_aggregates_channels_prices_scopes_and_routes() {
         .await
         .unwrap();
     store
-        .set_model_price(alpha.id, "gpt-x", 1_000_000, 2_000_000)
+        .set_model_price(alpha.id, "gpt-x", 1_000_000, 2_000_000, 0)
         .await
         .unwrap();
     store
@@ -306,7 +306,7 @@ async fn metadata_sync_fetches_source_and_matches_variants() {
         .await
         .unwrap();
     store
-        .set_model_price(alpha.id, "gpt-x", 5_000_000, 6_000_000)
+        .set_model_price(alpha.id, "gpt-x", 5_000_000, 6_000_000, 0)
         .await
         .unwrap();
     let address = {

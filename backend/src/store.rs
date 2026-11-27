@@ -989,8 +989,8 @@ impl Store {
             })
             .collect()
     }
-    pub async fn model_prices(&self) -> Result<Vec<(i64, String, i64, i64)>, String> {
-        let rows = sqlx::query("SELECT provider_id, model, input_price_micros, output_price_micros FROM provider_models WHERE input_price_micros > 0 AND output_price_micros > 0")
+    pub async fn model_prices(&self) -> Result<Vec<(i64, String, i64, i64, i64)>, String> {
+        let rows = sqlx::query("SELECT provider_id, model, input_price_micros, output_price_micros, cache_read_price_micros FROM provider_models WHERE input_price_micros > 0 AND output_price_micros > 0")
             .fetch_all(&self.pool)
             .await
             .map_err(|e| e.to_string())?;
@@ -1002,6 +1002,7 @@ impl Store {
                     row.get("model"),
                     row.get("input_price_micros"),
                     row.get("output_price_micros"),
+                    row.get("cache_read_price_micros"),
                 )
             })
             .collect())

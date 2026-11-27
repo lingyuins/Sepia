@@ -1112,7 +1112,13 @@ pub async fn relay(
                     }
                     let cost = state
                         .store
-                        .model_cost(model, decoded.input_tokens, decoded.output_tokens)
+                        .model_cost(
+                            model,
+                            decoded.input_tokens,
+                            decoded.output_tokens,
+                            decoded.cached_tokens,
+                            *protocol != Protocol::Anthropic,
+                        )
                         .await
                         .unwrap_or(0);
                     if guard

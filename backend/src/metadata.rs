@@ -20,6 +20,7 @@ pub struct ModelMeta {
     pub capabilities: Vec<String>,
     pub input_price_nanos: Option<i64>,
     pub output_price_nanos: Option<i64>,
+    pub cache_read_price_nanos: Option<i64>,
 }
 
 /// Lowercase, drop a leading `~` alias marker and any `vendor/` prefix.
@@ -196,6 +197,7 @@ pub fn parse_models_dev_entry(provider_id: &str, entry: &Value) -> Option<(Strin
             capabilities,
             input_price_nanos: price_nanos_number(entry.pointer("/cost/input"), true),
             output_price_nanos: price_nanos_number(entry.pointer("/cost/output"), true),
+            cache_read_price_nanos: price_nanos_number(entry.pointer("/cost/cache_read"), true),
         },
     ))
 }
@@ -302,6 +304,10 @@ pub fn parse_litellm_entry(key: &str, entry: &Value) -> Option<(String, ModelMet
             capabilities,
             input_price_nanos: input,
             output_price_nanos: output,
+            cache_read_price_nanos: price_nanos_number(
+                entry.get("cache_read_input_token_cost"),
+                false,
+            ),
         },
     ))
 }
@@ -382,6 +388,9 @@ fn fill_gaps(meta: &mut ModelMeta, over: &ModelMeta) {
     if over.output_price_nanos.is_some() {
         meta.output_price_nanos = over.output_price_nanos;
     }
+    if over.cache_read_price_nanos.is_some() {
+        meta.cache_read_price_nanos = over.cache_read_price_nanos;
+    }
     if over.context_length > 0 {
         meta.context_length = over.context_length;
     }
@@ -400,6 +409,9 @@ pub fn calibrate_prices(entries: &mut [(String, ModelMeta)], litellm: &[(String,
         }
         if meta.output_price_nanos.is_none() {
             meta.output_price_nanos = reference.output_price_nanos;
+        }
+        if meta.cache_read_price_nanos.is_none() {
+            meta.cache_read_price_nanos = reference.cache_read_price_nanos;
         }
         if meta.context_length == 0 {
             meta.context_length = reference.context_length;
@@ -477,6 +489,11 @@ pub fn parse_entry(entry: &Value) -> Option<(String, ModelMeta)> {
             output_price_nanos: price_nanos(
                 entry.pointer("/pricing/completion").and_then(Value::as_str),
             ),
+            cache_read_price_nanos: price_nanos(
+                entry
+                    .pointer("/pricing/input_cache_read")
+                    .and_then(Value::as_str),
+            ),
         },
     ))
 }
@@ -511,7 +528,7 @@ impl Store {
             .map_err(|e| e.to_string())?;
         for (model, meta) in entries {
             sqlx::query(
-                "INSERT INTO model_metadata (model, source, source_id, base_model, display_name, description, context_length, input_modalities, output_modalities, capabilities, input_price_nanos, output_price_nanos, fetched_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))",
+                "INSERT INTO model_metadata (model, source, source_id, base_model, display_name, description, context_length, input_modalities, output_modalities, capabilities, input_price_nanos, output_price_nanos, cache_read_price_nanos, fetched_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))",
             )
             .bind(model)
             .bind(source)
@@ -525,6 +542,7 @@ impl Store {
             .bind(serde_json::to_string(&meta.capabilities).map_err(|e| e.to_string())?)
             .bind(meta.input_price_nanos)
             .bind(meta.output_price_nanos)
+            .bind(meta.cache_read_price_nanos)
             .execute(&mut *transaction)
             .await
             .map_err(|e| e.to_string())?;
@@ -536,46 +554,60 @@ impl Store {
         .execute(&mut *transaction)
         .await
         .map_err(|e| e.to_string())?;
-        let unset: Vec<(i64, String)> = sqlx::query_as(
-            "SELECT provider_id, model FROM provider_models WHERE input_price_micros = 0 AND output_price_micros = 0",
-        )
-        .fetch_all(&mut *transaction)
-        .await
-        .map_err(|e| e.to_string())?;
+        let channels: Vec<(i64, String)> =
+            sqlx::query_as("SELECT provider_id, model FROM provider_models")
+                .fetch_all(&mut *transaction)
+                .await
+                .map_err(|e| e.to_string())?;
         let mut filled = 0usize;
-        for (provider_id, model) in unset {
+        for (provider_id, model) in channels {
             let Some(meta) = match_meta(entries, &model) else {
                 continue;
             };
-            let (Some(input_nanos), Some(output_nanos)) =
+            // nanos/token → micros/token is ×1000 (1 micro = 1000 nanos).
+            // Input/output fill only fully-unset channels (both 0) and need
+            // both reference prices; configured values are never overwritten.
+            if let (Some(input_nanos), Some(output_nanos)) =
                 (meta.input_price_nanos, meta.output_price_nanos)
-            else {
-                continue;
-            };
-            // nanos/token → micros/token is ×1000 (1 micro = 1000 nanos);
-            // non-positive or missing reference prices stay unset.
-            let input_micros = input_nanos * 1000;
-            let output_micros = output_nanos * 1000;
-            if input_micros <= 0 || output_micros <= 0 {
-                continue;
+            {
+                let input_micros = input_nanos * 1000;
+                let output_micros = output_nanos * 1000;
+                if input_micros > 0 && output_micros > 0 {
+                    let updated = sqlx::query(
+                        "UPDATE provider_models SET input_price_micros = ?, output_price_micros = ? WHERE provider_id = ? AND model = ? AND input_price_micros = 0 AND output_price_micros = 0",
+                    )
+                    .bind(input_micros)
+                    .bind(output_micros)
+                    .bind(provider_id)
+                    .bind(&model)
+                    .execute(&mut *transaction)
+                    .await
+                    .map_err(|e| e.to_string())?;
+                    filled += updated.rows_affected() as usize;
+                }
             }
-            sqlx::query(
-                "UPDATE provider_models SET input_price_micros = ?, output_price_micros = ? WHERE provider_id = ? AND model = ?",
-            )
-            .bind(input_micros)
-            .bind(output_micros)
-            .bind(provider_id)
-            .bind(&model)
-            .execute(&mut *transaction)
-            .await
-            .map_err(|e| e.to_string())?;
-            filled += 1;
+            // Cache-read reference price fills only unset channels (0),
+            // independent of the input/output gate above.
+            if let Some(cache_nanos) = meta.cache_read_price_nanos {
+                let cache_micros = cache_nanos * 1000;
+                if cache_micros > 0 {
+                    sqlx::query(
+                        "UPDATE provider_models SET cache_read_price_micros = ? WHERE provider_id = ? AND model = ? AND cache_read_price_micros = 0",
+                    )
+                    .bind(cache_micros)
+                    .bind(provider_id)
+                    .bind(&model)
+                    .execute(&mut *transaction)
+                    .await
+                    .map_err(|e| e.to_string())?;
+                }
+            }
         }
         transaction.commit().await.map_err(|e| e.to_string())?;
         Ok(filled)
     }
     pub async fn model_metadata(&self) -> Result<Vec<(String, ModelMeta)>, String> {
-        let rows = sqlx::query("SELECT model, source_id, base_model, display_name, description, context_length, input_modalities, output_modalities, capabilities, input_price_nanos, output_price_nanos FROM model_metadata ORDER BY model")
+        let rows = sqlx::query("SELECT model, source_id, base_model, display_name, description, context_length, input_modalities, output_modalities, capabilities, input_price_nanos, output_price_nanos, cache_read_price_nanos FROM model_metadata ORDER BY model")
             .fetch_all(&self.pool)
             .await
             .map_err(|e| e.to_string())?;
@@ -597,6 +629,7 @@ impl Store {
                         capabilities: parse("capabilities")?,
                         input_price_nanos: row.get("input_price_nanos"),
                         output_price_nanos: row.get("output_price_nanos"),
+                        cache_read_price_nanos: row.get("cache_read_price_nanos"),
                     },
                 ))
             })
@@ -726,7 +759,7 @@ mod tests {
             "last_updated": "2026-01-01",
             "modalities": {"input": ["text", "image"], "output": ["text"]},
             "limit": {"context": 128000, "output": 16384},
-            "cost": {"input": 2.5, "output": 10}
+            "cost": {"input": 2.5, "output": 10, "cache_read": 0.25}
         });
         let (bare, meta) = parse_models_dev_entry("openai", &entry).unwrap();
         assert_eq!(bare, "gpt-x");
@@ -735,6 +768,7 @@ mod tests {
         assert_eq!(meta.context_length, 128000);
         assert_eq!(meta.input_price_nanos, Some(2_500));
         assert_eq!(meta.output_price_nanos, Some(10_000));
+        assert_eq!(meta.cache_read_price_nanos, Some(250));
         assert_eq!(
             meta.capabilities,
             ["tools", "reasoning", "structured", "vision"]
@@ -776,6 +810,7 @@ mod tests {
         let body = json!({
             "sample_spec": {"input_cost_per_token": 1},
             "gpt-x": {"input_cost_per_token": 2.5e-6, "output_cost_per_token": 1e-5,
+                "cache_read_input_token_cost": 2.5e-7,
                 "max_input_tokens": 128000, "supports_function_calling": true,
                 "supports_vision": true, "mode": "chat"},
             "azure/gpt-x": {"input_cost_per_token": 9e-6, "output_cost_per_token": 9e-5},
@@ -791,6 +826,7 @@ mod tests {
         assert_eq!(meta.source_id, "gpt-x");
         assert_eq!(meta.input_price_nanos, Some(2_500));
         assert_eq!(meta.output_price_nanos, Some(10_000));
+        assert_eq!(meta.cache_read_price_nanos, Some(250));
         assert_eq!(meta.context_length, 128000);
         assert_eq!(meta.capabilities, ["tools", "vision"]);
         assert_eq!(meta.input_modalities, ["text", "image"]);
@@ -833,7 +869,7 @@ mod tests {
         let overlay = vec![
             parse_entry(&json!({"id": "openai/gpt-x", "name": "OpenAI: GPT-X live",
                 "context_length": 200000,
-                "pricing": {"prompt": "0.000003", "completion": "0.000012"}}))
+                "pricing": {"prompt": "0.000003", "completion": "0.000012", "input_cache_read": "0.0000003"}}))
             .unwrap(),
         ];
         let mut merged = merge_entries(base, overlay);
@@ -847,6 +883,16 @@ mod tests {
         let doubao = merged.iter().find(|(id, _)| id == "doubao-x").unwrap();
         assert_eq!(doubao.1.input_price_nanos, Some(400));
         assert_eq!(doubao.1.output_price_nanos, Some(800));
+        // LiteLLM calibrates a missing cache-read price too.
+        let litellm2 = parse_litellm(&json!({
+            "doubao-x": {"input_cost_per_token": 4e-7, "output_cost_per_token": 8e-7,
+                "cache_read_input_token_cost": 4e-8}
+        }));
+        let mut gap = parse_models_dev(&json!({
+            "volc": {"models": {"doubao-x": {"id": "doubao-x"}}}
+        }));
+        calibrate_prices(&mut gap, &litellm2);
+        assert_eq!(gap[0].1.cache_read_price_nanos, Some(40));
         assert_eq!(doubao.1.context_length, 256000);
         let gpt = merged.iter().find(|(id, _)| id == "gpt-x").unwrap();
         // Overlay prices/context win, but the base's description and
@@ -856,6 +902,7 @@ mod tests {
         assert_eq!(gpt.1.capabilities, ["reasoning"]);
         assert_eq!(gpt.1.input_price_nanos, Some(3_000));
         assert_eq!(gpt.1.context_length, 200000);
+        assert_eq!(gpt.1.cache_read_price_nanos, Some(300));
         // A zero-priced overlay on the same bare id must not erase base prices.
         let base2 = parse_models_dev(&json!({
             "openai": {"models": {

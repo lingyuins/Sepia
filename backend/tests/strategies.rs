@@ -141,11 +141,11 @@ async fn cost_optimized_prefers_cheapest_priced_candidate() {
     let a = provider(&store, "expensive", expensive).await;
     let b = provider(&store, "cheap", cheap).await;
     store
-        .set_model_price(a, "upstream-model", 30_000_000, 60_000_000)
+        .set_model_price(a, "upstream-model", 30_000_000, 60_000_000, 0)
         .await
         .unwrap();
     store
-        .set_model_price(b, "upstream-model", 200_000, 600_000)
+        .set_model_price(b, "upstream-model", 200_000, 600_000, 0)
         .await
         .unwrap();
     let route = store

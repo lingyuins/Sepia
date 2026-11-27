@@ -372,7 +372,7 @@ pub fn stream_response(
             let _ = context.store.save_response_body(&context.request_id, &capped_body(&value.to_string())).await;
         }
         let _ = context.store.record_attempt(crate::observability::NewAttempt { request_id: &context.request_id, provider_id: Some(context.provider_id), provider_key_id: Some(context.provider_key_id), model: &context.model, status, error: None, input_tokens: usage.0, output_tokens: usage.1, latency_ms: context.started.elapsed().as_millis() as i64 }).await;
-        let cost = context.store.model_cost(&context.model, usage.0, usage.1).await.unwrap_or(0);
+        let cost = context.store.model_cost(&context.model, usage.0, usage.1, usage.2, outbound != Protocol::Anthropic).await.unwrap_or(0);
         let _ = context.guard.complete(status, usage.0, usage.1, cost).await;
     };
     Response::builder()

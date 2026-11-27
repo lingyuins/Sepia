@@ -291,3 +291,134 @@ async fn streams_record_token_details_and_reconstructed_response_body() {
         "streamed reply"
     );
 }
+
+#[tokio::test]
+async fn cached_tokens_bill_at_the_cache_read_price_for_json_and_streams() {
+    let upstream = upstream().await;
+    let (store, key, _directory) = seeded("details-cache-cost.db", upstream).await;
+    // $1/M input, $2/M output, $0.10/M cache read; usage is 100 input
+    // (80 cached) + 20 output → 20×1 + 80×0.1 + 20×2 = 68 micros.
+    store
+        .set_model_price(1, "gpt-test", 1_000_000, 2_000_000, 100_000)
+        .await
+        .unwrap();
+    let address = gateway(&store).await;
+    let response = chat(address, &key, false, "json cost").await;
+    assert_eq!(response.status(), 200);
+    let record = store.requests().await.unwrap().remove(0);
+    assert_eq!(record.cached_tokens, 80);
+    assert_eq!(record.cost_micros, 68);
+    let response = chat(address, &key, true, "stream cost").await;
+    assert_eq!(response.status(), 200);
+    let _ = response.text().await.unwrap();
+    let record = store.requests().await.unwrap().remove(0);
+    assert_eq!(record.status, "success");
+    assert_eq!(record.cached_tokens, 80);
+    assert_eq!(record.cost_micros, 68);
+}
+
+/// Anthropic upstream reports input_tokens EXCLUDING cache reads; the
+/// cached count must bill at the cache price without being subtracted.
+#[tokio::test]
+async fn anthropic_split_usage_bills_cache_reads_separately() {
+    let usage = json!({"input_tokens": 20, "output_tokens": 20, "cache_read_input_tokens": 80});
+    let handler = move |request: axum::extract::Request| {
+        let usage = usage.clone();
+        async move {
+            let body = axum::body::to_bytes(request.into_body(), 1024 * 1024)
+                .await
+                .unwrap();
+            let value: Value = serde_json::from_slice(&body).unwrap_or(json!({}));
+            if value["stream"].as_bool() == Some(true) {
+                let frames = format!(
+                    "event: message_start\ndata: {{\"type\":\"message_start\",\"message\":{{\"id\":\"msg_1\",\"model\":\"claude-test\",\"usage\":{}}}}}\n\nevent: content_block_delta\ndata: {{\"type\":\"content_block_delta\",\"delta\":{{\"text\":\"hi\"}}}}\n\nevent: message_delta\ndata: {{\"type\":\"message_delta\",\"delta\":{{\"stop_reason\":\"end_turn\"}},\"usage\":{{\"output_tokens\":20}}}}\n\nevent: message_stop\ndata: {{\"type\":\"message_stop\"}}\n\n",
+                    usage
+                );
+                return axum::response::Response::builder()
+                    .header("content-type", "text/event-stream")
+                    .body(axum::body::Body::from(frames))
+                    .unwrap();
+            }
+            axum::response::Json(json!({
+                "id":"msg_1","model":"claude-test","type":"message","role":"assistant",
+                "content":[{"type":"text","text":"hi"}],"stop_reason":"end_turn",
+                "usage":usage
+            }))
+            .into_response()
+        }
+    };
+    use axum::response::IntoResponse;
+    let upstream = serve(Router::new().fallback(any(handler))).await;
+    let directory = tempfile::tempdir().unwrap();
+    let store = Store::connect(&directory.path().join("anthropic-cache-cost.db"))
+        .await
+        .unwrap();
+    let provider = store
+        .create_provider(
+            NewProvider {
+                name: "anthropic".into(),
+                protocol: ProviderProtocol::Anthropic,
+                endpoint: format!("http://{upstream}"),
+                models: vec!["claude-test".into()],
+                plugin_id: None,
+                mode: "single".into(),
+                rewrite: Default::default(),
+            },
+            "upstream-secret",
+            &[],
+            &KeyStore::testing(),
+        )
+        .await
+        .unwrap();
+    store
+        .create_route(NewRoute {
+            slug: "claude-test".into(),
+            name: "claude-test".into(),
+            description: String::new(),
+            patterns: vec!["claude-test".into()],
+            provider_id: provider.id,
+            model: "claude-test".into(),
+            is_default: false,
+            list_members: true,
+            candidates: vec![],
+            rewrite: Default::default(),
+        })
+        .await
+        .unwrap();
+    // 20 uncached×$1/M + 80 cached×$0.10/M + 20 output×$2/M = 68 micros.
+    store
+        .set_model_price(provider.id, "claude-test", 1_000_000, 2_000_000, 100_000)
+        .await
+        .unwrap();
+    let key = store
+        .create_client_key(UpsertClientKey {
+            name: "test".into(),
+            models: vec!["*".into()],
+            token_limit: 0,
+            max_amount_micros: 0,
+            rpm: 0,
+            tpm: 0,
+            expires_at: None,
+            secret: None,
+        })
+        .await
+        .unwrap()
+        .plaintext;
+    let address = gateway(&store).await;
+    for stream in [false, true] {
+        let response = reqwest::Client::new()
+            .post(format!("http://{address}/v1/chat/completions"))
+            .bearer_auth(&key)
+            .json(&json!({"model":"claude-test","stream":stream,"messages":[{"role":"user","content":"anthropic cost"}]}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), 200);
+        let _ = response.text().await.unwrap();
+        let record = store.requests().await.unwrap().remove(0);
+        assert_eq!(record.status, "success");
+        assert_eq!(record.input_tokens, 20);
+        assert_eq!(record.cached_tokens, 80);
+        assert_eq!(record.cost_micros, 68, "stream={stream}");
+    }
+}
