@@ -1358,6 +1358,13 @@ impl Store {
             .execute(&mut *tx)
             .await
             .map_err(|e| e.to_string())?;
+        // requests.client_key_id has no ON DELETE rule; detach history rows
+        // explicitly so the delete is not blocked and records survive.
+        sqlx::query("UPDATE requests SET client_key_id = NULL WHERE client_key_id = ?")
+            .bind(id)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| e.to_string())?;
         let removed = sqlx::query("DELETE FROM client_keys WHERE id = ?")
             .bind(id)
             .execute(&mut *tx)

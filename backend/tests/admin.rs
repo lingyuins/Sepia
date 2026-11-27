@@ -1107,6 +1107,12 @@ async fn client_key_delete_removes_key_policy_and_reservations() {
         .execute(&pool)
         .await
         .unwrap();
+    // A recorded request (no ON DELETE rule) must survive with a NULL key.
+    sqlx::query("INSERT INTO requests (id, client_key_id, protocol, model, status, created_at) VALUES ('req-1', ?, 'openai', 'm', 'success', '2026-01-01T00:00:00+00:00')")
+        .bind(id)
+        .execute(&pool)
+        .await
+        .unwrap();
     client
         .post(url("/api/v1/users"))
         .header("cookie", &cookie)
@@ -1175,6 +1181,15 @@ async fn client_key_delete_removes_key_policy_and_reservations() {
             .await
             .unwrap();
     assert_eq!(policies, 0);
+    let history: Option<i64> =
+        sqlx::query_scalar("SELECT client_key_id FROM requests WHERE id = 'req-1'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        history, None,
+        "request history survives with a NULL key reference"
+    );
     let missing = client
         .delete(url("/api/v1/keys/999999"))
         .header("cookie", &cookie)
