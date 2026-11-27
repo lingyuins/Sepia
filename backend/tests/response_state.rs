@@ -354,3 +354,94 @@ async fn conversation_items_are_scoped_and_paginated() {
         .unwrap();
     assert_eq!(denied.status(), 404);
 }
+
+/// Cancellation must be monotonic in SQL: after cancel_requested is set,
+/// stale worker progress/failure/completion writes cannot overwrite it.
+#[tokio::test]
+async fn cancelled_response_status_survives_stale_worker_writes() {
+    let directory = tempfile::tempdir().unwrap();
+    let store = Store::connect(&directory.path().join("cancel-monotonic.db"))
+        .await
+        .unwrap();
+    let key = store
+        .create_client_key(UpsertClientKey {
+            name: "cancel".into(),
+            models: vec!["*".into()],
+            token_limit: 0,
+            max_amount_micros: 0,
+            rpm: 0,
+            tpm: 0,
+            expires_at: None,
+            secret: None,
+        })
+        .await
+        .unwrap();
+    store
+        .create_response(
+            key.id,
+            "resp-x",
+            "chat",
+            true,
+            None,
+            None,
+            &json!({"model":"chat"}),
+            &[],
+        )
+        .await
+        .unwrap();
+    assert!(
+        store
+            .request_response_cancel(key.id, "resp-x")
+            .await
+            .unwrap()
+    );
+    // Stale background-worker progress write.
+    store
+        .response_status(key.id, "resp-x", "in_progress")
+        .await
+        .unwrap();
+    store
+        .update_response_json(
+            key.id,
+            "resp-x",
+            "in_progress",
+            &json!({"status":"in_progress"}),
+        )
+        .await
+        .unwrap();
+    // Stale final failure / success writes from the relay.
+    store
+        .response_status(key.id, "resp-x", "failed")
+        .await
+        .unwrap();
+    store
+        .update_response(key.id, "resp-x", "failed", &json!({"status":"failed"}), &[])
+        .await
+        .unwrap();
+    store
+        .update_response(
+            key.id,
+            "resp-x",
+            "completed",
+            &json!({"status":"completed"}),
+            &[],
+        )
+        .await
+        .unwrap();
+    let stored = store.response(key.id, "resp-x").await.unwrap().unwrap();
+    assert_eq!(stored.status, "cancelled");
+    // The cancel endpoint's own 'cancelled' write still lands.
+    store
+        .update_response(
+            key.id,
+            "resp-x",
+            "cancelled",
+            &json!({"status":"cancelled"}),
+            &[],
+        )
+        .await
+        .unwrap();
+    let stored = store.response(key.id, "resp-x").await.unwrap().unwrap();
+    assert_eq!(stored.status, "cancelled");
+    assert_eq!(stored.response_json.unwrap()["status"], "cancelled");
+}
