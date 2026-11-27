@@ -832,6 +832,7 @@ kbd { font-family: var(--font-mono); }
 .key-limits-section:not(.expanded) > h3 { margin-bottom: 0; }
 .key-policy-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
 .key-policy-field { display: flex; flex-direction: column; gap: 8px; min-width: 0; margin: 0 0 16px; padding: 0; border: 0; }
+.key-policy-field[hidden] { display: none; }
 .key-policy-field > span, .key-policy-field > legend { color: var(--text-secondary); font-size: 13px; }
 .key-policy-field > small { color: var(--text-muted); font-size: 12px; }
 .key-policy-field .field { margin: 0; }
