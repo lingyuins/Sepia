@@ -45,8 +45,10 @@ impl super::Store {
         response_json: &Value,
         output_items: &[Value],
     ) -> Result<(), String> {
-        sqlx::query("UPDATE api_responses SET status=?,response_json=?,output_items_json=?,updated_at=? WHERE id=? AND client_key_id=?")
-            .bind(status).bind(response_json.to_string()).bind(serde_json::to_string(output_items).map_err(|e| e.to_string())?).bind(chrono::Utc::now().to_rfc3339()).bind(id).bind(client_key_id)
+        // Cancellation is monotonic: once cancel_requested is set, only a
+        // 'cancelled' write may land — stale worker/final writes are dropped.
+        sqlx::query("UPDATE api_responses SET status=?,response_json=?,output_items_json=?,updated_at=? WHERE id=? AND client_key_id=? AND (cancel_requested=0 OR ?='cancelled')")
+            .bind(status).bind(response_json.to_string()).bind(serde_json::to_string(output_items).map_err(|e| e.to_string())?).bind(chrono::Utc::now().to_rfc3339()).bind(id).bind(client_key_id).bind(status)
             .execute(&self.pool).await.map_err(|e| e.to_string())?;
         Ok(())
     }
@@ -97,7 +99,7 @@ impl super::Store {
         status: &str,
         response_json: &Value,
     ) -> Result<(), String> {
-        sqlx::query("UPDATE api_responses SET status=?,response_json=?,updated_at=? WHERE id=? AND client_key_id=?").bind(status).bind(response_json.to_string()).bind(chrono::Utc::now().to_rfc3339()).bind(id).bind(client_key_id).execute(&self.pool).await.map_err(|e| e.to_string())?;
+        sqlx::query("UPDATE api_responses SET status=?,response_json=?,updated_at=? WHERE id=? AND client_key_id=? AND cancel_requested=0").bind(status).bind(response_json.to_string()).bind(chrono::Utc::now().to_rfc3339()).bind(id).bind(client_key_id).execute(&self.pool).await.map_err(|e| e.to_string())?;
         Ok(())
     }
     pub async fn response_status(
@@ -107,7 +109,7 @@ impl super::Store {
         status: &str,
     ) -> Result<(), String> {
         sqlx::query(
-            "UPDATE api_responses SET status=?,response_json=CASE WHEN response_json IS NULL THEN NULL ELSE json_set(response_json,'$.status',?) END,updated_at=? WHERE id=? AND client_key_id=?",
+            "UPDATE api_responses SET status=?,response_json=CASE WHEN response_json IS NULL THEN NULL ELSE json_set(response_json,'$.status',?) END,updated_at=? WHERE id=? AND client_key_id=? AND cancel_requested=0",
         )
         .bind(status)
         .bind(status)
