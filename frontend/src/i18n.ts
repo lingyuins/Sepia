@@ -758,6 +758,8 @@ export const translations = {
   clientRouteId: ['Client-facing route ID', '客户端调用的路由 ID', 'クライアントのルート ID'],
   nextCandidate: ['Next candidate', '下一候选', '次の候補'],
   latestSuccess: ['Latest success', '最近成功', '最新の成功'],
+  showAllCandidates: ['Show all {count} candidates', '显示全部 {count} 个候选', '全{count}件の候補を表示'],
+  collapseCandidates: ['Show fewer candidates', '收起候选', '候補を折りたたむ'],
   actualModel: ['Actual model', '实际模型', '実際のモデル'],
   hopSuccess: ['Succeeded', '成功', '成功'],
   hopRetry: ['Retried', '重试', '再試行'],

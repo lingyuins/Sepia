@@ -34,15 +34,20 @@ export function RouteChain({
   // vertical layout once the nodes would be narrower than ~170px.
   const chainRef = useRef<HTMLDivElement>(null)
   const [dense, setDense] = useState(false)
+  // Long chains stay scannable: show the first two candidates and collapse
+  // the rest behind an explicit toggle (saved order is preserved).
+  const [expanded, setExpanded] = useState(false)
+  const collapsible = candidates.length > 3
+  const visibleCandidates = collapsible && !expanded ? candidates.slice(0, 2) : candidates
   useEffect(() => {
     const el = chainRef.current
     if (!el) return
-    const update = () => setDense(el.clientWidth / (candidates.length + 1) < 214)
+    const update = () => setDense(el.clientWidth / (visibleCandidates.length + 1) < 214)
     update()
     const observer = new ResizeObserver(update)
     observer.observe(el)
     return () => observer.disconnect()
-  }, [candidates.length])
+  }, [visibleCandidates.length])
 
   useEffect(() => {
     if (!latestRequest) {
@@ -92,7 +97,7 @@ export function RouteChain({
         <span>{t('clientRouteId')}</span>
       </div>
 
-      {candidates.map((candidate, index) => {
+      {visibleCandidates.map((candidate, index) => {
         const provider = providers.find((item) => item.name === candidate.provider)
         const hop = hopSummary(candidate.provider, candidate.model)
         return (
@@ -131,6 +136,17 @@ export function RouteChain({
           </div>
         )
       })}
+      {collapsible && (
+        <button
+          type="button"
+          className="route-chain-more"
+          onClick={() => setExpanded((value) => !value)}
+        >
+          {expanded
+            ? t('collapseCandidates')
+            : t('showAllCandidates', { count: candidates.length })}
+        </button>
+      )}
 
       {latestRequest && (
         <div className="route-chain-segment route-chain-result">
