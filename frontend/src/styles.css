@@ -873,6 +873,12 @@ kbd { font-family: var(--font-mono); }
 .key-selection-actions { display: flex; align-items: center; gap: 12px; margin-bottom: 10px; }
 .key-selection-actions button { padding: 0; color: var(--accent); background: transparent; font-size: 12px; }
 .key-selection-actions span { margin-left: auto; color: var(--text-muted); font-size: 12px; }
+.key-access-tabs { display: flex; flex-wrap: wrap; gap: 4px; padding: 3px; margin-bottom: 12px; border: 1px solid var(--border); border-radius: 7px; background: var(--surface-recessed); }
+.key-access-tabs button { display: inline-flex; align-items: center; gap: 6px; padding: 6px 10px; border-radius: 5px; background: transparent; color: var(--text-muted); font-size: 12px; font-weight: 500; transition: color .15s var(--ease-out), background .15s var(--ease-out); }
+.key-access-tabs button:hover { color: var(--text); }
+.key-access-tabs button.active { background: var(--accent-soft); color: var(--accent); }
+.key-access-count { display: inline-flex; align-items: center; justify-content: center; min-width: 16px; height: 16px; padding: 0 4px; border-radius: 8px; background: var(--surface); color: var(--text-muted); font-size: 10px; }
+.key-access-tabs button.active .key-access-count { color: var(--accent); }
 .key-option-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
 .key-option-grid label { display: flex; align-items: center; gap: 8px; min-height: 40px; padding: 8px 10px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface-recessed); color: var(--text-secondary); font-size: 12px; cursor: pointer; }
 .key-option-grid label.selected { color: var(--accent); background: var(--accent-soft); border-color: var(--accent-border); }

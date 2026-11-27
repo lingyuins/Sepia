@@ -1347,6 +1347,26 @@ impl Store {
             .map_err(|e| e.to_string())?;
         Ok(())
     }
+    /// Hard delete: removes the key and its policy/quota usage. Request
+    /// history keeps its rows with a NULL key reference; open reservations
+    /// are cleared first (no CASCADE) so in-flight settlements simply find
+    /// no reservation instead of blocking the delete on a foreign key.
+    pub async fn delete_client_key(&self, id: i64) -> Result<bool, String> {
+        let mut tx = self.pool.begin().await.map_err(|e| e.to_string())?;
+        sqlx::query("DELETE FROM quota_reservations WHERE client_key_id = ?")
+            .bind(id)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| e.to_string())?;
+        let removed = sqlx::query("DELETE FROM client_keys WHERE id = ?")
+            .bind(id)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| e.to_string())?
+            .rows_affected();
+        tx.commit().await.map_err(|e| e.to_string())?;
+        Ok(removed > 0)
+    }
     pub async fn client_keys(&self) -> Result<Vec<ClientKey>, String> {
         let rows = sqlx::query("SELECT id, name, models, token_limit, max_amount_micros, rpm, tpm, expires_at, enabled FROM client_keys ORDER BY id").fetch_all(&self.pool).await.map_err(|e| e.to_string())?;
         rows.into_iter()

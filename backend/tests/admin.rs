@@ -1034,6 +1034,157 @@ async fn client_key_update_edits_metadata_and_preserves_secret() {
 }
 
 #[tokio::test]
+async fn client_key_delete_removes_key_policy_and_reservations() {
+    let directory = tempfile::tempdir().unwrap();
+    let store = Store::connect(&directory.path().join("key-delete.db"))
+        .await
+        .unwrap();
+    let state = AppState::for_testing(store.clone()).await;
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    tokio::spawn(
+        axum::serve(
+            listener,
+            app(state).into_make_service_with_connect_info::<std::net::SocketAddr>(),
+        )
+        .into_future(),
+    );
+    let client = reqwest::Client::new();
+    let url = |path: &str| format!("http://{address}{path}");
+    client
+        .post(url("/api/v1/auth/bootstrap"))
+        .json(&json!({"username":"admin","password":"correct horse","token":"test"}))
+        .send()
+        .await
+        .unwrap();
+    let login = client
+        .post(url("/api/v1/auth/login"))
+        .json(&json!({"username":"admin","password":"correct horse"}))
+        .send()
+        .await
+        .unwrap();
+    let cookie = login
+        .headers()
+        .get("set-cookie")
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .split(';')
+        .next()
+        .unwrap()
+        .to_string();
+    let created: Value = client
+        .post(url("/api/v1/keys"))
+        .header("cookie", &cookie)
+        .json(&json!({"name":"doomed","models":["*"],"token_limit":0,"max_amount_micros":0,"rpm":0,"tpm":0}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let id = created["id"].as_i64().unwrap();
+    let plaintext = created["plaintext"].as_str().unwrap().to_string();
+    let policy = client
+        .post(url(&format!("/api/v1/keys/{id}/policy")))
+        .header("cookie", &cookie)
+        .json(&json!({"ip_whitelist":["10.0.0.1"],"model_quotas":{},"allowed_groups":[],"excluded_providers":[]}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(policy.status(), 200);
+    // An open reservation (no CASCADE) must not block the delete.
+    let pool = sqlx::sqlite::SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect(&format!(
+            "sqlite://{}",
+            directory.path().join("key-delete.db").display()
+        ))
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO quota_reservations (id, client_key_id, model, token_estimate, amount_micros, created_at) VALUES ('res-1', ?, 'm', 100, 0, '2026-01-01T00:00:00+00:00')")
+        .bind(id)
+        .execute(&pool)
+        .await
+        .unwrap();
+    client
+        .post(url("/api/v1/users"))
+        .header("cookie", &cookie)
+        .json(&json!({"username":"editor","password":"password123","role":"editor"}))
+        .send()
+        .await
+        .unwrap();
+    let editor_login = client
+        .post(url("/api/v1/auth/login"))
+        .json(&json!({"username":"editor","password":"password123"}))
+        .send()
+        .await
+        .unwrap();
+    let editor_cookie = editor_login
+        .headers()
+        .get("set-cookie")
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .split(';')
+        .next()
+        .unwrap()
+        .to_string();
+    let denied = client
+        .delete(url(&format!("/api/v1/keys/{id}")))
+        .header("cookie", &editor_cookie)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(denied.status(), 403);
+    let deleted = client
+        .delete(url(&format!("/api/v1/keys/{id}")))
+        .header("cookie", &cookie)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(deleted.status(), 200);
+    let keys: Value = client
+        .get(url("/api/v1/keys"))
+        .header("cookie", &cookie)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert!(keys.as_array().unwrap().iter().all(|key| key["id"] != id));
+    assert!(
+        store
+            .authenticate_client(&plaintext)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    let reservations: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM quota_reservations WHERE client_key_id = ?")
+            .bind(id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(reservations, 0);
+    let policies: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM client_key_policies WHERE client_key_id = ?")
+            .bind(id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(policies, 0);
+    let missing = client
+        .delete(url("/api/v1/keys/999999"))
+        .header("cookie", &cookie)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(missing.status(), 404);
+}
+
+#[tokio::test]
 async fn new_route_auto_grants_keys_that_selected_all_routes() {
     let directory = tempfile::tempdir().unwrap();
     let store = Store::connect(&directory.path().join("auto-grant.db"))

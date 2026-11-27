@@ -1143,6 +1143,13 @@ async fn update_key(
         Err(message) => error(StatusCode::BAD_REQUEST, message),
     }
 }
+async fn delete_key(State(state): State<AppState>, Path(id): Path<i64>) -> Response {
+    match state.store.delete_client_key(id).await {
+        Ok(true) => StatusCode::OK.into_response(),
+        Ok(false) => error(StatusCode::NOT_FOUND, "client key not found"),
+        Err(message) => error(StatusCode::INTERNAL_SERVER_ERROR, message),
+    }
+}
 async fn revoke_key(State(state): State<AppState>, Path(id): Path<i64>) -> Response {
     match state.store.revoke_client_key(id).await {
         Ok(()) => StatusCode::OK.into_response(),
@@ -2000,7 +2007,10 @@ pub fn router(state: AppState) -> Router<AppState> {
             get(routes).post(create_route).delete(delete_all_routes),
         )
         .route("/keys", get(keys).post(create_key))
-        .route("/keys/{id}", axum::routing::put(update_key))
+        .route(
+            "/keys/{id}",
+            axum::routing::put(update_key).delete(delete_key),
+        )
         .route("/keys/{id}/revoke", post(revoke_key))
         .route("/keys/{id}/policy", post(set_policy))
         .route("/keys/{id}/enabled", post(client_key_enabled))

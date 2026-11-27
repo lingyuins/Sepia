@@ -194,6 +194,7 @@ export default function SettingsView() {
   const [updateError, setUpdateError] = useState('')
   const [aiPoolBusy, setAiPoolBusy] = useState(false)
   const [deleteAllRoutesOpen, setDeleteAllRoutesOpen] = useState(false)
+  const [deletingKeyId, setDeletingKeyId] = useState<number | null>(null)
 
   const dirty = JSON.stringify(draft) !== JSON.stringify(settings)
   const update = <K extends keyof Settings>(key: K, value: Settings[K]) =>
@@ -975,6 +976,16 @@ export default function SettingsView() {
                           onChange={() => toggleKey(key.id, !key.enabled)}
                         />
                       )}
+                      {isAdmin && (
+                        <button
+                          type="button"
+                          className="icon-button danger-icon"
+                          onClick={() => setDeletingKeyId(key.id)}
+                          aria-label={t('deleteNamed', { name: key.name })}
+                        >
+                          <Trash2 size={15} />
+                        </button>
+                      )}
                     </div>
                   )
                 })}
@@ -1183,6 +1194,33 @@ export default function SettingsView() {
           <DialogActions
             onClose={() => setDeleteAllRoutesOpen(false)}
             label={t('removeAllRoutesConfirm', { count: routes.length })}
+            danger
+          />
+        </form>
+      </Modal>
+
+      <Modal
+        open={deletingKeyId !== null}
+        onClose={() => setDeletingKeyId(null)}
+        title={t('deleteKeyTitle')}
+        description={t('deleteKeyDescription', { name: clientKeys.find((key) => key.id === deletingKeyId)?.name ?? '' })}
+      >
+        <form
+          onSubmit={(event) => {
+            event.preventDefault()
+            const id = deletingKeyId!
+            setDeletingKeyId(null)
+            run(() => api(`/api/v1/keys/${id}`, { method: 'DELETE' }), ['keys'])
+              .then(() => {
+                if (createdKey?.id === id) setCreatedKey(null)
+                notify(t('keyDeletedNotice'))
+              })
+              .catch((cause) => notify(cause instanceof Error ? cause.message : String(cause)))
+          }}
+        >
+          <DialogActions
+            onClose={() => setDeletingKeyId(null)}
+            label={t('deleteKeyConfirm')}
             danger
           />
         </form>

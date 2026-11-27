@@ -18,14 +18,15 @@ export default function KeyPolicyDialog({ open, onClose, onCreate, initial }: { 
   const providerModels = modelOptions.filter((model) => !model.route).map((model) => model.value)
   const emptyDraft = (): KeyPolicyDraft => ({ name: '', customValue: '', maxAmount: '', tokenLimit: '', rpm: '0', tpm: '0', modelQuotas: '', ipWhitelist: '', expiresAt: '', routeModels: [...routeModels], providerModels: [...providerModels], allowedGroups: [], modelGroups: [], excludedProviders: [], enabled: true })
   const [draft, setDraft] = useState<KeyPolicyDraft>(emptyDraft)
-  const [limitsOpen, setLimitsOpen] = useState(true)
+  const [limitsOpen, setLimitsOpen] = useState(false)
+  const [accessTab, setAccessTab] = useState<'modelGroups' | 'routeGroups' | 'keyModels' | 'keyGroups' | 'keyExcluded'>('modelGroups')
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
   // Editing opens with the stored values; creating always starts from the
   // default all-selected draft. Re-seed on every open so a cancelled edit
   // never leaks into the next dialog.
   useEffect(() => {
-    if (open) { setDraft(initial ? { ...initial } : emptyDraft()); setError('') }
+    if (open) { setDraft(initial ? { ...initial } : emptyDraft()); setError(''); setAccessTab('modelGroups'); setLimitsOpen(false) }
   }, [open])
   const update = <K extends keyof KeyPolicyDraft>(key: K, value: KeyPolicyDraft[K]) => { setDraft((current) => ({ ...current, [key]: value })); setError('') }
   const toggleListItem = (key: 'routeModels' | 'providerModels' | 'allowedGroups' | 'excludedProviders', value: string) => update(key, draft[key].includes(value) ? draft[key].filter((item) => item !== value) : [...draft[key], value])
@@ -88,8 +89,29 @@ export default function KeyPolicyDialog({ open, onClose, onCreate, initial }: { 
         </section>
         <section className="key-policy-section">
           <h3>{t('keyAccess')}</h3>
-          <fieldset className="key-policy-field">
-            <legend>{t('modelGroups')}</legend>
+          <div className="key-access-tabs" role="tablist">
+            {([
+              ['modelGroups', t('modelGroups'), draft.modelGroups.length],
+              ['routeGroups', t('routeGroups'), routeModels.filter((model) => draft.routeModels.includes(model) || groupGranted.has(model)).length],
+              ['keyModels', t('keyModels'), providerModels.filter((model) => draft.providerModels.includes(model) || groupGranted.has(model)).length],
+              ['keyGroups', t('keyGroups'), draft.allowedGroups.length],
+              ['keyExcluded', t('keyExcluded'), draft.excludedProviders.length],
+            ] as const).map(([id, label, count]) => (
+              <button
+                key={id}
+                type="button"
+                role="tab"
+                aria-selected={accessTab === id}
+                className={accessTab === id ? 'active' : ''}
+                onClick={() => setAccessTab(id)}
+              >
+                {label}
+                {count > 0 && <span className="key-access-count">{count}</span>}
+              </button>
+            ))}
+          </div>
+          <fieldset className="key-policy-field" hidden={accessTab !== 'modelGroups'}>
+            <legend className="sr-only">{t('modelGroups')}</legend>
             {modelGroups.length ? (
               <div className="key-option-grid">
                 {modelGroups.map((group) => (
@@ -103,8 +125,8 @@ export default function KeyPolicyDialog({ open, onClose, onCreate, initial }: { 
             ) : <p className="key-empty-options">{t('modelGroupsEmpty')}</p>}
             <small>{t('modelGroupsHint')}</small>
           </fieldset>
-          <fieldset className="key-policy-field">
-            <legend>{t('routeGroups')}</legend>
+          <fieldset className="key-policy-field" hidden={accessTab !== 'routeGroups'}>
+            <legend className="sr-only">{t('routeGroups')}</legend>
             <div className="key-selection-actions">
               <button type="button" onClick={() => update('routeModels', [...routeModels])}>{t('selectAll')}</button>
               <button type="button" onClick={() => update('routeModels', [])}>{t('clear')}</button>
@@ -124,8 +146,8 @@ export default function KeyPolicyDialog({ open, onClose, onCreate, initial }: { 
               })}
             </div>
           </fieldset>
-          <fieldset className="key-policy-field">
-            <legend>{t('keyModels')}</legend>
+          <fieldset className="key-policy-field" hidden={accessTab !== 'keyModels'}>
+            <legend className="sr-only">{t('keyModels')}</legend>
             <div className="key-selection-actions">
               <button type="button" onClick={() => update('providerModels', [...providerModels])}>{t('selectAll')}</button>
               <button type="button" onClick={() => update('providerModels', [])}>{t('clear')}</button>
@@ -145,8 +167,8 @@ export default function KeyPolicyDialog({ open, onClose, onCreate, initial }: { 
               })}
             </div>
           </fieldset>
-          <fieldset className="key-policy-field">
-            <legend>{t('keyGroups')}</legend>
+          <fieldset className="key-policy-field" hidden={accessTab !== 'keyGroups'}>
+            <legend className="sr-only">{t('keyGroups')}</legend>
             {channelGroups.length ? (
               <div className="key-option-grid">
                 {channelGroups.map((group) => (
@@ -159,8 +181,8 @@ export default function KeyPolicyDialog({ open, onClose, onCreate, initial }: { 
               </div>
             ) : <p className="key-empty-options">{t('keyNoGroups')}</p>}
           </fieldset>
-          <fieldset className="key-policy-field">
-            <legend>{t('keyExcluded')}</legend>
+          <fieldset className="key-policy-field" hidden={accessTab !== 'keyExcluded'}>
+            <legend className="sr-only">{t('keyExcluded')}</legend>
             <div className="key-option-grid">
               {providers.map((provider) => (
                 <label className={draft.excludedProviders.includes(provider.name) ? 'selected' : ''} key={provider.id}>
