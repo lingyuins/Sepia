@@ -190,6 +190,45 @@ impl Store {
             .map_err(|e| e.to_string())?;
         Ok(())
     }
+    /// Deletes request history older than `days` (attempts and bodies cascade).
+    /// Batches keep each write short so console reads and inference writes are
+    /// never starved by one giant DELETE; `days == 0` keeps history forever.
+    pub async fn prune_requests(&self, days: u64) -> Result<u64, String> {
+        if days == 0 {
+            return Ok(0);
+        }
+        let cutoff = (Utc::now() - chrono::Duration::days(days as i64)).to_rfc3339();
+        let mut deleted = 0;
+        loop {
+            let affected = sqlx::query(
+                "DELETE FROM requests WHERE id IN (SELECT id FROM requests WHERE created_at < ? LIMIT 500)",
+            )
+            .bind(&cutoff)
+            .execute(&self.pool)
+            .await
+            .map_err(|e| e.to_string())?
+            .rows_affected();
+            deleted += affected;
+            if affected < 500 {
+                return Ok(deleted);
+            }
+        }
+    }
+    /// Background retention sweep: reads `body_retention_days` (0/unset keeps
+    /// forever), prunes in batches and notifies open consoles when rows went.
+    pub async fn enforce_retention(&self, events: &crate::events::Events) -> Result<u64, String> {
+        let days = self
+            .settings()
+            .await?
+            .get("body_retention_days")
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(0);
+        let deleted = self.prune_requests(days).await?;
+        if deleted > 0 {
+            events.publish(crate::events::REQUESTS_CHANGED);
+        }
+        Ok(deleted)
+    }
     pub async fn request_bodies(
         &self,
         request_id: &str,
