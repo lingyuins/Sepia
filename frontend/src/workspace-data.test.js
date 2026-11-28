@@ -100,12 +100,14 @@ test('server settings merge over browser preferences without replacing local cho
     gateway_port: '443',
     max_attempts: 6,
     log_bodies: true,
+    body_retention_days: 14,
   })
   assert.equal(merged.workspace, 'Gateway')
   assert.equal(merged.host, 'gateway.example')
   assert.equal(merged.port, '443')
   assert.equal(merged.retries, '6')
   assert.equal(merged.logBodies, true)
+  assert.equal(merged.bodyRetentionDays, '14')
   assert.equal(merged.language, '简体中文')
   assert.equal(merged.theme, 'Light')
 })

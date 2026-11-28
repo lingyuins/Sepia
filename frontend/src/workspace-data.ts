@@ -60,6 +60,7 @@ export function mergeServerSettings(current: Settings, server: ApiSettings): Set
     streamIdleTimeout: String(server.stream_idle_timeout_seconds ?? current.streamIdleTimeout),
     retryAfterCap: String(server.retry_after_cap_seconds ?? current.retryAfterCap),
     logBodies: server.log_bodies ?? current.logBodies,
+    bodyRetentionDays: String(server.body_retention_days ?? current.bodyRetentionDays),
     normalizePrefixes: server.model_normalize_router_prefixes ?? current.normalizePrefixes,
     normalizeSuffixes: server.model_normalize_functional_suffixes ?? current.normalizeSuffixes,
     normalizeMappings: server.model_normalize_explicit_mappings ?? current.normalizeMappings,

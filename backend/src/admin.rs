@@ -1492,15 +1492,28 @@ async fn update_settings(
     State(state): State<AppState>,
     Json(input): Json<std::collections::HashMap<String, serde_json::Value>>,
 ) -> Response {
+    let mut retention_changed = false;
     for (key, value) in input {
         if let Err(message) = state.store.set_setting(&key, &value).await {
             return error(StatusCode::BAD_REQUEST, message);
         }
+        retention_changed |= key == "body_retention_days";
     }
-    match state.snapshots.refresh(&state.store).await {
-        Ok(()) => StatusCode::OK.into_response(),
-        Err(message) => error(StatusCode::INTERNAL_SERVER_ERROR, message),
+    if let Err(message) = state.snapshots.refresh(&state.store).await {
+        return error(StatusCode::INTERNAL_SERVER_ERROR, message);
     }
+    // Apply a new retention window immediately instead of waiting for the
+    // next hourly sweep; the sweep publishes the requests/analytics hint.
+    if retention_changed {
+        let store = state.store.clone();
+        let events = state.events.clone();
+        tokio::spawn(async move {
+            if let Err(message) = store.enforce_retention(&events).await {
+                eprintln!("retention sweep failed: {message}");
+            }
+        });
+    }
+    StatusCode::OK.into_response()
 }
 async fn settings(State(state): State<AppState>) -> Response {
     match state.store.settings().await {

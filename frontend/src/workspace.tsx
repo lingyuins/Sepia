@@ -144,6 +144,7 @@ export type Settings = {
   allowLan: boolean
   requestLogging: boolean
   logBodies: boolean
+  bodyRetentionDays: string
   retries: string
   connectTimeout: string
   firstByteTimeout: string

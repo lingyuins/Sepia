@@ -81,6 +81,21 @@ async fn main() -> Result<(), String> {
         println!("Bootstrap token: {bootstrap_token}");
     }
     println!("Sepia gateway listening on http://{address}");
+    let events = sepia_gateway::events::Events::new();
+    // Retention sweep: run once at startup, then hourly. `body_retention_days`
+    // is read fresh each pass (0/unset keeps history forever).
+    {
+        let store = store.clone();
+        let events = events.clone();
+        tokio::spawn(async move {
+            loop {
+                if let Err(message) = store.enforce_retention(&events).await {
+                    eprintln!("retention sweep failed: {message}");
+                }
+                tokio::time::sleep(std::time::Duration::from_secs(3600)).await;
+            }
+        });
+    }
     axum::serve(
         listener,
         app(AppState {
@@ -107,7 +122,7 @@ async fn main() -> Result<(), String> {
                 .unwrap_or_else(|_| sepia_gateway::metadata::DEFAULT_OPENROUTER_SOURCE.into()),
             plugins,
             routing_stats: sepia_gateway::strategy::RoutingStats::shared(),
-            events: sepia_gateway::events::Events::new(),
+            events,
         })
         .into_make_service_with_connect_info::<std::net::SocketAddr>(),
     )

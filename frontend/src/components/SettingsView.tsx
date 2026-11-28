@@ -80,6 +80,7 @@ const serverSettingsKeys: (keyof Settings)[] = [
   'streamIdleTimeout',
   'retryAfterCap',
   'logBodies',
+  'bodyRetentionDays',
   'normalizePrefixes',
   'normalizeSuffixes',
   'normalizeMappings',
@@ -245,6 +246,11 @@ export default function SettingsView() {
       notify(t('timeoutValidation'))
       return
     }
+    const retentionDays = Number(nextSettings.bodyRetentionDays)
+    if (!Number.isInteger(retentionDays) || retentionDays < 0 || retentionDays > 3650) {
+      notify(t('bodyRetentionValidation'))
+      return
+    }
     const ruleError = validateNormalizeRules({
       routerPrefixes: nextSettings.normalizePrefixes,
       functionalSuffixes: nextSettings.normalizeSuffixes,
@@ -283,6 +289,7 @@ export default function SettingsView() {
               stream_idle_timeout_seconds: Number(nextSettings.streamIdleTimeout),
               retry_after_cap_seconds: Number(nextSettings.retryAfterCap),
               log_bodies: nextSettings.logBodies,
+              body_retention_days: Number(nextSettings.bodyRetentionDays),
               model_normalize_router_prefixes: nextSettings.normalizePrefixes,
               model_normalize_functional_suffixes: nextSettings.normalizeSuffixes,
               model_normalize_explicit_mappings: nextSettings.normalizeMappings,
@@ -581,6 +588,20 @@ export default function SettingsView() {
                       checked={draft.logBodies}
                       onChange={() => update('logBodies', !draft.logBodies)}
                       label={t('logBodies')}
+                    />
+                  </SettingRow>
+                  <SettingRow
+                    title={t('bodyRetentionDays')}
+                    description={t('bodyRetentionDaysDescription')}
+                  >
+                    <input
+                      className="field"
+                      type="number"
+                      min={0}
+                      max={3650}
+                      value={draft.bodyRetentionDays}
+                      onChange={(e) => update('bodyRetentionDays', e.target.value)}
+                      aria-label={t('bodyRetentionDays')}
                     />
                   </SettingRow>
                 </fieldset>

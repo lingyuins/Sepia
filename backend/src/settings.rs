@@ -42,6 +42,15 @@ impl Store {
                 _ => return Err(format!("{key} must be an integer between 1 and {max}")),
             }
         }
+        // Retention is the one numeric setting where 0 is legal: keep forever.
+        if key == "body_retention_days" {
+            match value.as_u64() {
+                Some(number) if number <= 3650 => {}
+                _ => {
+                    return Err("body_retention_days must be an integer between 0 and 3650".into());
+                }
+            }
+        }
         sqlx::query("INSERT INTO workspace_settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").bind(key).bind(value.to_string()).execute(&self.pool).await.map_err(|e| e.to_string())?;
         Ok(())
     }

@@ -225,7 +225,12 @@ impl Store {
         let options = SqliteConnectOptions::from_str(&format!("sqlite://{}", path.display()))
             .map_err(|e| e.to_string())?
             .create_if_missing(true)
-            .foreign_keys(true);
+            .foreign_keys(true)
+            // WAL keeps the console's long request/analytics reads from
+            // blocking inference writes (DELETE journal starved writers
+            // past sqlx's 5s busy_timeout -> 500 "observability unavailable").
+            .journal_mode(SqliteJournalMode::Wal)
+            .synchronous(SqliteSynchronous::Normal);
         let pool = SqlitePoolOptions::new()
             .max_connections(8)
             .connect_with(options)

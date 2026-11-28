@@ -517,7 +517,10 @@ pub async fn relay(
             .await
     } {
         Ok(id) => id,
-        Err(_) => {
+        Err(cause) => {
+            // The request row backs quota settlement and the audit trail, so
+            // its loss is fatal — but surface the real database error.
+            eprintln!("begin_request failed: {cause}");
             return error(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "observability unavailable",
@@ -627,17 +630,14 @@ pub async fn relay(
         .first()
         .map(|candidate| candidate.1.as_str())
         .unwrap_or(&request.model);
-    if state
+    // Route attribution is observability metadata: losing it must not fail
+    // an otherwise servable request (same semantics as the streaming path).
+    if let Err(cause) = state
         .store
         .set_request_route(&request_id, &route.slug)
         .await
-        .is_err()
     {
-        state.finish_request(&request_id, "failed").await;
-        return error(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "observability unavailable",
-        );
+        eprintln!("set_request_route failed for {request_id}: {cause}");
     }
     let reservation = match state
         .store
@@ -858,7 +858,7 @@ pub async fn relay(
                                     key_id,
                                     chrono::Utc::now() + chrono::Duration::seconds(60),
                                 );
-                                if let Some(response) = record_attempt(
+                                record_attempt(
                                     &state,
                                     crate::observability::NewAttempt {
                                         request_id: &request_id,
@@ -872,10 +872,7 @@ pub async fn relay(
                                         latency_ms: attempt_started.elapsed().as_millis() as i64,
                                     },
                                 )
-                                .await
-                                {
-                                    return response;
-                                }
+                                .await;
                                 if !last_leg {
                                     continue 'legs;
                                 }
@@ -900,7 +897,7 @@ pub async fn relay(
                             || status == StatusCode::UNAUTHORIZED
                             || status == StatusCode::FORBIDDEN;
                         let endpoint_unsupported = matches!(status.as_u16(), 404 | 405 | 501);
-                        if let Some(response) = record_attempt(
+                        record_attempt(
                             &state,
                             crate::observability::NewAttempt {
                                 request_id: &request_id,
@@ -922,10 +919,7 @@ pub async fn relay(
                                 latency_ms: attempt_started.elapsed().as_millis() as i64,
                             },
                         )
-                        .await
-                        {
-                            return response;
-                        }
+                        .await;
                         if retry {
                             if status == StatusCode::TOO_MANY_REQUESTS {
                                 state.key_health.lock().await.cooldowns.insert(
@@ -1022,7 +1016,7 @@ pub async fn relay(
                                 false,
                                 first_byte_ms,
                             );
-                            if let Some(response) = record_attempt(
+                            record_attempt(
                                 &state,
                                 crate::observability::NewAttempt {
                                     request_id: &request_id,
@@ -1036,10 +1030,7 @@ pub async fn relay(
                                     latency_ms: attempt_started.elapsed().as_millis() as i64,
                                 },
                             )
-                            .await
-                            {
-                                return response;
-                            }
+                            .await;
                             if !last_leg {
                                 continue 'legs;
                             }
@@ -1096,7 +1087,7 @@ pub async fn relay(
                             decoded.reasoning_tokens,
                         )
                         .await;
-                    if let Some(response) = record_attempt(
+                    record_attempt(
                         &state,
                         crate::observability::NewAttempt {
                             request_id: &request_id,
@@ -1110,10 +1101,7 @@ pub async fn relay(
                             latency_ms: attempt_started.elapsed().as_millis() as i64,
                         },
                     )
-                    .await
-                    {
-                        return response;
-                    }
+                    .await;
                     let cost = state
                         .store
                         .model_cost(
@@ -1158,16 +1146,13 @@ pub async fn relay(
         "no upstream candidate available",
     )
 }
-async fn record_attempt(
-    state: &AppState,
-    attempt: crate::observability::NewAttempt<'_>,
-) -> Option<Response> {
-    state.store.record_attempt(attempt).await.err().map(|_| {
-        error(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "observability unavailable",
-        )
-    })
+/// Attempt records are observability: a write failure is logged and the
+/// request continues, exactly like the streaming path. Returning 500 here
+/// used to discard already-successful upstream replies.
+async fn record_attempt(state: &AppState, attempt: crate::observability::NewAttempt<'_>) {
+    if let Err(cause) = state.store.record_attempt(attempt).await {
+        eprintln!("record_attempt failed: {cause}");
+    }
 }
 pub fn glob(pattern: &str, value: &str) -> bool {
     let (pattern, value) = (pattern.as_bytes(), value.as_bytes());

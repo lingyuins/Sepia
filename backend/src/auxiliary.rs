@@ -680,7 +680,10 @@ async fn forward(
         .await
     {
         Ok(id) => id,
-        Err(_) => {
+        Err(cause) => {
+            // The request row backs quota settlement and the audit trail, so
+            // its loss is fatal — but surface the real database error.
+            eprintln!("begin_request failed: {cause}");
             return error(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "observability unavailable",
@@ -741,17 +744,14 @@ async fn forward(
         .first()
         .map(|(_, model, _)| model.as_str())
         .unwrap_or(&model);
-    if state
+    // Route attribution is observability metadata: losing it must not fail
+    // an otherwise servable request (same semantics as the streaming path).
+    if let Err(cause) = state
         .store
         .set_request_route(&request_id, &route_label)
         .await
-        .is_err()
     {
-        state.finish_request(&request_id, "failed").await;
-        return error(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "observability unavailable",
-        );
+        eprintln!("set_request_route failed for {request_id}: {cause}");
     }
     let reservation = match state
         .store
@@ -913,7 +913,7 @@ async fn forward(
                             .await
                             .cooldowns
                             .insert(key_id, chrono::Utc::now() + chrono::Duration::seconds(60));
-                        if let Some(response) = record_attempt(
+                        record_attempt(
                             &state,
                             crate::observability::NewAttempt {
                                 request_id: &request_id,
@@ -927,10 +927,7 @@ async fn forward(
                                 latency_ms: attempt_started.elapsed().as_millis() as i64,
                             },
                         )
-                        .await
-                        {
-                            return response;
-                        }
+                        .await;
                         continue 'addresses;
                     }
                 };
@@ -962,7 +959,7 @@ async fn forward(
                         429 | 408 | 500 | 502 | 503 | 504 | 401 | 403
                     );
                     let endpoint_unsupported = matches!(status.as_u16(), 404 | 405 | 501);
-                    if let Some(response) = record_attempt(
+                    record_attempt(
                         &state,
                         crate::observability::NewAttempt {
                             request_id: &request_id,
@@ -980,10 +977,7 @@ async fn forward(
                             latency_ms: attempt_started.elapsed().as_millis() as i64,
                         },
                     )
-                    .await
-                    {
-                        return response;
-                    }
+                    .await;
                     if retry {
                         if status == StatusCode::TOO_MANY_REQUESTS {
                             state
@@ -1025,7 +1019,7 @@ async fn forward(
                                 first_byte_ms,
                             );
                         }
-                        if let Some(response) = record_attempt(
+                        record_attempt(
                             &state,
                             crate::observability::NewAttempt {
                                 request_id: &request_id,
@@ -1039,10 +1033,7 @@ async fn forward(
                                 latency_ms: attempt_started.elapsed().as_millis() as i64,
                             },
                         )
-                        .await
-                        {
-                            return response;
-                        }
+                        .await;
                         continue 'addresses;
                     }
                 };
@@ -1058,7 +1049,7 @@ async fn forward(
                     .store
                     .set_request_details(&request_id, first_byte_ms, cached_tokens, 0)
                     .await;
-                if let Some(response) = record_attempt(
+                record_attempt(
                     &state,
                     crate::observability::NewAttempt {
                         request_id: &request_id,
@@ -1072,10 +1063,7 @@ async fn forward(
                         latency_ms: attempt_started.elapsed().as_millis() as i64,
                     },
                 )
-                .await
-                {
-                    return response;
-                }
+                .await;
                 let cost = state
                     .store
                     .model_cost(model, input_tokens, output_tokens, cached_tokens, true)
@@ -1128,16 +1116,13 @@ async fn forward(
         "no upstream candidate available",
     )
 }
-async fn record_attempt(
-    state: &AppState,
-    attempt: crate::observability::NewAttempt<'_>,
-) -> Option<Response> {
-    state.store.record_attempt(attempt).await.err().map(|_| {
-        error(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "observability unavailable",
-        )
-    })
+/// Attempt records are observability: a write failure is logged and the
+/// request continues, exactly like the streaming path. Returning 500 here
+/// used to discard already-successful upstream replies.
+async fn record_attempt(state: &AppState, attempt: crate::observability::NewAttempt<'_>) {
+    if let Err(cause) = state.store.record_attempt(attempt).await {
+        eprintln!("record_attempt failed: {cause}");
+    }
 }
 
 #[cfg(test)]
