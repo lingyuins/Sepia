@@ -38,9 +38,15 @@ function formatCost(cost: string): string {
   return `$${Number(value.toPrecision(2))}`
 }
 
-// Compact K/M/B counts in every locale. The original's 万/亿 display is a
-// separate chinaMode setting Sepia does not carry — never tie it to zh.
+// Octopus formatCount parity with the reference screenshot: the Chinese UI
+// shows 万/亿 (the original gates this on chinaMode, which Sepia does not
+// carry — zh locale is the stand-in), other locales use compact K/M/B.
 function formatCount(value: number, locale: string): string {
+  if (locale.startsWith('zh')) {
+    if (value >= 100_000_000) return `${(value / 100_000_000).toFixed(2)} 亿`
+    if (value >= 10_000) return `${(value / 10_000).toFixed(2)} 万`
+    return value.toLocaleString(locale)
+  }
   if (value >= 1_000_000_000) return `${(value / 1_000_000_000).toFixed(2)}B`
   if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(2)}M`
   if (value >= 1_000) return `${(value / 1_000).toFixed(2)}K`
