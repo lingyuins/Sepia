@@ -53,11 +53,12 @@ impl RequestGuard {
             )
             .await?
         {
-            // The reservation only disappears when its client key was
-            // hard-deleted (the delete clears open reservations and nulls
-            // requests.client_key_id in one transaction). Skip the quota
-            // settlement but still record the real outcome; a key that
-            // still exists means the reservation was lost — fail loudly.
+            // A missing reservation is ambiguous: hard-deleting the client
+            // key clears its open reservations (and nulls
+            // requests.client_key_id in one transaction), but a normal
+            // settle also deletes the row. Verify the key was actually
+            // deleted before skipping quota settlement; a key that still
+            // exists means the reservation was lost — fail loudly.
             if !self.store.request_key_deleted(&self.request_id).await? {
                 return Err("reservation not found".into());
             }
