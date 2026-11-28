@@ -172,7 +172,10 @@ export function RequestDetails({ request }: { request: RequestRecord }) {
         <div>
           <dt>{t('totalTokens')}</dt>
           <dd className="tabular">
-            {(request.inputTokens + request.outputTokens).toLocaleString(locale)}
+            {(request.protocol === 'anthropic'
+              ? request.inputTokens + request.cachedTokens + request.outputTokens
+              : request.inputTokens + request.outputTokens
+            ).toLocaleString(locale)}
           </dd>
         </div>
         <div>

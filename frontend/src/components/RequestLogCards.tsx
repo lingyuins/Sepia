@@ -38,13 +38,9 @@ function formatCost(cost: string): string {
   return `$${Number(value.toPrecision(2))}`
 }
 
-// Octopus formatCount: Chinese uses 万/亿, other locales use K/M/B.
+// Compact K/M/B counts (matches the reference screenshot; the original's
+// 万/亿 mode is a separate chinaMode setting Sepia does not carry).
 function formatCount(value: number, locale: string): string {
-  if (locale.startsWith('zh')) {
-    if (value >= 100_000_000) return `${(value / 100_000_000).toFixed(2)} 亿`
-    if (value >= 10_000) return `${(value / 10_000).toFixed(2)} 万`
-    return value.toLocaleString(locale)
-  }
   if (value >= 1_000_000_000) return `${(value / 1_000_000_000).toFixed(2)}B`
   if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(2)}M`
   if (value >= 1_000) return `${(value / 1_000).toFixed(2)}K`
@@ -86,6 +82,8 @@ export function RequestLogCards({
           row.protocol === 'anthropic'
             ? row.inputTokens
             : Math.max(0, row.inputTokens - row.cachedTokens)
+        // Total = real input + cache reads + output under BOTH protocol conventions.
+        const totalTokens = realInput + row.cachedTokens + row.outputTokens
         const metrics: { icon: typeof Clock; color: string; text: string; title: string; strong?: string }[] = [
           { icon: Clock, color: brandColor, text: formatLogTime(row.createdAt, locale), title: t('time') },
           { icon: KeyRound, color: '#f97316', text: row.key, title: t('apiKey') },
@@ -97,7 +95,7 @@ export function RequestLogCards({
           { icon: ArrowDownToLine, color: '#22c55e', text: `${row.cachedTokens > 0 ? t('logRealInput') : t('logInput')} ${number(realInput)}`, title: row.cachedTokens > 0 ? t('logRealInput') : t('logInput') },
           ...(row.cachedTokens > 0 ? [{ icon: ArrowDownToLine, color: '#14b8a6', text: `${t('cachedTokens')} ${number(row.cachedTokens)}`, title: t('cachedTokens') }] : []),
           { icon: ArrowUpFromLine, color: '#a855f7', text: `${t('logOutput')} ${number(row.outputTokens)}`, title: t('logOutput') },
-          { icon: Sigma, color: '#f43f5e', text: `${t('totalTokens')} ${number(row.inputTokens + row.outputTokens)}`, title: t('totalTokens'), strong: 'log-metric-rose' },
+          { icon: Sigma, color: '#f43f5e', text: `${t('totalTokens')} ${number(totalTokens)}`, title: t('totalTokens'), strong: 'log-metric-rose' },
           { icon: DollarSign, color: '#10b981', text: `${t('logCost')} ${formatCost(row.cost)}`, title: t('estimatedCost'), strong: 'log-metric-emerald' },
           ...(row.reasoningTokens > 0 ? [{ icon: Brain, color: '#6366f1', text: `${t('logReasoning')} ${number(row.reasoningTokens)}${t('logReasoningUnit')}`, title: t('reasoningTokens') }] : []),
         ]

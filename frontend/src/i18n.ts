@@ -87,7 +87,7 @@ export const translations = {
   logTps: ['TPS', 'TPS', 'TPS'],
   logCost: ['Cost', '费用', '費用'],
   logReasoning: ['Reasoning', '思考', '思考'],
-  logReasoningUnit: [' tokens', '字', 'トークン'],
+  logReasoningUnit: [' tokens', ' Token', ' トークン'],
   logEndpointChatFull: ['Chat Completions', 'Chat Completions', 'Chat Completions'],
   logEndpointChat: ['Chat', '对话', 'チャット'],
   logEndpointMessages: ['Messages', 'Messages', 'Messages'],
