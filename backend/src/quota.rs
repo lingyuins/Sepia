@@ -114,7 +114,7 @@ impl Store {
         reservation: &str,
         actual_tokens: i64,
         actual_cost_override: Option<i64>,
-    ) -> Result<(), String> {
+    ) -> Result<bool, String> {
         if actual_tokens < 0 {
             return Err("invalid actual usage".into());
         }
@@ -123,14 +123,19 @@ impl Store {
             .begin_with("BEGIN IMMEDIATE")
             .await
             .map_err(|e| e.to_string())?;
-        let row = sqlx::query(
+        // A missing reservation returns Ok(false): hard-deleting a client
+        // key clears its open reservations, and the guard verifies the key
+        // is actually gone before accepting an unquota'd settlement.
+        let Some(row) = sqlx::query(
             "SELECT client_key_id, model, token_estimate, amount_micros, created_at FROM quota_reservations WHERE id = ?",
         )
         .bind(reservation)
         .fetch_optional(&mut *tx)
         .await
         .map_err(|e| e.to_string())?
-        .ok_or("reservation not found")?;
+        else {
+            return Ok(false);
+        };
         let key_id: i64 = row.get("client_key_id");
         let reserved: i64 = row.get("token_estimate");
         let period = chrono::DateTime::parse_from_rfc3339(&row.get::<String, _>("created_at"))
@@ -157,9 +162,13 @@ impl Store {
             .await
             .map_err(|e| e.to_string())?;
         tx.commit().await.map_err(|e| e.to_string())?;
-        Ok(())
+        Ok(true)
     }
-    pub async fn settle_quota(&self, reservation: &str, actual_tokens: i64) -> Result<(), String> {
+    pub async fn settle_quota(
+        &self,
+        reservation: &str,
+        actual_tokens: i64,
+    ) -> Result<bool, String> {
         self.settle_quota_inner(reservation, actual_tokens, None)
             .await
     }
@@ -168,7 +177,7 @@ impl Store {
         reservation: &str,
         actual_tokens: i64,
         actual_cost: i64,
-    ) -> Result<(), String> {
+    ) -> Result<bool, String> {
         self.settle_quota_inner(reservation, actual_tokens, Some(actual_cost))
             .await
     }
@@ -185,7 +194,10 @@ impl Store {
         cached_tokens: u64,
         cached_included: bool,
     ) -> Result<i64, String> {
-        let row = sqlx::query("SELECT input_price_micros, output_price_micros, cache_read_price_micros FROM provider_models WHERE model = ? ORDER BY (input_price_micros + output_price_micros) DESC LIMIT 1").bind(model).fetch_optional(&self.pool).await.map_err(|e| e.to_string())?;
+        // Same "configured price" gate as `model_prices` (both columns > 0):
+        // a channel holding only a sync-filled cache-read price must never
+        // bill uncached/output tokens at zero while the catalog shows unset.
+        let row = sqlx::query("SELECT input_price_micros, output_price_micros, cache_read_price_micros FROM provider_models WHERE model = ? AND input_price_micros > 0 AND output_price_micros > 0 ORDER BY (input_price_micros + output_price_micros) DESC LIMIT 1").bind(model).fetch_optional(&self.pool).await.map_err(|e| e.to_string())?;
         Ok(row
             .map(|row| {
                 let input_price = row.get::<i64, _>("input_price_micros") as i128;

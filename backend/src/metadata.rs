@@ -398,12 +398,21 @@ fn fill_gaps(meta: &mut ModelMeta, over: &ModelMeta) {
 
 /// Fill missing prices/contexts on merged entries from the LiteLLM price
 /// table. LiteLLM never overwrites a price another source already supplied;
-/// it only calibrates gaps (and zero contexts).
+/// it only calibrates gaps (and zero contexts). `:free` variants keep the
+/// context calibration but never take prices: `base_model` strips the
+/// suffix, so the lookup would pull the paid base model's prices onto a
+/// genuinely free variant.
 pub fn calibrate_prices(entries: &mut [(String, ModelMeta)], litellm: &[(String, ModelMeta)]) {
     for (_, meta) in entries.iter_mut() {
         let Some(reference) = match_meta(litellm, &meta.source_id) else {
             continue;
         };
+        if meta.context_length == 0 {
+            meta.context_length = reference.context_length;
+        }
+        if bare_id(&meta.source_id).ends_with(":free") {
+            continue;
+        }
         if meta.input_price_nanos.is_none() {
             meta.input_price_nanos = reference.input_price_nanos;
         }
@@ -412,9 +421,6 @@ pub fn calibrate_prices(entries: &mut [(String, ModelMeta)], litellm: &[(String,
         }
         if meta.cache_read_price_nanos.is_none() {
             meta.cache_read_price_nanos = reference.cache_read_price_nanos;
-        }
-        if meta.context_length == 0 {
-            meta.context_length = reference.context_length;
         }
     }
 }
@@ -512,6 +518,20 @@ pub fn match_meta<'a>(entries: &'a [(String, ModelMeta)], local: &str) -> Option
         .map(|(_, meta)| meta)
 }
 
+/// Price lookup for channel auto-fill: `:free` variants only match an exact
+/// bare id — the base-model fallback would bill a free variant at the paid
+/// base model's prices. Display metadata still uses `match_meta`.
+fn match_price_meta<'a>(entries: &'a [(String, ModelMeta)], local: &str) -> Option<&'a ModelMeta> {
+    let bare = bare_id(local);
+    if bare.ends_with(":free") {
+        return entries
+            .iter()
+            .find(|(id, _)| *id == bare)
+            .map(|(_, meta)| meta);
+    }
+    match_meta(entries, local)
+}
+
 impl Store {
     /// Replaces the reference catalog and fills unset channel prices from
     /// matched reference prices in the same transaction. Configured prices
@@ -561,7 +581,7 @@ impl Store {
                 .map_err(|e| e.to_string())?;
         let mut filled = 0usize;
         for (provider_id, model) in channels {
-            let Some(meta) = match_meta(entries, &model) else {
+            let Some(meta) = match_price_meta(entries, &model) else {
                 continue;
             };
             // nanos/token → micros/token is ×1000 (1 micro = 1000 nanos).
@@ -918,5 +938,57 @@ mod tests {
         assert_eq!(merged2.len(), 1);
         assert_eq!(merged2[0].1.input_price_nanos, Some(2_500));
         assert_eq!(merged2[0].1.output_price_nanos, Some(10_000));
+    }
+
+    #[test]
+    fn litellm_calibration_never_prices_free_variants() {
+        let mut entries = vec![
+            parse_entry(&json!({"id": "vendor/gpt-x:free",
+                "pricing": {"prompt": "0", "completion": "0"}}))
+            .unwrap(),
+            parse_entry(&json!({"id": "vendor/gpt-x",
+                "pricing": {"prompt": "0", "completion": "0"}}))
+            .unwrap(),
+        ];
+        let litellm = parse_litellm(&json!({
+            "gpt-x": {"input_cost_per_token": 9e-6, "output_cost_per_token": 9e-5,
+                "max_input_tokens": 128000}
+        }));
+        calibrate_prices(&mut entries, &litellm);
+        let free = entries.iter().find(|(id, _)| id == "gpt-x:free").unwrap();
+        assert_eq!(free.1.input_price_nanos, None);
+        assert_eq!(free.1.output_price_nanos, None);
+        // Context still calibrates: free variants share the base context.
+        assert_eq!(free.1.context_length, 128_000);
+        // The paid base variant still calibrates its gaps.
+        let paid = entries.iter().find(|(id, _)| id == "gpt-x").unwrap();
+        assert_eq!(paid.1.input_price_nanos, Some(9_000));
+        assert_eq!(paid.1.context_length, 128_000);
+    }
+
+    #[test]
+    fn price_match_for_free_variants_requires_exact_id() {
+        let entries = vec![
+            parse_entry(&json!({"id": "vendor/gpt-x",
+                "pricing": {"prompt": "0.000001", "completion": "0.000002"}}))
+            .unwrap(),
+        ];
+        // No exact `gpt-x:free` entry: the paid base must not supply prices.
+        assert!(match_price_meta(&entries, "gpt-x:free").is_none());
+        assert!(match_price_meta(&entries, "vendor/gpt-x:free").is_none());
+        // The paid id keeps the base fallback; an exact free entry matches.
+        assert!(match_price_meta(&entries, "gpt-x").is_some());
+        let mut entries = entries;
+        entries.push(
+            parse_entry(&json!({"id": "vendor/gpt-x:free",
+                "pricing": {"prompt": "0.000003", "completion": "0.000004"}}))
+            .unwrap(),
+        );
+        assert_eq!(
+            match_price_meta(&entries, "gpt-x:free")
+                .unwrap()
+                .input_price_nanos,
+            Some(3_000)
+        );
     }
 }

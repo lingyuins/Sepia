@@ -117,6 +117,17 @@ impl Store {
         sqlx::query("UPDATE requests SET status = ?, input_tokens = ?, output_tokens = ?, cost_micros = ?, latency_ms = ? WHERE id = ?").bind(status).bind(input_tokens as i64).bind(output_tokens as i64).bind(cost_micros).bind(latency_ms).bind(request_id).execute(&self.pool).await.map_err(|e| e.to_string())?;
         Ok(())
     }
+    /// True when the request exists with a NULL client_key_id — the state a
+    /// hard key delete leaves behind. Guards settlement after the key's open
+    /// quota reservations were cleared.
+    pub async fn request_key_deleted(&self, request_id: &str) -> Result<bool, String> {
+        let row = sqlx::query("SELECT client_key_id FROM requests WHERE id = ?")
+            .bind(request_id)
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(|e| e.to_string())?;
+        Ok(row.is_some_and(|row| row.get::<Option<i64>, _>("client_key_id").is_none()))
+    }
     pub async fn set_request_client_ip(&self, request_id: &str, ip: &str) -> Result<(), String> {
         sqlx::query("UPDATE requests SET client_ip = ? WHERE id = ?")
             .bind(ip)

@@ -44,13 +44,24 @@ impl RequestGuard {
         {
             return Ok(());
         }
-        self.store
+        if !self
+            .store
             .settle_quota_amount(
                 &self.reservation,
                 (input_tokens + output_tokens) as i64,
                 cost_micros,
             )
-            .await?;
+            .await?
+        {
+            // The reservation only disappears when its client key was
+            // hard-deleted (the delete clears open reservations and nulls
+            // requests.client_key_id in one transaction). Skip the quota
+            // settlement but still record the real outcome; a key that
+            // still exists means the reservation was lost — fail loudly.
+            if !self.store.request_key_deleted(&self.request_id).await? {
+                return Err("reservation not found".into());
+            }
+        }
         self.store
             .finish_request_with_cost(
                 &self.request_id,

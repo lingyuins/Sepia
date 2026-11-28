@@ -777,3 +777,109 @@ async fn metadata_sync_merges_models_dev_openrouter_and_litellm() {
     let gpt = stored.iter().find(|(id, _)| id == "gpt-x").unwrap();
     assert_eq!(gpt.1.input_price_nanos, Some(3_000));
 }
+
+#[tokio::test]
+async fn metadata_sync_survives_on_litellm_alone() {
+    let directory = tempfile::tempdir().unwrap();
+    let store = Store::connect(&directory.path().join("litellm-only.db"))
+        .await
+        .unwrap();
+    let mut state = AppState::for_testing(store.clone()).await;
+    let litellm = json!({
+        "doubao-x": {"input_cost_per_token": 4e-7, "output_cost_per_token": 8e-7,
+            "max_input_tokens": 256000}
+    });
+    let mock = {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        tokio::spawn(
+            axum::serve(
+                listener,
+                axum::Router::new()
+                    .route(
+                        "/litellm",
+                        axum::routing::get(move || {
+                            let body = litellm.clone();
+                            async move { axum::Json(body) }
+                        }),
+                    )
+                    .route(
+                        "/broken",
+                        axum::routing::get(|| async {
+                            (axum::http::StatusCode::INTERNAL_SERVER_ERROR, "boom")
+                        }),
+                    ),
+            )
+            .into_future(),
+        );
+        address
+    };
+    state.metadata_source = format!("http://{mock}/broken");
+    state.openrouter_source = format!("http://{mock}/broken");
+    state.litellm_source = format!("http://{mock}/litellm");
+    let address = {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        tokio::spawn(
+            axum::serve(
+                listener,
+                sepia_gateway::server::app(state.clone())
+                    .into_make_service_with_connect_info::<std::net::SocketAddr>(),
+            )
+            .into_future(),
+        );
+        address
+    };
+    let client = reqwest::Client::new();
+    let url = |path: &str| format!("http://{address}{path}");
+    client
+        .post(url("/api/v1/auth/bootstrap"))
+        .json(&json!({"username":"admin","password":"correct horse","token":state.bootstrap_token}))
+        .send()
+        .await
+        .unwrap();
+    let login = client
+        .post(url("/api/v1/auth/login"))
+        .json(&json!({"username":"admin","password":"correct horse"}))
+        .send()
+        .await
+        .unwrap();
+    let cookie = login
+        .headers()
+        .get("set-cookie")
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .split(';')
+        .next()
+        .unwrap()
+        .to_string();
+    let sync = client
+        .post(url("/api/v1/models/metadata/sync"))
+        .header("cookie", &cookie)
+        .send()
+        .await
+        .unwrap();
+    // The sync only fails when NO source yields any model: the LiteLLM
+    // table alone keeps the catalog alive, with both failures disclosed.
+    assert_eq!(sync.status(), 200);
+    let body: Value = sync.json().await.unwrap();
+    assert_eq!(body["count"], 1);
+    let warnings = body["warnings"].as_array().unwrap();
+    assert_eq!(warnings.len(), 2);
+    assert!(
+        warnings
+            .iter()
+            .any(|w| w.as_str().unwrap().starts_with("primary source skipped"))
+    );
+    assert!(
+        warnings
+            .iter()
+            .any(|w| w.as_str().unwrap().starts_with("openrouter source skipped"))
+    );
+    assert_eq!(body["sources"].as_array().unwrap().len(), 1);
+    let stored = store.model_metadata().await.unwrap();
+    let doubao = stored.iter().find(|(id, _)| id == "doubao-x").unwrap();
+    assert_eq!(doubao.1.input_price_nanos, Some(400));
+    assert_eq!(doubao.1.context_length, 256_000);
+}

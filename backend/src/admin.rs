@@ -520,6 +520,12 @@ async fn sync_model_metadata(State(state): State<AppState>) -> Response {
                 if table.is_empty() {
                     warnings.push("litellm source returned no prices".to_string());
                 } else {
+                    if entries.is_empty() {
+                        // Last-resort base catalog: when the primary and the
+                        // overlay yielded nothing, the LiteLLM table keeps
+                        // the sync alive instead of failing it.
+                        entries = table.clone();
+                    }
                     crate::metadata::calibrate_prices(&mut entries, &table);
                     labels.push(label(
                         &state.litellm_source,

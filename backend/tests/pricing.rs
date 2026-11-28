@@ -192,3 +192,134 @@ async fn model_cost_bills_cached_tokens_at_the_cache_read_price() {
             .is_err()
     );
 }
+
+#[tokio::test]
+async fn cache_only_channel_prices_never_bill_uncached_or_output_tokens() {
+    let directory = tempfile::tempdir().unwrap();
+    let store = Store::connect(&directory.path().join("cache-only.db"))
+        .await
+        .unwrap();
+    store
+        .create_provider(
+            NewProvider {
+                name: "cache-only".into(),
+                protocol: ProviderProtocol::OpenAI,
+                endpoint: "http://localhost/v1".into(),
+                models: vec!["ghost-model".into()],
+                plugin_id: None,
+                mode: "single".into(),
+                rewrite: Default::default(),
+            },
+            "secret",
+            &[],
+            &sepia_gateway::KeyStore::testing(),
+        )
+        .await
+        .unwrap();
+    // Metadata sync fills unset cache prices independently of the dual-price
+    // gate: a context-only LiteLLM row can leave input=0/output=0/cache>0.
+    store
+        .replace_model_metadata(
+            "test",
+            &[(
+                "ghost-model".to_string(),
+                sepia_gateway::metadata::ModelMeta {
+                    source_id: "ghost-model".into(),
+                    base_model: "ghost-model".into(),
+                    display_name: String::new(),
+                    description: String::new(),
+                    context_length: 32_000,
+                    input_modalities: vec!["text".into()],
+                    output_modalities: vec!["text".into()],
+                    capabilities: vec![],
+                    input_price_nanos: None,
+                    output_price_nanos: None,
+                    cache_read_price_nanos: Some(100),
+                },
+            )],
+        )
+        .await
+        .unwrap();
+    // The catalog keeps showing the channel as unpriced…
+    assert!(
+        store
+            .model_prices()
+            .await
+            .unwrap()
+            .iter()
+            .all(|(_, model, _, _, _)| model != "ghost-model")
+    );
+    // …and billing must not pick the cache-only row to bill uncached/output
+    // tokens at zero.
+    assert_eq!(
+        store
+            .model_cost("ghost-model", 10_000, 500, 8_000, true)
+            .await
+            .unwrap(),
+        0
+    );
+}
+
+#[tokio::test]
+async fn channel_price_autofill_never_bills_free_variants_at_paid_prices() {
+    let directory = tempfile::tempdir().unwrap();
+    let store = Store::connect(&directory.path().join("free-autofill.db"))
+        .await
+        .unwrap();
+    store
+        .create_provider(
+            NewProvider {
+                name: "dual".into(),
+                protocol: ProviderProtocol::OpenAI,
+                endpoint: "http://localhost/v1".into(),
+                models: vec!["gpt-x".into(), "gpt-x:free".into()],
+                plugin_id: None,
+                mode: "single".into(),
+                rewrite: Default::default(),
+            },
+            "secret",
+            &[],
+            &sepia_gateway::KeyStore::testing(),
+        )
+        .await
+        .unwrap();
+    // The catalog only carries the paid entry; the free channel must stay
+    // unset instead of inheriting the paid base model's prices.
+    store
+        .replace_model_metadata(
+            "test",
+            &[(
+                "gpt-x".to_string(),
+                sepia_gateway::metadata::ModelMeta {
+                    source_id: "gpt-x".into(),
+                    base_model: "gpt-x".into(),
+                    display_name: String::new(),
+                    description: String::new(),
+                    context_length: 128_000,
+                    input_modalities: vec!["text".into()],
+                    output_modalities: vec!["text".into()],
+                    capabilities: vec![],
+                    input_price_nanos: Some(1_000),
+                    output_price_nanos: Some(2_000),
+                    cache_read_price_nanos: Some(100),
+                },
+            )],
+        )
+        .await
+        .unwrap();
+    let prices = store.model_prices().await.unwrap();
+    let paid = prices
+        .iter()
+        .find(|(_, model, ..)| model == "gpt-x")
+        .unwrap();
+    assert_eq!(paid.2, 1_000_000);
+    assert_eq!(paid.3, 2_000_000);
+    assert!(prices.iter().all(|(_, model, ..)| model != "gpt-x:free"));
+    assert_eq!(
+        store
+            .model_cost("gpt-x:free", 10_000, 500, 0, true)
+            .await
+            .unwrap(),
+        0
+    );
+}
