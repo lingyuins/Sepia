@@ -43,6 +43,8 @@ import {
   clampWeight,
   type RouteStrategyId,
 } from '../route-strategy'
+import { themeSkin } from '../theme'
+import { RouteCards } from '../components/RouteCards'
 
 type ProbeResult = {
   ok: boolean
@@ -561,7 +563,7 @@ function RouteForm({ route, onClose }: { route: RouteRule | null; onClose: () =>
 }
 
 export function RoutingView() {
-  const { routes, run, notify, requests } = useWorkspace()
+  const { routes, run, notify, requests, providers, settings } = useWorkspace()
   const { t, strategyName } = useRouteMeta()
   const [editing, setEditing] = useState<RouteRule | null>(null)
   const [open, setOpen] = useState(false)
@@ -573,6 +575,7 @@ export function RoutingView() {
   const [testRunning, setTestRunning] = useState(false)
   const [query, setQuery] = useState('')
   const [selectedId, setSelectedId] = useState<number>()
+  const octopus = themeSkin(settings.theme) === 'octopus'
 
   const filtered = useMemo(
     () =>
@@ -630,6 +633,32 @@ export function RoutingView() {
     }
   }
 
+  const persistRoute = (route: RouteRule, patch: Partial<RouteRule>) => {
+    const next = { ...route, ...patch }
+    // Candidate edits may legally empty a route (update_route accepts zero
+    // candidates); only strategy/weight edits go through the same guard.
+    if (!routeDisplayCandidates(next).length && !patch.candidates) {
+      notify(t('routeNeedsModel'))
+      return
+    }
+    try {
+      const payload = routeInput(next, providers)
+      run(() =>
+        api(`/api/v1/routes/${route.id}`, { method: 'PUT', body: JSON.stringify(payload) }),
+        ['routes'],
+      ).catch((cause) => notify(cause instanceof Error ? cause.message : String(cause)))
+    } catch (cause) {
+      notify(cause instanceof Error ? cause.message : String(cause))
+    }
+  }
+
+  const copyRouteName = (route: RouteRule) => {
+    void navigator.clipboard
+      .writeText(route.name || route.slug || '')
+      .then(() => notify(t('routeNameCopied')))
+      .catch(() => notify(t('clipboardUnavailable')))
+  }
+
   return (
     <>
       <SectionHeading
@@ -649,7 +678,43 @@ export function RoutingView() {
         }
       />
 
-      {filtered.length && selectedRoute ? (
+      {octopus ? (
+        <>
+          <div className="route-cards-search">
+            <div className="search-field">
+              <Search size={15} />
+              <input
+                aria-label={t('searchRouteProviderModel')}
+                placeholder={t('searchRouteProviderModel')}
+                value={query}
+                onChange={(event) => setQuery(event.target.value)}
+              />
+            </div>
+          </div>
+          {filtered.length ? (
+            <RouteCards
+              routes={filtered}
+              isDark={settings.theme !== 'Octopus light'}
+              onToggle={(route, enabled) => updateRoute(route.id, enabled)}
+              onEdit={(route) => {
+                setEditing(route)
+                setOpen(true)
+              }}
+              onDelete={setDeleting}
+              onTest={(route) => void runRouteTest(route)}
+              onCopy={copyRouteName}
+              onPersist={persistRoute}
+            />
+          ) : (
+            <div className="empty-state glass-panel">
+              {t('noRouteMatch')}
+              <button type="button" className="button text-button" onClick={() => setQuery('')}>
+                {t('clearSearch')}
+              </button>
+            </div>
+          )}
+        </>
+      ) : filtered.length && selectedRoute ? (
         <div className="route-workspace">
           <section className="route-list glass-panel" aria-label={t('routeList')}>
             <div className="route-list-heading">

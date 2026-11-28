@@ -9,7 +9,7 @@ type WireRewrite = { headers?: HeaderRule[]; param_replace?: ParamReplaceRule[];
 
 export type ApiProvider = { id: number; name: string; protocol: ProviderProtocol; endpoint: string; models: string[]; key_count: number; enabled: boolean; group_id: string; mode?: 'single' | 'unified'; keys?: { id: number; models: string[] | null; endpoint_id?: number | null }[]; endpoints?: { id: number; endpoint: string; keys?: { id: number; models: string[] | null }[] }[] } & WireRewrite
 export type ApiRoute = { id: number; slug: string; name: string; description: string; patterns: string[]; is_default: boolean; list_members: boolean; enabled: boolean; candidates: [number, string][]; strategy?: string; weights?: number[] } & WireRewrite
-export type ApiRequest = { id: string; protocol: string; model: string; route?: string; status: string; input_tokens: number; output_tokens: number; cost_micros: number; latency_ms: number; created_at: string; provider?: string; key?: string; client_ip?: string | null; first_byte_ms?: number | null; cached_tokens?: number; reasoning_tokens?: number; has_body?: boolean }
+export type ApiRequest = { id: string; protocol: string; model: string; requested_model?: string; route?: string; status: string; input_tokens: number; output_tokens: number; cost_micros: number; latency_ms: number; created_at: string; provider?: string; key?: string; client_ip?: string | null; first_byte_ms?: number | null; cached_tokens?: number; reasoning_tokens?: number; has_body?: boolean; error?: string | null }
 export type ApiAttempt = { id: number; request_id: string; provider_id: number | null; provider_key_id: number | null; model: string; status: string; error: string | null; input_tokens: number; output_tokens: number; latency_ms: number; created_at: string }
 export type ApiClientKey = { id: number; name: string; models: string[]; token_limit: number; max_amount_micros: number; rpm: number; tpm: number; expires_at: string | null; enabled: boolean; model_groups?: number[]; ip_whitelist?: string[]; model_quotas?: Record<string, { rpm: number; tpm: number }>; allowed_groups?: string[]; excluded_providers?: number[] }
 export type ApiGroup = { id: string; name: string; description: string }
@@ -98,6 +98,7 @@ export function mapRequest(request: ApiRequest): RequestRecord {
     createdAt: request.created_at,
     time: '',
     model: request.model || 'unknown',
+    requestedModel: request.requested_model || request.model || 'unknown',
     provider: request.provider || '—',
     tokens: String(total),
     inputTokens: request.input_tokens,
@@ -114,6 +115,7 @@ export function mapRequest(request: ApiRequest): RequestRecord {
     reasoningTokens: request.reasoning_tokens ?? 0,
     protocol: request.protocol,
     hasBody: request.has_body === true,
+    error: request.error ?? null,
   }
 }
 export function mapAttempt(attempt: ApiAttempt): AttemptRecord {

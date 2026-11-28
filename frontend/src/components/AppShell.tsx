@@ -195,8 +195,10 @@ export function Topbar({
 }) {
   const { settings, setSettings, session } = useWorkspace()
   const t = useTranslation()
+  const octopus = settings.theme.startsWith('Octopus')
   const isLight =
     settings.theme === 'Light' ||
+    settings.theme === 'Octopus light' ||
     (settings.theme === 'System' &&
       typeof window !== 'undefined' &&
       window.matchMedia('(prefers-color-scheme: light)').matches)
@@ -204,7 +206,9 @@ export function Topbar({
   const toggleTheme = () => {
     setSettings({
       ...settings,
-      theme: isLight ? 'Sepia dark' : 'Light',
+      theme: octopus
+        ? isLight ? 'Octopus dark' : 'Octopus light'
+        : isLight ? 'Sepia dark' : 'Light',
     })
   }
 

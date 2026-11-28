@@ -831,42 +831,33 @@ export default function SettingsView() {
                 <div className="theme-options">
                   {(
                     [
-                      ['Sepia dark', Moon],
-                      ['Light', Sun],
-                      ['System', Monitor],
-                    ] as [string, typeof Moon][]
-                  ).map(([name, Icon]) => (
+                      ['Sepia dark', Moon, 'dark-preview', 'darkTheme'],
+                      ['Light', Sun, 'light-preview', 'lightTheme'],
+                      ['System', Monitor, 'system-preview', 'systemTheme'],
+                      ['Octopus dark', Moon, 'octopus-dark-preview', 'octopusDarkTheme'],
+                      ['Octopus light', Sun, 'octopus-light-preview', 'octopusLightTheme'],
+                    ] as [string, typeof Moon, string, 'darkTheme'][]
+                  ).map(([name, Icon, preview, label]) => (
                     <button
                       type="button"
                       key={name}
                       className={`theme-option ${draft.theme === name ? 'selected' : ''}`}
                       onClick={() => update('theme', name)}
                     >
-                      <div
-                        className={`theme-preview ${
-                          name === 'Light'
-                            ? 'light-preview'
-                            : name === 'System'
-                              ? 'system-preview'
-                              : 'dark-preview'
-                        }`}
-                      >
+                      <div className={`theme-preview ${preview}`}>
                         <i />
                         <span />
                         <span />
                       </div>
                       <span>
                         <Icon size={14} />
-                        {name === 'Sepia dark'
-                          ? t('darkTheme')
-                          : name === 'Light'
-                            ? t('lightTheme')
-                            : t('systemTheme')}
+                        {t(label)}
                         {draft.theme === name && <Check size={14} />}
                       </span>
                     </button>
                   ))}
                 </div>
+                <p className="setting-note octopus-skin-note">{t('octopusSkinNote')}</p>
               </section>
 
               <section className="settings-card glass-panel">

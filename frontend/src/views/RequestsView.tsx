@@ -15,6 +15,8 @@ import { ProviderCell, SectionHeading, StatusText } from '../components/UI'
 import { Dropdown } from '../components/Dropdown'
 import { api } from '../api'
 import { formatRequestTime } from '../analytics'
+import { themeSkin } from '../theme'
+import { RequestLogCards } from '../components/RequestLogCards'
 
 export function RequestsTable({
   compact = false,
@@ -104,7 +106,7 @@ export function RequestsTable({
 }
 
 export function RequestsView({ onSelect }: { onSelect: (row: RequestRecord) => void }) {
-  const { requests, notify, run, refresh } = useWorkspace()
+  const { requests, notify, run, refresh, settings } = useWorkspace()
   const t = useTranslation()
   const locale = useLocale()
   const [query, setQuery] = useState('')
@@ -113,6 +115,7 @@ export function RequestsView({ onSelect }: { onSelect: (row: RequestRecord) => v
   const [page, setPage] = useState(1)
   const [clearOpen, setClearOpen] = useState(false)
   const pageSize = 8
+  const octopus = themeSkin(settings.theme) === 'octopus'
 
   // The request list is period-independent; analytics/overview period pickers
   // may have left the shared snapshot on a narrower window. Re-read the
@@ -127,7 +130,7 @@ export function RequestsView({ onSelect }: { onSelect: (row: RequestRecord) => v
     () =>
       requests.filter(
         (row) =>
-          `${row.model} ${row.route} ${row.provider} ${row.key} ${row.id}`
+          `${row.model} ${row.requestedModel} ${row.route} ${row.provider} ${row.key} ${row.id}`
             .toLowerCase()
             .includes(query.toLowerCase()) &&
           (provider === 'All providers' || row.provider === provider) &&
@@ -306,10 +309,18 @@ export function RequestsView({ onSelect }: { onSelect: (row: RequestRecord) => v
           </span>
         </div>
 
-        <RequestsTable
-          rows={filtered.slice((currentPage - 1) * pageSize, currentPage * pageSize)}
-          onSelect={onSelect}
-        />
+        {octopus ? (
+          <RequestLogCards
+            rows={filtered.slice((currentPage - 1) * pageSize, currentPage * pageSize)}
+            onSelect={onSelect}
+            isDark={settings.theme !== 'Octopus light'}
+          />
+        ) : (
+          <RequestsTable
+            rows={filtered.slice((currentPage - 1) * pageSize, currentPage * pageSize)}
+            onSelect={onSelect}
+          />
+        )}
 
         <div className="table-pagination tabular">
           <span>

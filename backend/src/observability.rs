@@ -9,6 +9,7 @@ pub struct RequestRecord {
     pub id: String,
     pub protocol: String,
     pub model: String,
+    pub requested_model: String,
     pub status: String,
     pub input_tokens: i64,
     pub output_tokens: i64,
@@ -23,6 +24,7 @@ pub struct RequestRecord {
     pub cached_tokens: i64,
     pub reasoning_tokens: i64,
     pub has_body: bool,
+    pub error: Option<String>,
 }
 #[derive(Debug, Clone, Serialize)]
 pub struct AttemptRecord {
@@ -73,6 +75,18 @@ impl Store {
     pub async fn set_request_route(&self, request_id: &str, route: &str) -> Result<(), String> {
         sqlx::query("UPDATE requests SET route = ? WHERE id = ?")
             .bind(route)
+            .bind(request_id)
+            .execute(&self.pool)
+            .await
+            .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+    /// Non-Gemini inbound bodies only carry the model in the decoded request;
+    /// persist it once decoding succeeds so failed/cancelled rows keep the
+    /// requested name even without a successful attempt to resolve.
+    pub async fn set_request_model(&self, request_id: &str, model: &str) -> Result<(), String> {
+        sqlx::query("UPDATE requests SET model = ? WHERE id = ?")
+            .bind(model)
             .bind(request_id)
             .execute(&self.pool)
             .await
@@ -190,13 +204,14 @@ impl Store {
         Ok(row.map(|row| (row.get("request_body"), row.get("response_body"))))
     }
     pub async fn requests(&self) -> Result<Vec<RequestRecord>, String> {
-        let rows = sqlx::query("SELECT r.id, r.protocol, COALESCE((SELECT a.model FROM attempts a WHERE a.request_id = r.id AND a.status IN ('success', 'streaming') ORDER BY a.id DESC LIMIT 1), r.model) model, r.route, r.status, r.input_tokens, r.output_tokens, r.cost_micros, r.latency_ms, r.created_at, r.client_ip, r.first_byte_ms, r.cached_tokens, r.reasoning_tokens, EXISTS(SELECT 1 FROM request_bodies b WHERE b.request_id = r.id) has_body, (SELECT p.name FROM attempts a JOIN providers p ON p.id = a.provider_id WHERE a.request_id = r.id AND a.status IN ('success', 'streaming') ORDER BY a.id DESC LIMIT 1) provider, k.name key FROM requests r LEFT JOIN client_keys k ON k.id = r.client_key_id ORDER BY r.created_at DESC LIMIT 200").fetch_all(&self.pool).await.map_err(|e| e.to_string())?;
+        let rows = sqlx::query("SELECT r.id, r.protocol, COALESCE((SELECT a.model FROM attempts a WHERE a.request_id = r.id AND a.status IN ('success', 'streaming') ORDER BY a.id DESC LIMIT 1), r.model) model, r.model requested_model, r.route, r.status, r.input_tokens, r.output_tokens, r.cost_micros, r.latency_ms, r.created_at, r.client_ip, r.first_byte_ms, r.cached_tokens, r.reasoning_tokens, EXISTS(SELECT 1 FROM request_bodies b WHERE b.request_id = r.id) has_body, (SELECT p.name FROM attempts a JOIN providers p ON p.id = a.provider_id WHERE a.request_id = r.id AND a.status IN ('success', 'streaming') ORDER BY a.id DESC LIMIT 1) provider, k.name key, COALESCE((SELECT a.error FROM attempts a WHERE a.request_id = r.id AND a.error IS NOT NULL AND a.status != 'retry' ORDER BY a.id DESC LIMIT 1), (SELECT a.error FROM attempts a WHERE a.request_id = r.id AND a.error IS NOT NULL ORDER BY a.id DESC LIMIT 1)) error FROM requests r LEFT JOIN client_keys k ON k.id = r.client_key_id ORDER BY r.created_at DESC LIMIT 200").fetch_all(&self.pool).await.map_err(|e| e.to_string())?;
         Ok(rows
             .into_iter()
             .map(|row| RequestRecord {
                 id: row.get("id"),
                 protocol: row.get("protocol"),
                 model: row.get("model"),
+                requested_model: row.get("requested_model"),
                 status: row.get("status"),
                 input_tokens: row.get("input_tokens"),
                 output_tokens: row.get("output_tokens"),
@@ -211,6 +226,7 @@ impl Store {
                 cached_tokens: row.get("cached_tokens"),
                 reasoning_tokens: row.get("reasoning_tokens"),
                 has_body: row.get::<i64, _>("has_body") != 0,
+                error: row.get("error"),
             })
             .collect())
     }

@@ -100,6 +100,7 @@ export type RequestRecord = {
   createdAt: string
   time: string
   model: string
+  requestedModel: string
   provider: string
   tokens: string
   inputTokens: number
@@ -116,6 +117,7 @@ export type RequestRecord = {
   reasoningTokens: number
   protocol: string
   hasBody: boolean
+  error: string | null
 }
 export type AttemptRecord = {
   id: number

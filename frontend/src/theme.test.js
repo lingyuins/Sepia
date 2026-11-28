@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import { themeTokens } from './theme.ts'
+import { themeTokens, themeSkin, themeMode } from './theme.ts'
 
 test('uses the existing accent colors in dark mode', () => {
   assert.deepEqual(themeTokens('dark', 'Sage'), { accent: '#c4eaaa', accentText: '#1a2a1a', connection: '#c4eaaa', focus: '#c4eaaa' })
@@ -17,4 +17,20 @@ test('uses readable accent variants for every light theme preference', () => {
 
 test('falls back to Sage for an unknown accent preference', () => {
   assert.deepEqual(themeTokens('light', 'unknown'), themeTokens('light', 'Sage'))
+})
+
+test('the Octopus skin pins its Scandi mint palette regardless of accent', () => {
+  assert.deepEqual(themeTokens('dark', 'Sky', 'octopus'), { accent: '#6ba887', accentText: '#151107', connection: '#6ba887', focus: '#6ba887' })
+  assert.deepEqual(themeTokens('light', 'Sand', 'octopus'), { accent: '#599576', accentText: '#f9f8f5', connection: '#599576', focus: '#599576' })
+})
+
+test('theme families resolve skin and mode independently of the system preference', () => {
+  assert.equal(themeSkin('Octopus dark'), 'octopus')
+  assert.equal(themeSkin('Octopus light'), 'octopus')
+  assert.equal(themeSkin('Sepia dark'), 'sepia')
+  assert.equal(themeSkin('System'), 'sepia')
+  assert.equal(themeMode('Octopus dark', true), 'dark')
+  assert.equal(themeMode('Octopus light', false), 'light')
+  assert.equal(themeMode('System', true), 'light')
+  assert.equal(themeMode('Sepia dark', true), 'dark')
 })

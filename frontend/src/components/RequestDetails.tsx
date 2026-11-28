@@ -7,14 +7,14 @@ import { ProviderCell, StatusText } from './UI'
 
 type Bodies = { request_body: string; response_body: string | null }
 
-function formatTps(row: RequestRecord): string {
+export function formatTps(row: RequestRecord): string {
   if (row.firstByteMs === null || row.outputTokens <= 0) return '—'
   const generationMs = row.latencyMs - row.firstByteMs
   if (generationMs <= 0) return '—'
   return `${((row.outputTokens / generationMs) * 1000).toFixed(1)} tk/s`
 }
 
-function cacheHitRate(row: RequestRecord): string {
+export function cacheHitRate(row: RequestRecord): string {
   if (row.cachedTokens <= 0) return '—'
   const promptTokens =
     row.protocol === 'anthropic' ? row.inputTokens + row.cachedTokens : row.inputTokens
@@ -152,6 +152,12 @@ export function RequestDetails({ request }: { request: RequestRecord }) {
           <div>
             <dt>{t('clientIp')}</dt>
             <dd className="mono">{request.clientIp}</dd>
+          </div>
+        )}
+        {request.error && (
+          <div className="request-detail-wide request-detail-error">
+            <dt>{t('status')}</dt>
+            <dd className="mono">{request.error}</dd>
           </div>
         )}
         <div className="request-detail-wide">

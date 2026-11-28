@@ -169,6 +169,8 @@ async fn records_ip_first_byte_and_token_details_without_bodies_by_default() {
     assert_eq!(requests.len(), 1);
     let record = &requests[0];
     assert_eq!(record.status, "success");
+    assert_eq!(record.requested_model, "gpt-test");
+    assert_eq!(record.error, None);
     assert_eq!(record.client_ip.as_deref(), Some("127.0.0.1"));
     assert!(record.first_byte_ms.is_some_and(|ms| ms >= 0));
     assert!(
@@ -196,6 +198,58 @@ async fn records_ip_first_byte_and_token_details_without_bodies_by_default() {
         .await
         .unwrap();
     assert_eq!(bodies.status(), 404);
+}
+
+#[tokio::test]
+async fn failed_requests_keep_the_requested_model_and_the_last_attempt_error() {
+    // Upstream that always answers 529: the request fails on every leg, so the
+    // stored model cannot be resolved from a successful attempt.
+    let upstream = serve(Router::new().fallback(any(|| async {
+        axum::response::Response::builder()
+            .status(529)
+            .header("content-type", "application/json")
+            .body(axum::body::Body::from(
+                r#"{"type":"error","error":{"type":"overloaded_error"}}"#,
+            ))
+            .unwrap()
+    })))
+    .await;
+    let (store, key, _directory) = seeded("details-failed.db", upstream).await;
+    let address = gateway(&store).await;
+    let response = chat(address, &key, false, "hi").await;
+    assert_eq!(response.status(), 502);
+    let requests = store.requests().await.unwrap();
+    assert_eq!(requests.len(), 1);
+    let record = &requests[0];
+    assert_eq!(record.status, "failed");
+    assert_eq!(record.requested_model, "gpt-test");
+    let error = record.error.as_deref().unwrap();
+    assert!(error.contains("529"), "error was {error}");
+}
+
+#[tokio::test]
+async fn exhausted_budget_reports_the_last_attempt_error_instead_of_an_empty_one() {
+    // Single candidate: responses leg 500 + chat leg 500 + responses leg again
+    // exhausts the default 3-attempt budget, so every attempt is a `retry` and
+    // the loop falls through to the no-candidate error. The record must still
+    // disclose an upstream error, not a blank one.
+    let upstream = serve(Router::new().fallback(any(|| async {
+        axum::response::Response::builder()
+            .status(500)
+            .header("content-type", "application/json")
+            .body(axum::body::Body::from(r#"{"error":"boom"}"#))
+            .unwrap()
+    })))
+    .await;
+    let (store, key, _directory) = seeded("details-exhausted.db", upstream).await;
+    let address = gateway(&store).await;
+    let response = chat(address, &key, false, "hi").await;
+    assert_eq!(response.status(), 503);
+    let record = store.requests().await.unwrap().remove(0);
+    assert_eq!(record.status, "failed");
+    assert_eq!(record.requested_model, "gpt-test");
+    let error = record.error.as_deref().unwrap();
+    assert!(error.contains("500"), "error was {error}");
 }
 
 #[tokio::test]

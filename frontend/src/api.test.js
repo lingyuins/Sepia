@@ -29,6 +29,11 @@ test('maps real backend records to existing UI shapes', () => {
   assert.equal(mapRequest(remoteRequest).cost, '$0.000042')
   assert.equal(mapRequest(remoteRequest).model, 'local-model')
   assert.equal(mapRequest(remoteRequest).route, 'chat')
+  assert.equal(mapRequest(remoteRequest).requestedModel, 'local-model')
+  assert.equal(mapRequest(remoteRequest).error, null)
+  const failedRequest = mapRequest({ ...remoteRequest, status: 'failed', requested_model: 'gpt-4o', model: '', error: 'upstream HTTP 529' })
+  assert.equal(failedRequest.requestedModel, 'gpt-4o')
+  assert.equal(failedRequest.error, 'upstream HTTP 529')
 })
 
 test('serializes editor data for the real management API', () => {

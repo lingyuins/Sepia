@@ -558,6 +558,10 @@ pub async fn relay(
             return error(StatusCode::BAD_REQUEST, message);
         }
     };
+    let _ = state
+        .store
+        .set_request_model(&request_id, &request.model)
+        .await;
     if path.is_some_and(|p| p.1) {
         request.stream = true;
     }
