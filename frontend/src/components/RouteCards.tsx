@@ -45,13 +45,22 @@ export function RouteCards({
   onPersist: (route: RouteRule, patch: Partial<RouteRule>) => void
 }) {
   const t = useTranslation()
-  const [expandedId, setExpandedId] = useState<number | null>(null)
+  // Each card expands independently — opening one never collapses another
+  // (same as the Octopus group cards).
+  const [expandedIds, setExpandedIds] = useState<Set<number>>(() => new Set())
 
   return (
     <div className="route-cards">
       {routes.map((route) => {
         const candidates = routeDisplayCandidates(route)
-        const expanded = expandedId === route.id
+        const expanded = expandedIds.has(route.id)
+        const toggleExpanded = () =>
+          setExpandedIds((current) => {
+            const next = new Set(current)
+            if (next.has(route.id)) next.delete(route.id)
+            else next.add(route.id)
+            return next
+          })
         const firstModel = candidates[0]?.model || route.slug || route.name
         const strategyName = t(strategyLabelKey(route.strategy))
         const move = (index: number, direction: -1 | 1) => {
@@ -69,11 +78,11 @@ export function RouteCards({
               role="button"
               tabIndex={0}
               aria-expanded={expanded}
-              onClick={() => setExpandedId(expanded ? null : route.id)}
+              onClick={toggleExpanded}
               onKeyDown={(event) => {
                 if (event.key === 'Enter' || event.key === ' ') {
                   event.preventDefault()
-                  setExpandedId(expanded ? null : route.id)
+                  toggleExpanded()
                 }
               }}
             >

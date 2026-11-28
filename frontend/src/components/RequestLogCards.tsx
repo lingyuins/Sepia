@@ -23,8 +23,8 @@ import { ModelAvatar, getModelBrand, resolveBrandColor } from '../model-brand'
 // chain, then a compact colored metric grid (ported from Octopus LogCard).
 // Only recorded values are shown — no invented telemetry.
 
-const endpointMeta: Record<string, { label: 'logEndpointChat' | 'logEndpointMessages' | 'logEndpointResponses' | 'logEndpointGemini'; color: string }> = {
-  openai: { label: 'logEndpointChat', color: '#10a37f' },
+const endpointMeta: Record<string, { label: 'logEndpointChatFull' | 'logEndpointMessages' | 'logEndpointResponses' | 'logEndpointGemini'; color: string }> = {
+  openai: { label: 'logEndpointChatFull', color: '#10a37f' },
   'openai-responses': { label: 'logEndpointResponses', color: '#0ea5e9' },
   anthropic: { label: 'logEndpointMessages', color: '#d7765a' },
   gemini: { label: 'logEndpointGemini', color: '#4285f4' },
@@ -38,6 +38,25 @@ function formatCost(cost: string): string {
   return `$${Number(value.toPrecision(2))}`
 }
 
+// Octopus formatCount: Chinese uses 万/亿, other locales use K/M/B.
+function formatCount(value: number, locale: string): string {
+  if (locale.startsWith('zh')) {
+    if (value >= 100_000_000) return `${(value / 100_000_000).toFixed(2)} 亿`
+    if (value >= 10_000) return `${(value / 10_000).toFixed(2)} 万`
+    return value.toLocaleString(locale)
+  }
+  if (value >= 1_000_000_000) return `${(value / 1_000_000_000).toFixed(2)}B`
+  if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(2)}M`
+  if (value >= 1_000) return `${(value / 1_000).toFixed(2)}K`
+  return value.toLocaleString(locale)
+}
+
+function formatLogTime(value: string, locale: string): string {
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return value
+  return `${date.toLocaleDateString(locale, { month: 'numeric', day: 'numeric' })} ${formatRequestTime(value, locale)}`
+}
+
 export function RequestLogCards({
   rows,
   onSelect,
@@ -49,7 +68,7 @@ export function RequestLogCards({
 }) {
   const t = useTranslation()
   const locale = useLocale()
-  const number = (value: number) => value.toLocaleString(locale)
+  const number = (value: number) => formatCount(value, locale)
 
   if (!rows.length) {
     return <div className="log-cards-empty">{t('noRequestMatch')}</div>
@@ -68,19 +87,19 @@ export function RequestLogCards({
             ? row.inputTokens
             : Math.max(0, row.inputTokens - row.cachedTokens)
         const metrics: { icon: typeof Clock; color: string; text: string; title: string; strong?: string }[] = [
-          { icon: Clock, color: brandColor, text: formatRequestTime(row.createdAt, locale), title: t('time') },
+          { icon: Clock, color: brandColor, text: formatLogTime(row.createdAt, locale), title: t('time') },
           { icon: KeyRound, color: '#f97316', text: row.key, title: t('apiKey') },
           ...(row.clientIp ? [{ icon: Globe, color: '#0ea5e9', text: row.clientIp, title: t('clientIp') }] : []),
-          ...(row.firstByteMs !== null ? [{ icon: Zap, color: '#f59e0b', text: row.firstByteMs < 1000 ? `${row.firstByteMs}ms` : `${(row.firstByteMs / 1000).toFixed(2)}s`, title: t('firstByte') }] : []),
-          { icon: Cpu, color: '#3b82f6', text: row.latencyMs < 1000 ? `${row.latencyMs}ms` : `${(row.latencyMs / 1000).toFixed(2)}s`, title: t('latency') },
-          { icon: Gauge, color: '#84cc16', text: formatTps(row), title: t('tps') },
-          ...(row.cachedTokens > 0 ? [{ icon: Percent, color: '#14b8a6', text: cacheHitRate(row), title: t('cacheHitRate') }] : []),
-          { icon: ArrowDownToLine, color: '#22c55e', text: number(realInput), title: row.cachedTokens > 0 ? t('logRealInput') : t('logInput') },
-          ...(row.cachedTokens > 0 ? [{ icon: ArrowDownToLine, color: '#14b8a6', text: number(row.cachedTokens), title: t('cachedTokens') }] : []),
-          { icon: ArrowUpFromLine, color: '#a855f7', text: number(row.outputTokens), title: t('logOutput') },
-          { icon: Sigma, color: '#f43f5e', text: number(row.inputTokens + row.outputTokens), title: t('totalTokens'), strong: 'log-metric-rose' },
-          { icon: DollarSign, color: '#10b981', text: formatCost(row.cost), title: t('estimatedCost'), strong: 'log-metric-emerald' },
-          ...(row.reasoningTokens > 0 ? [{ icon: Brain, color: '#6366f1', text: number(row.reasoningTokens), title: t('reasoningTokens') }] : []),
+          ...(row.firstByteMs !== null ? [{ icon: Zap, color: '#f59e0b', text: `${t('logFirstByte')} ${row.firstByteMs < 1000 ? `${row.firstByteMs}ms` : `${(row.firstByteMs / 1000).toFixed(2)}s`}`, title: t('firstByte') }] : []),
+          { icon: Cpu, color: '#3b82f6', text: `${t('logTotalTime')} ${row.latencyMs < 1000 ? `${row.latencyMs}ms` : `${(row.latencyMs / 1000).toFixed(2)}s`}`, title: t('latency') },
+          { icon: Gauge, color: '#84cc16', text: `${t('logTps')} ${formatTps(row)}`, title: t('tps') },
+          ...(row.cachedTokens > 0 ? [{ icon: Percent, color: '#14b8a6', text: `${t('cacheHitRate')} ${cacheHitRate(row)}`, title: t('cacheHitRate') }] : []),
+          { icon: ArrowDownToLine, color: '#22c55e', text: `${row.cachedTokens > 0 ? t('logRealInput') : t('logInput')} ${number(realInput)}`, title: row.cachedTokens > 0 ? t('logRealInput') : t('logInput') },
+          ...(row.cachedTokens > 0 ? [{ icon: ArrowDownToLine, color: '#14b8a6', text: `${t('cachedTokens')} ${number(row.cachedTokens)}`, title: t('cachedTokens') }] : []),
+          { icon: ArrowUpFromLine, color: '#a855f7', text: `${t('logOutput')} ${number(row.outputTokens)}`, title: t('logOutput') },
+          { icon: Sigma, color: '#f43f5e', text: `${t('totalTokens')} ${number(row.inputTokens + row.outputTokens)}`, title: t('totalTokens'), strong: 'log-metric-rose' },
+          { icon: DollarSign, color: '#10b981', text: `${t('logCost')} ${formatCost(row.cost)}`, title: t('estimatedCost'), strong: 'log-metric-emerald' },
+          ...(row.reasoningTokens > 0 ? [{ icon: Brain, color: '#6366f1', text: `${t('logReasoning')} ${number(row.reasoningTokens)}${t('logReasoningUnit')}`, title: t('reasoningTokens') }] : []),
         ]
         return (
           <article
