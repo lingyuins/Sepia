@@ -38,8 +38,8 @@ function formatCost(cost: string): string {
   return `$${Number(value.toPrecision(2))}`
 }
 
-// Compact K/M/B counts (matches the reference screenshot; the original's
-// 万/亿 mode is a separate chinaMode setting Sepia does not carry).
+// Compact K/M/B counts in every locale. The original's 万/亿 display is a
+// separate chinaMode setting Sepia does not carry — never tie it to zh.
 function formatCount(value: number, locale: string): string {
   if (value >= 1_000_000_000) return `${(value / 1_000_000_000).toFixed(2)}B`
   if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(2)}M`
